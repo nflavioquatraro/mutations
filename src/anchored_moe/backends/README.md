@@ -66,7 +66,10 @@ config = AnchoredMoEConfig(converted_layers="upper_half")
 report = Qwen3Backend().convert(model, config)
 ```
 
-See `examples/verify_dense_equivalence.py` for an executable local example.
+See `examples/verify_dense_equivalence.py` for a non-interactive local example.
+The guided workflows in `notebooks/00_inspect_base_model.ipynb` and
+`notebooks/01_convert_dense_model.ipynb` inspect the model-family contract and
+perform conversion through the same public backend API.
 
 ## References
 

@@ -13,6 +13,7 @@ from anchored_moe.evaluation import (
     compare_tensors,
     fingerprint_module,
 )
+from anchored_moe.experts import Expert, ExpertSerializationError, FullMLPExpert
 from anchored_moe.registry import (
     ExpertPackageManifest,
     PackageValidationError,
@@ -46,6 +47,9 @@ def test_current_public_symbols_have_docstrings() -> None:
         assert_tensors_equivalent,
         compare_tensors,
         fingerprint_module,
+        Expert,
+        ExpertSerializationError,
+        FullMLPExpert,
         ExpertPackageManifest,
         PackageValidationError,
         PackageValidationReport,

@@ -64,6 +64,10 @@ result = assert_tensors_equivalent(
 assert result.exact
 ```
 
+`notebooks/01_convert_dense_model.ipynb` exercises this API against logits,
+every hidden state, and the selected anchor MLP fingerprints. It also reports
+the post-conversion trainable-parameter count.
+
 ## References
 
 - The repository
