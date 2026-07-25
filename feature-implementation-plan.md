@@ -418,10 +418,10 @@ Update `Status`, `Last update`, and `Implementation notes` as work progresses. A
 
 | ID | Priority | Area | Feature or strategy | Dependencies | Status | Last update | Implementation notes |
 |---|---:|---|---|---|---|---|---|
-| CORE-001 | P0 | Configuration | `AnchoredMoEConfig` and resolved strategy configuration | — | Not started | — | — |
-| CORE-002 | P0 | Backend | Generic `ModelBackend` interface | CORE-001 | Not started | — | — |
-| CORE-003 | P0 | Backend | Qwen3 MLP discovery and replacement backend | CORE-002 | Not started | — | — |
-| CORE-004 | P0 | Modeling | Routed MLP wrapper with forced-anchor mode | CORE-003 | Not started | — | — |
+| CORE-001 | P0 | Configuration | `AnchoredMoEConfig` and resolved strategy configuration | — | Validated | 2026-07-25 | 2026-07-25 — Validated in Codex task. Tests: `test_configuration.py`. Config: `AnchoredMoEConfig`, `strategy_config`, `upper_half` or explicit layers. Theory: root README and source documentation standard. References: Hugging Face `PretrainedConfig`. Follow-up: add strategies only with their runtimes. |
+| CORE-002 | P0 | Backend | Generic `ModelBackend` interface | CORE-001 | Validated | 2026-07-25 | 2026-07-25 — Validated in Codex task. Tests: backend and documentation unit tests. Config: `backend`. Theory: `backends/README.md`. References: no paper-derived algorithm. Follow-up: add model families behind the same interface. |
+| CORE-003 | P0 | Backend | Qwen3 MLP discovery and replacement backend | CORE-002 | Validated | 2026-07-25 | 2026-07-25 — Validated in Codex task. Tests: Qwen3 backend unit tests and tiny-model integration test. Config: `backend: qwen3`. Theory: `backends/README.md`. References: Hugging Face Qwen3 documentation. Follow-up: validate optimized runtime variants separately. |
+| CORE-004 | P0 | Modeling | Routed MLP wrapper with forced-anchor mode | CORE-003 | Validated | 2026-07-25 | 2026-07-25 — Validated in Codex task. Tests: exact hidden-state/logit equivalence and anchor fingerprint. Config: `selection.policy: forced_anchor`. Theory: backend and evaluation READMEs. References: no paper-derived algorithm. Follow-up: expert routes remain out of scope. |
 | CORE-005 | P0 | Modeling | `AnchoredMoEForCausalLM` load, forward, and generation compatibility | CORE-004 | Not started | — | — |
 | CORE-006 | P0 | Serialization | `save_pretrained()` and `from_pretrained()` round trip | CORE-005, PKG-001 | Not started | — | — |
 | EXP-001 | P0 | Experts | Full copied-MLP expert | CORE-004 | Not started | — | — |
@@ -465,13 +465,13 @@ Update `Status`, `Last update`, and `Implementation notes` as work progresses. A
 | BAL-003 | P2 | Balancing | Auxiliary load-balancing objective | TRN-003 | Not started | — | — |
 | BAL-004 | P2 | Balancing | Bias-based auxiliary-loss-free balancing | TRN-003 | Not started | — | DeepSeek-V3-inspired |
 | BAL-005 | P3 | Balancing | Expert-choice routing research backend | TRN-003 | Not started | — | Training/prefill first |
-| PKG-001 | P0 | Packaging | Expert manifest schema and hash validation | CORE-001 | Not started | — | — |
+| PKG-001 | P0 | Packaging | Expert manifest schema and hash validation | CORE-001 | Validated | 2026-07-25 | 2026-07-25 — Validated in Codex task. Tests: manifest, hashing, documentation, and full regression suite (39 passed); wheel contents and dependency check passed. Config: `package_format_version: 1`, canonical JSON, safetensors payloads, exact base/tokenizer pins, runtime and dataset provenance. Theory: registry and utils READMEs. References: Safetensors, Hugging Face Hub revisions, FIPS 180-4, and RFC 8785 with documented project-specific differences. Follow-up: install/unload, registry hashes, atomic upgrades, rollback, and Hub transfer remain separate tracked features. |
 | PKG-002 | P0 | Registry | Install, unload, and active-registry hash | PKG-001 | Not started | — | — |
 | PKG-003 | P1 | Registry | Compatibility groups for expert mixtures | PKG-001 | Not started | — | — |
 | PKG-004 | P1 | Registry | Atomic package upgrades and rollback | PKG-002 | Not started | — | — |
 | PKG-005 | P1 | Registry | Registry-specific router versions | PKG-002, RTR-004 | Not started | — | — |
 | PKG-006 | P2 | Hub | Expert package Hub upload and download | PKG-001 | Not started | — | — |
-| EVAL-001 | P0 | Evaluation | Forced-anchor hidden-state and logit equivalence | CORE-004 | Not started | — | — |
+| EVAL-001 | P0 | Evaluation | Forced-anchor hidden-state and logit equivalence | CORE-004 | Validated | 2026-07-25 | 2026-07-25 — Validated in Codex task. Tests: `test_qwen3_equivalence.py`; exact CPU logits and every hidden state, plus SHA-256 anchor-state checks. Config: explicit `atol=0`, `rtol=0`. Theory: `evaluation/README.md`. References: PyTorch numerical-accuracy documentation. Follow-up: add declared tolerances for validated runtime variants. |
 | EVAL-002 | P0 | Evaluation | Route logging and exact route agreement | POL-001 | Not started | — | No sensitive content |
 | EVAL-003 | P0 | Evaluation | Installation, removal, and reinsertion tests | PKG-002, EVAL-002 | Not started | — | — |
 | EVAL-004 | P1 | Evaluation | Top-1/top-2 oracle comparison and regret | CAL-007, POL-002 | Not started | — | — |
@@ -485,8 +485,8 @@ Update `Status`, `Last update`, and `Implementation notes` as work progresses. A
 | NB-005 | P0 | Notebooks | Compose a custom model from packages | PKG-002, POL-001 | Not started | — | `04_compose_custom_model.ipynb` |
 | NB-006 | P1 | Notebooks | Evaluate registry strategies | EVAL-004, EVAL-005 | Not started | — | `05_evaluate_registry.ipynb` |
 | NB-007 | P1 | Notebooks | Export, reload, remove, and upgrade packages | CORE-006, PKG-004 | Not started | — | `06_export_and_reload.ipynb` |
-| DOC-001 | P0 | Documentation | Source comment, docstring, and paper-reference standard | — | Not started | — | Required for every implemented feature |
-| DOC-002 | P0 | Documentation | Theory README template and README in every source subpackage | DOC-001 | Not started | — | Updated in the same change as feature code |
+| DOC-001 | P0 | Documentation | Source comment, docstring, and paper-reference standard | — | Validated | 2026-07-25 | 2026-07-25 — Validated for the foundation scope in Codex task. Tests: public-symbol docstring contract. Config: none. Theory: `docs/source-documentation-standard.md`. References: reference and deviation rules documented. Follow-up: apply to every later feature. |
+| DOC-002 | P0 | Documentation | Theory README template and README in every source subpackage | DOC-001 | Validated | 2026-07-25 | 2026-07-25 — Validated for current feature-bearing subpackages in Codex task. Tests: README-presence contract and wheel package-data check. Config: none. Theory: template plus backend/evaluation READMEs. References: local reference sections. Follow-up: require a README with each new subpackage. |
 | DOC-003 | P1 | Documentation | Synchronize feature IDs, configuration names, code, equations, and citations | DOC-002 | Not started | — | Include in documentation checks |
 
 ---
