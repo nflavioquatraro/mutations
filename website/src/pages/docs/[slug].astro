@@ -1,0 +1,84 @@
+---
+import Brand from "../../components/Brand.astro";
+import BaseLayout from "../../layouts/BaseLayout.astro";
+import { Content as RoutedCodeMoe } from "../../../../model_architecture.md";
+import { Content as PartialMoe } from "../../../../partial_moe_architecture.md";
+import { Content as DatasetEvaluation } from "../../../../master_dataset_and_evaluation.md";
+import { Content as MathExperiment } from "../../../../math_partial_moe_experiment.md";
+
+const docs = [
+  {
+    slug: "routed-code-moe",
+    label: "Architecture / 01",
+    title: "Routed Code-MoE Adapter",
+    description: "A preservation-first routed specialization design for Qwen3-4B.",
+    Content: RoutedCodeMoe,
+  },
+  {
+    slug: "partial-moe",
+    label: "Architecture / 02",
+    title: "Partial Token-Routed LoRA-MoE",
+    description: "A controlled experiment in label-free token routing.",
+    Content: PartialMoe,
+  },
+  {
+    slug: "dataset-and-evaluation",
+    label: "Data + evaluation / 03",
+    title: "Master Dataset and Evaluation",
+    description: "Construction, preservation, evaluation, and reproducibility requirements.",
+    Content: DatasetEvaluation,
+  },
+  {
+    slug: "math-experiment",
+    label: "Pilot / 04",
+    title: "Math Partial-MoE Experiment",
+    description: "The first controlled validation plan for the Partial-MoE architecture.",
+    Content: MathExperiment,
+  },
+];
+
+export function getStaticPaths() {
+  return [
+    "routed-code-moe",
+    "partial-moe",
+    "dataset-and-evaluation",
+    "math-experiment",
+  ].map((slug) => ({ params: { slug } }));
+}
+
+const doc = docs.find((entry) => entry.slug === Astro.params.slug);
+if (!doc) return Astro.redirect("/docs/");
+const { Content } = doc;
+---
+
+<BaseLayout
+  title={`${doc.title} — Mutations`}
+  description={doc.description}
+  pageClass="docs-article-page"
+  showChrome={false}
+>
+  <header class="docs-header article-header">
+    <a href="/" aria-label="Mutations home"><Brand compact /></a>
+    <nav aria-label="Documentation navigation">
+      <a class="current" href="/docs/">Docs</a>
+      <a href="/paper.pdf">Paper</a>
+      <a href="https://github.com/nflavioquatraro/mutations" rel="noreferrer">GitHub</a>
+    </nav>
+  </header>
+
+  <aside class="article-rail">
+    <a href="/docs/">← All documents</a>
+    <span>{doc.label}</span>
+  </aside>
+
+  <main id="main-content" class="article-shell">
+    <div class="article-title">
+      <p class="section-kicker">{doc.label}</p>
+      <h1>{doc.title}</h1>
+      <p>{doc.description}</p>
+    </div>
+    <article class="prose">
+      <Content />
+    </article>
+  </main>
+</BaseLayout>

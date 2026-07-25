@@ -1,0 +1,465 @@
+<div class="mutation-orbital" data-mutation-orbital>
+  <canvas
+    class="mutation-orbital-canvas"
+    data-orbital-canvas
+    role="img"
+    aria-label="An animated frozen decoder stack whose upper layers unfold into routed residual expert modules and recombine"
+  ></canvas>
+</div>
+
+<script>
+  type Vec3 = { x: number; y: number; z: number };
+  type Module = {
+    home: Vec3;
+    field: Vec3;
+    source?: Vec3;
+    size: Vec3;
+    homeSize?: Vec3;
+    rotation: Vec3;
+    homeRotation?: Vec3;
+    turns?: Vec3;
+    phase: number;
+    role: "backbone" | "source" | "expert";
+  };
+  type ProjectedPoint = Vec3 & { visible: boolean };
+  type Face = {
+    points: ProjectedPoint[];
+    depth: number;
+    shade: number;
+    role: Module["role"];
+  };
+
+  const canvases = document.querySelectorAll<HTMLCanvasElement>("[data-orbital-canvas]");
+  const TAU = Math.PI * 2;
+  const MUTATION_RATE = 0.58;
+
+  const rotateX = (point: Vec3, angle: number): Vec3 => {
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    return { x: point.x, y: point.y * cos - point.z * sin, z: point.y * sin + point.z * cos };
+  };
+
+  const rotateY = (point: Vec3, angle: number): Vec3 => {
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    return { x: point.x * cos + point.z * sin, y: point.y, z: -point.x * sin + point.z * cos };
+  };
+
+  const rotateZ = (point: Vec3, angle: number): Vec3 => {
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    return { x: point.x * cos - point.y * sin, y: point.x * sin + point.y * cos, z: point.z };
+  };
+
+  const rotate = (point: Vec3, rotation: Vec3): Vec3 =>
+    rotateZ(rotateY(rotateX(point, rotation.x), rotation.y), rotation.z);
+
+  const lerp = (a: number, b: number, amount: number) => a + (b - a) * amount;
+  const ease = (amount: number) => amount * amount * (3 - 2 * amount);
+
+  const layerCount = 11;
+  const layerGap = 35;
+  const firstLayerY = 175;
+  const mutationLayerIndexes = new Set([8, 9, 10]);
+
+  const backboneModules: Module[] = Array.from({ length: layerCount }, (_, index) => {
+    const layerY = firstLayerY - index * layerGap;
+    const isMutationSource = mutationLayerIndexes.has(index);
+    return {
+      home: { x: 0, y: layerY, z: 0 },
+      field: { x: 0, y: layerY, z: 0 },
+      size: { x: 152, y: isMutationSource ? 13 : 9, z: 96 },
+      rotation: {
+        x: -0.04 + (index % 3) * 0.026,
+        y: (index - 5) * 0.008,
+        z: (index % 2 === 0 ? 1 : -1) * 0.012,
+      },
+      phase: index * 0.41,
+      role: isMutationSource ? "source" : "backbone",
+    };
+  });
+
+  const expertModules: Module[] = Array.from({ length: 12 }, (_, index) => {
+    const sourceSlot = Math.floor(index / 4);
+    const expertSlot = index % 4;
+    const sourceLayerIndex = 8 + sourceSlot;
+    const sourceY = firstLayerY - sourceLayerIndex * layerGap;
+    const sourceModule = backboneModules[sourceLayerIndex];
+    const angle = (expertSlot / 4) * TAU + sourceSlot * 0.34 + Math.PI * 0.16;
+    const radius = 188 + sourceSlot * 48;
+    const source = { x: 0, y: sourceY, z: 0 };
+
+    return {
+      home: source,
+      source,
+      field: {
+        x: Math.cos(angle) * radius,
+        y: sourceY + (expertSlot - 1.5) * 44 + sourceSlot * 12,
+        z: Math.sin(angle) * radius,
+      },
+      size: {
+        x: 80 + (index % 3) * 9,
+        y: 10 + (index % 2) * 3,
+        z: 51 + (index % 4) * 5,
+      },
+      homeSize: sourceModule.size,
+      rotation: {
+        x: -0.28 + expertSlot * 0.18,
+        y: angle + sourceSlot * 0.13,
+        z: (expertSlot - 1.5) * 0.11,
+      },
+      homeRotation: sourceModule.rotation,
+      turns: {
+        x: index % 4 === 0 ? (index % 2 === 0 ? 1 : -1) : 0,
+        y: index % 4 === 1 || index % 4 === 3 ? (index % 3 === 0 ? -1 : 1) : 0,
+        z: index % 4 === 2 || index % 4 === 3 ? (index % 2 === 0 ? 1 : -1) : 0,
+      },
+      phase: index * 0.73,
+      role: "expert",
+    };
+  });
+
+  const modules: Module[] = [...backboneModules, ...expertModules];
+
+  const faces = [
+    [0, 1, 3, 2],
+    [4, 6, 7, 5],
+    [0, 4, 5, 1],
+    [2, 3, 7, 6],
+    [0, 2, 6, 4],
+    [1, 5, 7, 3],
+  ];
+
+  canvases.forEach((canvas) => {
+    const context = canvas.getContext("2d");
+    const container = canvas.closest<HTMLElement>("[data-mutation-orbital]");
+    if (!context || !container) return;
+
+    const motionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+    let width = 0;
+    let height = 0;
+    let frame = 0;
+    let visible = true;
+    let dragging = false;
+    let dragStartX = 0;
+    let dragStartY = 0;
+    let dragStartPitch = 0;
+    let dragStartYaw = 0;
+    let dragPitch = 0;
+    let dragYaw = 0;
+
+    const resize = () => {
+      const rect = container.getBoundingClientRect();
+      const density = Math.min(window.devicePixelRatio || 1, 2);
+      width = Math.max(1, rect.width);
+      height = Math.max(1, rect.height);
+      canvas.width = Math.round(width * density);
+      canvas.height = Math.round(height * density);
+      canvas.style.width = `${width}px`;
+      canvas.style.height = `${height}px`;
+      context.setTransform(density, 0, 0, density, 0, 0);
+    };
+
+    const project = (point: Vec3): ProjectedPoint => {
+      const camera = 820;
+      const depth = camera - point.z;
+      const scale = Math.min(width / 1150, height / 820) * (camera / depth);
+      return {
+        x: width * 0.5 + point.x * scale,
+        y: height * 0.5 + point.y * scale,
+        z: point.z,
+        visible: depth > 100,
+      };
+    };
+
+    const transformScenePoint = (point: Vec3, time: number): Vec3 => {
+      const sceneRotation = {
+        x: -0.16 + Math.sin(time * 0.17) * 0.08 + dragPitch,
+        y: time * 0.13 + dragYaw,
+        z: Math.sin(time * 0.1) * 0.045,
+      };
+      return rotate(point, sceneRotation);
+    };
+
+    const transformModulePoint = (point: Vec3, time: number): Vec3 =>
+      transformScenePoint(rotateZ(point, Math.PI / 2), time);
+
+    const drawBoundingCube = (time: number) => {
+      const half = 365;
+      const vertices: Vec3[] = [
+        { x: -half, y: -half, z: -half },
+        { x: half, y: -half, z: -half },
+        { x: half, y: half, z: -half },
+        { x: -half, y: half, z: -half },
+        { x: -half, y: -half, z: half },
+        { x: half, y: -half, z: half },
+        { x: half, y: half, z: half },
+        { x: -half, y: half, z: half },
+      ].map((point) => transformScenePoint(point, time));
+      const frameScale = Math.min(width / 1150, height / 820) * 0.82;
+      const projected: ProjectedPoint[] = vertices.map((point) => ({
+        x: width * 0.5 + point.x * frameScale,
+        y: height * 0.5 + point.y * frameScale,
+        z: point.z,
+        visible: true,
+      }));
+      const edges = [
+        [0, 1], [1, 2], [2, 3], [3, 0],
+        [4, 5], [5, 6], [6, 7], [7, 4],
+        [0, 4], [1, 5], [2, 6], [3, 7],
+      ].map(([from, to]) => ({
+        from: projected[from],
+        to: projected[to],
+        depth: (vertices[from].z + vertices[to].z) / 2,
+      }));
+
+      edges.sort((a, b) => a.depth - b.depth);
+      context.setLineDash([5, 9]);
+      context.lineDashOffset = -(time * 4.5) % 14;
+      edges.forEach((edge) => {
+        const depthAmount = Math.max(0, Math.min(1, (edge.depth + half) / (half * 2)));
+        context.beginPath();
+        context.moveTo(edge.from.x, edge.from.y);
+        context.lineTo(edge.to.x, edge.to.y);
+        context.strokeStyle = `rgba(24, 79, 142, ${0.105 + depthAmount * 0.16})`;
+        context.lineWidth = 0.72 + depthAmount * 0.22;
+        context.stroke();
+      });
+      context.setLineDash([]);
+      context.lineDashOffset = 0;
+    };
+
+    const drawModuleFaces = (time: number, mutation: number, cycleAngle: number) => {
+      const allFaces: Face[] = [];
+      const connections: { from: ProjectedPoint; to: ProjectedPoint; strength: number }[] = [];
+
+      modules.forEach((module, index) => {
+        const endpointEnvelope = Math.sin(Math.PI * mutation) ** 2;
+        const stagger = module.role === "expert"
+          ? Math.sin(cycleAngle + module.phase * 0.24) * 0.045 * endpointEnvelope
+          : 0;
+        const travel = module.role === "expert"
+          ? Math.max(0, Math.min(1, mutation + stagger))
+          : 0;
+        const travelEnvelope = Math.sin(Math.PI * travel);
+        const pulse = module.role === "expert"
+          ? Math.sin(cycleAngle * 2 + module.phase) * travelEnvelope * 10
+          : 0;
+        const radialLength = Math.hypot(module.field.x, module.field.z) || 1;
+        const center = {
+          x: lerp(module.home.x, module.field.x, travel) + (module.field.x / radialLength) * pulse,
+          y: lerp(module.home.y, module.field.y, travel)
+            + (module.role === "expert" ? Math.sin(cycleAngle * 2 + index) * travelEnvelope * 7 : 0),
+          z: lerp(module.home.z, module.field.z, travel) + (module.field.z / radialLength) * pulse,
+        };
+        const initialRotation = {
+          x: module.homeRotation?.x ?? module.rotation.x,
+          y: module.homeRotation?.y ?? module.rotation.y,
+          z: module.homeRotation?.z ?? module.rotation.z,
+        };
+        const shapeTransition = ease(travel);
+        const localRotation = module.role === "expert" ? {
+          x: initialRotation.x
+            + (module.rotation.x - initialRotation.x) * shapeTransition
+            + cycleAngle * (module.turns?.x ?? 0),
+          y: initialRotation.y
+            + (module.rotation.y - initialRotation.y) * shapeTransition
+            + cycleAngle * (module.turns?.y ?? 0),
+          z: initialRotation.z
+            + (module.rotation.z - initialRotation.z) * shapeTransition
+            + cycleAngle * (module.turns?.z ?? 0),
+        } : module.rotation;
+        const sceneCenter = transformModulePoint(center, time);
+        if (module.source && travel > 0.001) {
+          connections.push({
+            from: project(transformModulePoint(module.source, time)),
+            to: project(sceneCenter),
+            strength: travel,
+          });
+        }
+
+        const initialSize = module.homeSize ?? module.size;
+        const sx = lerp(initialSize.x, module.size.x, shapeTransition);
+        const sy = lerp(initialSize.y, module.size.y, shapeTransition);
+        const sz = lerp(initialSize.z, module.size.z, shapeTransition);
+        const vertices: Vec3[] = [
+          { x: -sx / 2, y: -sy / 2, z: -sz / 2 },
+          { x: sx / 2, y: -sy / 2, z: -sz / 2 },
+          { x: -sx / 2, y: sy / 2, z: -sz / 2 },
+          { x: sx / 2, y: sy / 2, z: -sz / 2 },
+          { x: -sx / 2, y: -sy / 2, z: sz / 2 },
+          { x: sx / 2, y: -sy / 2, z: sz / 2 },
+          { x: -sx / 2, y: sy / 2, z: sz / 2 },
+          { x: sx / 2, y: sy / 2, z: sz / 2 },
+        ].map((vertex) => {
+          const rotated = rotate(vertex, localRotation);
+          return transformModulePoint(
+            { x: rotated.x + center.x, y: rotated.y + center.y, z: rotated.z + center.z },
+            time,
+          );
+        });
+
+        const projected = vertices.map(project);
+        faces.forEach((face, faceIndex) => {
+          const points = face.map((vertexIndex) => projected[vertexIndex]);
+          allFaces.push({
+            points,
+            depth: points.reduce((sum, point) => sum + point.z, 0) / points.length,
+            shade: faceIndex / faces.length,
+            role: module.role,
+          });
+        });
+      });
+
+      connections.forEach((connection) => {
+        context.beginPath();
+        context.moveTo(connection.from.x, connection.from.y);
+        context.lineTo(connection.to.x, connection.to.y);
+        context.strokeStyle = `rgba(20, 75, 140, ${connection.strength * 0.5})`;
+        context.lineWidth = 0.92;
+        context.setLineDash([4, 5]);
+        context.stroke();
+        context.setLineDash([]);
+
+        context.beginPath();
+        context.arc(connection.to.x, connection.to.y, 1.35, 0, TAU);
+        context.fillStyle = `rgba(17, 71, 136, ${connection.strength * 0.5})`;
+        context.fill();
+      });
+
+      allFaces.sort((a, b) => a.depth - b.depth);
+      allFaces.forEach((face) => {
+        context.beginPath();
+        face.points.forEach((point, index) => {
+          if (index === 0) context.moveTo(point.x, point.y);
+          else context.lineTo(point.x, point.y);
+        });
+        context.closePath();
+        if (face.role === "source") {
+          context.fillStyle = `rgba(100, 151, 207, ${0.018 + face.shade * 0.012})`;
+          context.strokeStyle = "rgba(30, 84, 146, 0.58)";
+          context.lineWidth = 0.82;
+        } else if (face.role === "backbone") {
+          context.fillStyle = `rgba(71, 127, 186, ${0.09 + face.shade * 0.035})`;
+          context.strokeStyle = "rgba(37, 94, 156, 0.37)";
+          context.lineWidth = 0.72;
+        } else {
+          context.fillStyle = `rgba(12, 65, 132, ${0.72 + face.shade * 0.12})`;
+          context.strokeStyle = "rgba(7, 50, 106, 0.94)";
+          context.lineWidth = 1.05;
+        }
+        context.fill();
+        context.stroke();
+      });
+    };
+
+    const drawCrosshair = () => {
+      const centerX = width * 0.5;
+      const centerY = height * 0.5;
+      context.strokeStyle = "rgba(22, 77, 140, 0.32)";
+      context.lineWidth = 0.75;
+      context.beginPath();
+      context.moveTo(centerX - 10, centerY);
+      context.lineTo(centerX + 10, centerY);
+      context.moveTo(centerX, centerY - 10);
+      context.lineTo(centerX, centerY + 10);
+      context.stroke();
+      context.beginPath();
+      context.arc(centerX, centerY, 2.2, 0, TAU);
+      context.stroke();
+    };
+
+    const render = (timestamp: number) => {
+      const time = (timestamp / 1000) * (motionQuery.matches ? 0.65 : 1);
+      context.clearRect(0, 0, width, height);
+      const animationPhase = time * MUTATION_RATE;
+      const cycleAngle = ((animationPhase % TAU) + TAU) % TAU;
+      const cycle = (1 - Math.cos(animationPhase)) / 2;
+      const mutation = ease(cycle);
+
+      drawBoundingCube(time);
+      drawModuleFaces(time, mutation, cycleAngle);
+      drawCrosshair();
+
+      if (visible) frame = requestAnimationFrame(render);
+    };
+
+    const restart = () => {
+      cancelAnimationFrame(frame);
+      if (visible) frame = requestAnimationFrame(render);
+    };
+
+    const resizeObserver = new ResizeObserver(() => {
+      resize();
+      restart();
+    });
+    resizeObserver.observe(container);
+
+    const visibilityObserver = new IntersectionObserver(
+      ([entry]) => {
+        visible = Boolean(entry?.isIntersecting);
+        restart();
+      },
+      { threshold: 0.01 },
+    );
+    visibilityObserver.observe(container);
+
+    container.addEventListener("pointerdown", (event) => {
+      if (event.pointerType === "touch") return;
+      dragging = true;
+      dragStartX = event.clientX;
+      dragStartY = event.clientY;
+      dragStartPitch = dragPitch;
+      dragStartYaw = dragYaw;
+      container.classList.add("is-dragging");
+      container.setPointerCapture(event.pointerId);
+      event.preventDefault();
+    });
+
+    container.addEventListener("pointermove", (event) => {
+      if (!dragging) return;
+      const deltaX = (event.clientX - dragStartX) / Math.max(width, 1);
+      const deltaY = (event.clientY - dragStartY) / Math.max(height, 1);
+      dragYaw = dragStartYaw + deltaX * Math.PI * 1.6;
+      dragPitch = Math.max(-1.05, Math.min(1.05, dragStartPitch + deltaY * Math.PI * 1.15));
+    });
+
+    const stopDragging = () => {
+      dragging = false;
+      container.classList.remove("is-dragging");
+    };
+    container.addEventListener("pointerup", stopDragging);
+    container.addEventListener("pointercancel", stopDragging);
+    container.addEventListener("lostpointercapture", stopDragging);
+    motionQuery.addEventListener("change", restart);
+    resize();
+    restart();
+  });
+</script>
+
+<style>
+  .mutation-orbital {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    background:
+      radial-gradient(circle at 50% 49%, rgba(255, 255, 255, 0.88) 0 12%, rgba(248, 250, 253, 0.58) 42%, transparent 73%);
+    cursor: grab;
+  }
+
+  .mutation-orbital.is-dragging {
+    cursor: grabbing;
+  }
+
+  .mutation-orbital-canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+
+  @media (max-width: 720px) {
+    .mutation-orbital {
+      inset: 4.5rem 0 3rem;
+    }
+  }
+</style>

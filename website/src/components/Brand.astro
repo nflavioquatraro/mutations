@@ -1,0 +1,80 @@
+---
+interface Props {
+  compact?: boolean;
+}
+
+const { compact = false } = Astro.props;
+---
+
+<span class:list={["brand", { compact }]} aria-label="Mutations">
+  {compact ? (
+    <>
+      <img
+        class="brand-mark"
+        src="/logo/mutations-mark.png"
+        width="454"
+        height="470"
+        alt=""
+        aria-hidden="true"
+      />
+      <img
+        class="brand-wordmark"
+        src="/logo/mutations-wordmark.png"
+        width="366"
+        height="63"
+        alt=""
+        aria-hidden="true"
+      />
+    </>
+  ) : (
+    <img
+      class="brand-lockup"
+      src="/logo/mutations-logo.png"
+      width="454"
+      height="558"
+      alt=""
+      aria-hidden="true"
+    />
+  )}
+</span>
+
+<style>
+  .brand {
+    display: inline-flex;
+    align-items: center;
+    color: var(--ink);
+  }
+
+  .brand-lockup {
+    width: 3.9rem;
+    height: auto;
+  }
+
+  .compact {
+    gap: 0.65rem;
+  }
+
+  .brand-mark {
+    width: 2.45rem;
+    height: auto;
+  }
+
+  .brand-wordmark {
+    width: 5.2rem;
+    height: auto;
+  }
+
+  @media (max-width: 720px) {
+    .brand-lockup {
+      width: 3.15rem;
+    }
+
+    .brand-mark {
+      width: 2.15rem;
+    }
+
+    .brand-wordmark {
+      width: 4.4rem;
+    }
+  }
+</style>

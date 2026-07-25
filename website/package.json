@@ -1,0 +1,22 @@
+{
+  "name": "mutations-website",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "prepare:assets": "node scripts/sync-assets.mjs",
+    "predev": "npm run prepare:assets",
+    "dev": "astro dev",
+    "prebuild": "npm run prepare:assets",
+    "build": "astro check && astro build",
+    "preview": "astro preview"
+  },
+  "dependencies": {
+    "astro": "^7.1.2"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.4",
+    "@types/node": "^24.3.0",
+    "typescript": "^5.9.2"
+  }
+}

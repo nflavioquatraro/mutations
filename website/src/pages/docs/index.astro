@@ -1,0 +1,76 @@
+---
+import Brand from "../../components/Brand.astro";
+import BaseLayout from "../../layouts/BaseLayout.astro";
+
+const docs = [
+  {
+    index: "01",
+    href: "/docs/routed-code-moe/",
+    title: "Routed Code-MoE Adapter",
+    description: "The complete preservation-first specialization design for Qwen3-4B.",
+    meta: "Architecture / 1,817 lines",
+  },
+  {
+    index: "02",
+    href: "/docs/partial-moe/",
+    title: "Partial Token-Routed LoRA-MoE",
+    description: "The focused experiment for emergent, label-free expert specialization.",
+    meta: "Experiment design / 422 lines",
+  },
+  {
+    index: "03",
+    href: "/docs/dataset-and-evaluation/",
+    title: "Master Dataset and Evaluation",
+    description: "Corpus construction, preservation tests, routing diagnostics, and acceptance gates.",
+    meta: "Data + evaluation / 1,055 lines",
+  },
+  {
+    index: "04",
+    href: "/docs/math-experiment/",
+    title: "Math Partial-MoE Experiment",
+    description: "The first controlled validation plan and its benchmark harness.",
+    meta: "Pilot / 607 lines",
+  },
+];
+---
+
+<BaseLayout
+  title="Documentation — Mutations"
+  description="Architecture, dataset, training, and evaluation documentation for the Mutations framework."
+  pageClass="docs-page"
+  showChrome={false}
+>
+  <header class="docs-header">
+    <a href="/" aria-label="Mutations home"><Brand compact /></a>
+    <nav aria-label="Documentation navigation">
+      <a class="current" href="/docs/">Docs</a>
+      <a href="/paper.pdf">Paper</a>
+      <a href="https://github.com/nflavioquatraro/mutations" rel="noreferrer">GitHub</a>
+    </nav>
+  </header>
+
+  <main id="main-content" class="docs-index">
+    <div class="docs-intro">
+      <p class="section-kicker">Research documentation</p>
+      <h1>The system,<br /><span>in working detail.</span></h1>
+      <p>
+        These notes move from the general framework to the current controlled experiment.
+        They describe proposals and evaluation criteria—not claims of benchmark superiority.
+      </p>
+    </div>
+
+    <div class="docs-list">
+      {docs.map((doc) => (
+        <a class="doc-row" href={doc.href}>
+          <span class="doc-index">{doc.index}</span>
+          <span class="doc-title">
+            <strong>{doc.title}</strong>
+            <small>{doc.description}</small>
+          </span>
+          <span class="doc-meta">{doc.meta}</span>
+          <span class="doc-arrow" aria-hidden="true">↗</span>
+        </a>
+      ))}
+    </div>
+  </main>
+</BaseLayout>

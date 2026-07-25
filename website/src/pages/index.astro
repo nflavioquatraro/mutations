@@ -1,0 +1,198 @@
+---
+import BaseLayout from "../layouts/BaseLayout.astro";
+import MutationOrbital from "../components/MutationOrbital.astro";
+---
+
+<BaseLayout pageClass="home-page">
+  <div class="technical-field" aria-hidden="true">
+    <div class="field-circle"></div>
+    <div class="field-orbit field-orbit-a"></div>
+    <div class="field-orbit field-orbit-b"></div>
+  </div>
+
+  <main id="main-content" class="story" data-story>
+    <section class="panel panel-orbital is-active" id="orbital" data-panel data-index="1">
+      <MutationOrbital />
+    </section>
+
+    <section class="panel panel-hero" id="framework" data-panel data-index="2">
+      <div class="panel-inner hero-inner">
+        <p class="section-kicker">A framework for local intelligence</p>
+        <h1>
+          Keep the base stable.<br />
+          <span>Let capability mutate.</span>
+        </h1>
+        <p class="hero-summary">
+          Bounded, routed adaptations for frozen language-model agents—designed to be
+          measurable, reversible, and practical on local hardware.
+        </p>
+        <div class="hero-actions">
+          <a class="text-link" href="#architecture">Explore the framework <span>↓</span></a>
+          <a class="text-link text-link-muted" href="/paper.pdf">Read the paper <span>↗</span></a>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel panel-architecture" id="architecture" data-panel data-index="3">
+      <div class="panel-inner architecture-inner">
+        <div class="section-heading reveal">
+          <p class="section-kicker">02 / Architecture</p>
+          <h2>One stable base.<br /><span>Mutations on demand.</span></h2>
+          <p>
+            A conservative router activates specialized capacity only when it is useful.
+            The original model remains available as the exact fallback behavior.
+          </p>
+        </div>
+
+        <div class="route-map reveal" aria-label="Mutations routing architecture">
+          <div class="route-node route-input">
+            <span>01</span>
+            <strong>Prompt</strong>
+            <small>task state</small>
+          </div>
+          <div class="route-line route-line-in" aria-hidden="true"></div>
+          <div class="route-node route-router">
+            <span>02</span>
+            <strong>Router</strong>
+            <small>select path</small>
+          </div>
+          <div class="route-branches" aria-hidden="true"></div>
+          <div class="route-node route-base">
+            <span>A</span>
+            <strong>Frozen base</strong>
+            <small>general behavior</small>
+          </div>
+          <div class="route-node route-mutation">
+            <span>B</span>
+            <strong>Mutation path</strong>
+            <small>specialized support</small>
+          </div>
+        </div>
+
+        <div class="principles reveal">
+          <div><span>01</span><strong>Frozen</strong><small>Base weights remain intact.</small></div>
+          <div><span>02</span><strong>Routed</strong><small>Extra capacity is selective.</small></div>
+          <div><span>03</span><strong>Reversible</strong><small>Adaptations can be retired.</small></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel panel-experiment" id="experiment" data-panel data-index="4">
+      <div class="panel-inner experiment-inner">
+        <div class="section-heading reveal">
+          <p class="section-kicker">03 / Current experiment</p>
+          <h2>Testing conditional<br /><span>specialization.</span></h2>
+          <p>
+            The current implementation studies whether label-free token routing adds useful
+            mathematical capacity beyond a matched shared adapter.
+          </p>
+        </div>
+
+        <a class="diagram-window reveal" href="/architecture.png" aria-label="Open the full architecture diagram">
+          <img src="/architecture.png" alt="Routed Code-MoE architecture diagram" loading="lazy" />
+          <span class="diagram-label">Architecture / full view ↗</span>
+        </a>
+
+        <dl class="experiment-spec reveal">
+          <div><dt>Backbone</dt><dd>Qwen3-4B</dd></div>
+          <div><dt>Modified layers</dt><dd>28—35</dd></div>
+          <div><dt>MLP experts</dt><dd>4 per layer</dd></div>
+          <div><dt>Routing</dt><dd>Token-level top-2</dd></div>
+        </dl>
+      </div>
+    </section>
+
+    <section class="panel panel-read" id="read" data-panel data-index="5">
+      <div class="panel-inner read-inner">
+        <div class="section-heading reveal">
+          <p class="section-kicker">04 / Read and inspect</p>
+          <h2>An open research<br /><span>scaffold.</span></h2>
+          <p>
+            The repository contains the framework paper, detailed architecture proposals,
+            dataset plans, and runnable training and evaluation notebooks.
+          </p>
+        </div>
+
+        <div class="resource-grid reveal">
+          <a class="resource-card resource-card-primary" href="/paper.pdf">
+            <span class="resource-number">P / 19 pages</span>
+            <strong>Framework paper</strong>
+            <p>Definitions, runtime protocol, mutation lifecycle, and the research program.</p>
+            <span class="resource-arrow">Open PDF ↗</span>
+          </a>
+          <a class="resource-card" href="/docs/">
+            <span class="resource-number">D / 04 notes</span>
+            <strong>Technical docs</strong>
+            <p>Architecture, dataset construction, math experiment, and evaluation design.</p>
+            <span class="resource-arrow">Browse docs →</span>
+          </a>
+          <a class="resource-card" href="https://github.com/nflavioquatraro/mutations" rel="noreferrer">
+            <span class="resource-number">G / Source</span>
+            <strong>GitHub repository</strong>
+            <p>Inspect the notebooks, experiment scaffold, diagrams, and project history.</p>
+            <span class="resource-arrow">View GitHub ↗</span>
+          </a>
+        </div>
+
+        <footer class="home-footer reveal">
+          <span>Nicola Flavio Quatraro / Independent research</span>
+          <span>MIT licensed</span>
+        </footer>
+      </div>
+    </section>
+  </main>
+
+  <div class="fixed-caption" aria-hidden="true">
+    <span>Bounded adaptation</span>
+    <span>Frozen base / modular change</span>
+  </div>
+
+  <nav class="section-rail" aria-label="Homepage sections">
+    <a href="#orbital" aria-label="Go to section 1" data-dot="1" class="active"></a>
+    <a href="#framework" aria-label="Go to section 2" data-dot="2"></a>
+    <a href="#architecture" aria-label="Go to section 3" data-dot="3"></a>
+    <a href="#experiment" aria-label="Go to section 4" data-dot="4"></a>
+    <a href="#read" aria-label="Go to section 5" data-dot="5"></a>
+  </nav>
+
+  <div class="section-counter" aria-live="polite">
+    <span data-current>01</span><span class="counter-line">—</span><span>05</span>
+  </div>
+
+  <script>
+    const story = document.querySelector<HTMLElement>("[data-story]");
+    const panels = Array.from(document.querySelectorAll<HTMLElement>("[data-panel]"));
+    const current = document.querySelector<HTMLElement>("[data-current]");
+    const dots = Array.from(document.querySelectorAll<HTMLAnchorElement>("[data-dot]"));
+
+    const setActive = (panel: HTMLElement) => {
+      const index = panel.dataset.index ?? "1";
+      panels.forEach((item) => item.classList.toggle("is-active", item === panel));
+      dots.forEach((dot) => dot.classList.toggle("active", dot.dataset.dot === index));
+      if (current) current.textContent = index.padStart(2, "0");
+      document.documentElement.style.setProperty("--section-progress", `${Number(index) - 1}`);
+    };
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+        if (visible?.target instanceof HTMLElement) setActive(visible.target);
+      },
+      { root: story, threshold: [0.45, 0.65, 0.85] },
+    );
+
+    panels.forEach((panel) => observer.observe(panel));
+
+    window.addEventListener("keydown", (event) => {
+      if (!story || !["ArrowDown", "ArrowUp", "PageDown", "PageUp"].includes(event.key)) return;
+      const activeIndex = panels.findIndex((panel) => panel.classList.contains("is-active"));
+      const direction = event.key === "ArrowDown" || event.key === "PageDown" ? 1 : -1;
+      const target = panels[Math.max(0, Math.min(panels.length - 1, activeIndex + direction))];
+      if (!target || target === panels[activeIndex]) return;
+      event.preventDefault();
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  </script>
+</BaseLayout>
