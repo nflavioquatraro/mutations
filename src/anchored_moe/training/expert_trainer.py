@@ -6,13 +6,19 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from torch import nn
+from torch import Tensor, nn
 from transformers import Trainer, TrainingArguments
 from transformers.trainer_utils import SaveStrategy, TrainOutput
 
 from anchored_moe.backends.base import ModelBackend
 from anchored_moe.experts.base import Expert
 from anchored_moe.modeling import RoutedMLP
+from anchored_moe.training.objectives import (
+    ExpertObjectiveConfig,
+    ExpertObjectiveReport,
+    ExpertWeightDrift,
+    ReplayKLPreservation,
+)
 
 
 class ForcedPathTrainingError(RuntimeError):
@@ -256,6 +262,11 @@ class ForcedPathExpertTrainer(Trainer):
     parameter identity set. This catches accidental unfreezing, expert
     replacement, or route reconfiguration before an optimizer step.
 
+    TRN-005 optionally adds token-masked KL preservation against precomputed
+    frozen-anchor logits and normalized squared drift from immutable expert
+    initialization snapshots. Both terms are independently weighted and leave
+    TRN-001's route and optimizer ownership unchanged.
+
     Full-model checkpoint saving is disabled for TRN-001: ``args.save_strategy``
     must be ``"no"``. Call each expert's safe serialization API explicitly;
     complete package export remains NB-003.
@@ -265,18 +276,30 @@ class ForcedPathExpertTrainer(Trainer):
         args: Training arguments with ``save_strategy="no"``.
         backend: Model-family adapter for routed-layer discovery.
         expert_bindings: One expert binding per converted layer.
+        objective_config:
+            Optional replay-KL and drift configuration. The all-zero default
+            reproduces the ordinary TRN-001 model loss.
         trainer_kwargs: Remaining keyword arguments accepted by
             :class:`transformers.Trainer`, such as datasets and collators.
 
     References:
         Hugging Face Transformers Trainer documentation:
         https://huggingface.co/docs/transformers/main_classes/trainer
+        Hinton, Vinyals, and Dean, "Distilling the Knowledge in a Neural
+        Network." https://arxiv.org/abs/1503.02531
+        Li et al., "Explicit Inductive Bias for Transfer Learning with
+        Convolutional Networks." https://arxiv.org/abs/1802.01483
 
-    Differences:
+    Differences from the referenced methods:
         The standard Trainer may optimize any parameter with
         ``requires_grad=True`` and may save the complete model. This subclass
         asserts an expert-only identity set and rejects full-model checkpoint
         saving to preserve the immutable-anchor package boundary.
+        Preservation uses precomputed immutable-anchor logits and a token mask.
+        L2-SP is restricted to independently owned expert parameters and
+        normalized by their scalar parameter count. Teacher logits are batch
+        data rather than a second live model, and drift snapshots are detached
+        tensors outside model state.
     """
 
     def __init__(
@@ -286,6 +309,7 @@ class ForcedPathExpertTrainer(Trainer):
         args: TrainingArguments,
         backend: ModelBackend,
         expert_bindings: Sequence[ForcedExpertBinding],
+        objective_config: ExpertObjectiveConfig | None = None,
         **trainer_kwargs: Any,
     ) -> None:
         if not isinstance(args, TrainingArguments):
@@ -304,6 +328,22 @@ class ForcedPathExpertTrainer(Trainer):
             raise ForcedPathTrainingError(
                 "model_init is incompatible with explicit expert bindings."
             )
+        if objective_config is not None and not isinstance(
+            objective_config,
+            ExpertObjectiveConfig,
+        ):
+            raise TypeError(
+                "objective_config must be an ExpertObjectiveConfig or None."
+            )
+        resolved_objectives = objective_config or ExpertObjectiveConfig()
+        self.objective_config = resolved_objectives
+        self._replay_kl = (
+            ReplayKLPreservation(resolved_objectives.replay_temperature)
+            if resolved_objectives.replay_kl_enabled
+            else None
+        )
+        self._weight_drift: ExpertWeightDrift | None = None
+        self.last_objective_report: ExpertObjectiveReport | None = None
 
         bindings = _normalize_bindings(expert_bindings)
         report = prepare_forced_path_training(
@@ -311,6 +351,16 @@ class ForcedPathExpertTrainer(Trainer):
             backend=backend,
             expert_bindings=bindings,
         )
+        if resolved_objectives.drift_enabled:
+            drift_parameters = tuple(
+                (
+                    f"layer_{binding.layer_index}.{name}",
+                    parameter,
+                )
+                for binding in bindings
+                for name, parameter in binding.expert.named_parameters()
+            )
+            self._weight_drift = ExpertWeightDrift(drift_parameters)
         try:
             # Experts must be registered before Trainer/Accelerate moves the
             # model so every forced path follows the same device policy.
@@ -335,6 +385,28 @@ class ForcedPathExpertTrainer(Trainer):
             for parameter in binding.expert.parameters()
         )
         self.assert_forced_path_invariants()
+
+    def _set_signature_columns_if_needed(self) -> None:
+        """Keep configured teacher and replay-mask fields in dataset columns."""
+
+        super()._set_signature_columns_if_needed()
+        if not self.objective_config.replay_kl_enabled:
+            return
+        if self._signature_columns is None:
+            raise ForcedPathTrainingError(
+                "Trainer did not resolve model input columns."
+            )
+        objective_columns = [self.objective_config.teacher_logits_key]
+        if self.objective_config.replay_token_mask_key is not None:
+            objective_columns.append(
+                self.objective_config.replay_token_mask_key
+            )
+        # Stable append order preserves standard Trainer columns while making
+        # the two explicitly configured auxiliary fields available to
+        # compute_loss. Dataset pruning therefore remains enabled.
+        self._signature_columns = list(
+            dict.fromkeys([*self._signature_columns, *objective_columns])
+        )
 
     def assert_forced_path_invariants(self) -> None:
         """Assert route ownership and the exact trainable parameter identity."""
@@ -392,6 +464,91 @@ class ForcedPathExpertTrainer(Trainer):
             trial=trial,
             ignore_keys_for_eval=ignore_keys_for_eval,
         )
+
+    def compute_loss(
+        self,
+        model: nn.Module,
+        inputs: dict[str, Tensor | Any],
+        return_outputs: bool = False,
+        num_items_in_batch: Tensor | int | None = None,
+    ) -> Tensor | tuple[Tensor, Any]:
+        """Add independently weighted TRN-005 terms to the model loss.
+
+        The configured teacher-logit and replay-mask fields are removed before
+        delegating ordinary model-loss computation to
+        :class:`transformers.Trainer`. Missing replay masks fall back to the
+        model ``attention_mask`` and then to all token positions.
+        """
+
+        if not isinstance(inputs, dict):
+            raise TypeError("inputs must be a dictionary.")
+        model_inputs = dict(inputs)
+        teacher_key = self.objective_config.teacher_logits_key
+        anchor_logits = model_inputs.pop(teacher_key, None)
+        mask_key = self.objective_config.replay_token_mask_key
+        replay_token_mask = (
+            model_inputs.pop(mask_key, None)
+            if mask_key is not None
+            else None
+        )
+        if replay_token_mask is None:
+            replay_token_mask = model_inputs.get("attention_mask")
+
+        if (
+            self.objective_config.replay_kl_enabled
+            and anchor_logits is None
+        ):
+            raise ForcedPathTrainingError(
+                "Replay KL is enabled but the batch is missing teacher logits "
+                f"under {teacher_key!r}."
+            )
+
+        specialization_loss, outputs = super().compute_loss(
+            model,
+            model_inputs,
+            return_outputs=True,
+            num_items_in_batch=num_items_in_batch,
+        )
+        if not isinstance(specialization_loss, Tensor):
+            raise ForcedPathTrainingError(
+                "The base Trainer loss must be a Tensor."
+            )
+
+        zero = specialization_loss.new_zeros(())
+        replay_kl_loss = zero
+        if self._replay_kl is not None:
+            student_logits = getattr(outputs, "logits", None)
+            if not isinstance(student_logits, Tensor):
+                raise ForcedPathTrainingError(
+                    "Replay KL requires model outputs with floating logits."
+                )
+            replay_kl_loss = self._replay_kl(
+                student_logits,
+                anchor_logits,
+                token_mask=replay_token_mask,
+            )
+
+        drift_loss = (
+            self._weight_drift()
+            if self._weight_drift is not None
+            else zero
+        )
+        total_loss = (
+            specialization_loss
+            + self.objective_config.replay_kl_weight * replay_kl_loss
+            + self.objective_config.drift_weight * drift_loss
+        )
+        self.last_objective_report = ExpertObjectiveReport(
+            specialization_loss=float(
+                specialization_loss.detach().float().cpu().item()
+            ),
+            replay_kl_loss=float(
+                replay_kl_loss.detach().float().cpu().item()
+            ),
+            drift_loss=float(drift_loss.detach().float().cpu().item()),
+            total_loss=float(total_loss.detach().float().cpu().item()),
+        )
+        return (total_loss, outputs) if return_outputs else total_loss
 
     def save_model(
         self,

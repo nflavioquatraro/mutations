@@ -43,11 +43,15 @@ The current implementation covers the first dense-equivalence foundation:
 - forced-path single-expert training with complete converted-layer coverage,
   mechanical backbone freezing, exact trainable-parameter assertions, and a
   constrained Hugging Face Trainer/Accelerate integration;
+- optional token-masked replay KL against precomputed immutable-anchor logits
+  and normalized expert-initialization weight-drift regularization;
+- a Hugging Face `AnchoredMoEForCausalLM` facade with base-checkpoint loading,
+  exact native forward and generation delegation, backend-driven conversion,
+  and an explicit install/synchronize/unload lifecycle;
 - executable offline notebooks for base-model inspection and exact
-  dense-equivalence verification.
+  dense-equivalence verification and custom package composition.
 
-Automatic model mutation during installation, complete
-`AnchoredMoEForCausalLM` composition, replay-preservation training objectives,
+Automatic model mutation during installation, online replay-teacher execution,
 multi-expert training, top-2 execution, persistent registry storage, Hub
 transfer, and full-model serialization are intentionally not implemented yet.
 
@@ -87,8 +91,11 @@ The equivalent guided workflows are available in:
   for a resolved configuration, model inspection, and reproducibility hashes;
 - [`notebooks/01_convert_dense_model.ipynb`](./notebooks/01_convert_dense_model.ipynb)
   for conversion, freezing assertions, and exact hidden-state and logit checks.
+- [`notebooks/04_compose_custom_model.ipynb`](./notebooks/04_compose_custom_model.ipynb)
+  for explicit package installation, synchronization, unloading, and
+  deterministic reinsertion through `AnchoredMoEForCausalLM`.
 
-Both notebooks default to deterministic local Qwen3 smoke models and require no
+The notebooks default to deterministic local Qwen3 smoke models and require no
 network access.
 
 ## Design documents

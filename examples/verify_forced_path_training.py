@@ -9,6 +9,7 @@ from transformers import Qwen3Config, Qwen3ForCausalLM, TrainingArguments
 
 from anchored_moe import (
     AnchoredMoEConfig,
+    ExpertObjectiveConfig,
     ForcedExpertBinding,
     ForcedPathExpertTrainer,
     FullMLPExpert,
@@ -36,9 +37,36 @@ def _tiny_model() -> Qwen3ForCausalLM:
 
 
 def main() -> None:
-    """Train one forced expert while proving byte-exact anchor preservation."""
+    """Train with replay and drift while preserving the anchor byte-exactly."""
 
     model = _tiny_model()
+    dataset = []
+    for index, values in enumerate(
+        (
+            (1, 7, 11, 3),
+            (2, 5, 13, 9),
+            (4, 6, 8, 10),
+            (3, 12, 15, 1),
+        )
+    ):
+        tokens = torch.tensor(values, dtype=torch.long)
+        with torch.no_grad():
+            anchor_logits = model(
+                input_ids=tokens.unsqueeze(0)
+            ).logits.squeeze(0)
+        replay_mask = torch.ones_like(tokens, dtype=torch.bool)
+        if index % 2:
+            replay_mask[0] = False
+        dataset.append(
+            {
+                "input_ids": tokens,
+                "attention_mask": torch.ones_like(tokens),
+                "labels": tokens.clone(),
+                "anchor_logits": anchor_logits.detach().clone(),
+                "replay_token_mask": replay_mask,
+            }
+        )
+
     backend = Qwen3Backend()
     backend.convert(model, AnchoredMoEConfig(converted_layers=[3]))
     wrapper = model.model.layers[3].mlp
@@ -53,16 +81,6 @@ def main() -> None:
         name: tensor.detach().clone()
         for name, tensor in wrapper.anchor_mlp.state_dict().items()
     }
-    dataset = []
-    for values in (
-        (1, 7, 11, 3),
-        (2, 5, 13, 9),
-        (4, 6, 8, 10),
-        (3, 12, 15, 1),
-    ):
-        tokens = torch.tensor(values, dtype=torch.long)
-        dataset.append({"input_ids": tokens, "labels": tokens.clone()})
-
     with TemporaryDirectory(prefix="anchored-moe-train-") as output_dir:
         trainer = ForcedPathExpertTrainer(
             model=model,
@@ -70,10 +88,15 @@ def main() -> None:
             expert_bindings=[
                 ForcedExpertBinding(3, "code:0", expert)
             ],
+            objective_config=ExpertObjectiveConfig(
+                replay_kl_weight=0.5,
+                drift_weight=0.1,
+                replay_temperature=2.0,
+            ),
             args=TrainingArguments(
                 output_dir=output_dir,
-                max_steps=1,
-                per_device_train_batch_size=2,
+                max_steps=2,
+                per_device_train_batch_size=1,
                 learning_rate=1e-2,
                 optim="adamw_torch",
                 save_strategy="no",
@@ -97,13 +120,17 @@ def main() -> None:
     )
     assert expert_changed
     assert anchor_exact
+    assert trainer.last_objective_report is not None
+    assert trainer.last_objective_report.replay_kl_loss > 0
+    assert trainer.last_objective_report.drift_loss > 0
 
     print(
-        "TRN-001 forced-path validation passed: "
+        "TRN-001/TRN-005 forced-path validation passed: "
         f"steps={result.global_step}, "
         f"layers={trainer.forced_path_report.layer_indices}, "
         f"trainable={trainer.forced_path_report.trainable_parameter_count}, "
-        f"expert_changed={expert_changed}, anchor_exact={anchor_exact}"
+        f"expert_changed={expert_changed}, anchor_exact={anchor_exact}, "
+        f"objectives={trainer.last_objective_report}"
     )
 
 

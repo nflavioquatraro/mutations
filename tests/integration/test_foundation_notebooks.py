@@ -26,6 +26,12 @@ NOTEBOOK_CASES = (
         "NB-002 validation passed",
         "validation_summary",
     ),
+    (
+        PROJECT_ROOT / "notebooks" / "04_compose_custom_model.ipynb",
+        "NB-005",
+        "NB-005 validation passed",
+        "composition_summary",
+    ),
 )
 
 

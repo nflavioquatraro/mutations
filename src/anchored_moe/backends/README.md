@@ -13,6 +13,7 @@ package lifecycle.
 |---|---|---|---|
 | CORE-002 | Backend interface | `base.py` | Validated |
 | CORE-003 | `backend: qwen3` | `qwen3.py` | Validated |
+| CORE-005 | `AnchoredMoEForCausalLM` conversion | `../modeling.py` | Validated |
 
 The Qwen3 adapter supports both `Qwen3ForCausalLM` and bare `Qwen3Model`
 decoder-layer paths.
@@ -52,9 +53,12 @@ therefore retain their values and identities.
 
 ## Hugging Face integration
 
-The backend consumes ordinary `transformers` Qwen3 model objects. It does not
-subclass or patch Hugging Face model classes. Full `PreTrainedModel`
-integration belongs to CORE-005 and is not part of this implementation.
+The backend consumes ordinary `transformers` Qwen3 model objects and never
+patches their classes. `AnchoredMoEForCausalLM` is a separate
+`PreTrainedModel` facade that owns the native anchor, resolves this adapter,
+and delegates forward and generation back to the model-family implementation.
+This preserves backend/model separation while making conversion available
+through a Hugging Face–compatible public entry point.
 
 ## Configuration and examples
 
@@ -67,6 +71,8 @@ report = Qwen3Backend().convert(model, config)
 ```
 
 See `examples/verify_dense_equivalence.py` for a non-interactive local example.
+`examples/verify_package_runtime.py` exercises backend resolution through
+`AnchoredMoEForCausalLM`.
 The guided workflows in `notebooks/00_inspect_base_model.ipynb` and
 `notebooks/01_convert_dense_model.ipynb` inspect the model-family contract and
 perform conversion through the same public backend API.
@@ -85,5 +91,7 @@ No paper algorithm is implemented in this foundation backend.
 
 Tests cover discovery, selected-layer replacement, stale/double conversion
 protection, full-model freezing, and exact tiny-model output equivalence.
-Optimized kernels, remote checkpoints, non-Qwen3 families, and expert execution
-are not yet supported.
+CORE-005 additionally tests local `from_pretrained` loading, native generation
+equivalence, base-configuration hash rejection before conversion, and complete
+parameter freezing. Optimized kernels, remote production checkpoints, and
+non-Qwen3 families are not yet validated.

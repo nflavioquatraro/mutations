@@ -14,16 +14,13 @@ from transformers import Qwen3Config, Qwen3ForCausalLM
 from anchored_moe import (
     EXPERT_PAYLOAD_BINDING_FORMAT_VERSION,
     AffineRouterHead,
-    AnchoredMoEConfig,
+    AnchoredMoEForCausalLM,
     AppendOnlyRouterHeads,
     ExpertPackage,
     ExpertPackageManifest,
-    ExpertRegistry,
     FullMLPExpert,
     RoutedMLP,
-    synchronize_anchored_top1_registry,
 )
-from anchored_moe.backends import Qwen3Backend
 from anchored_moe.evaluation import assert_tensors_equivalent
 from anchored_moe.registry import PACKAGE_FORMAT_VERSION
 from anchored_moe.utils import sha256_file, sha256_json
@@ -47,14 +44,17 @@ def _tiny_model() -> Qwen3ForCausalLM:
     ).eval()
 
 
-def _export_package(root: Path, model: Qwen3ForCausalLM) -> ExpertPackage:
+def _export_package(
+    root: Path,
+    model: AnchoredMoEForCausalLM,
+) -> ExpertPackage:
     """Export one safely bound two-layer package with positive router scores."""
 
     weight_files: list[str] = []
     bindings: list[dict[str, object]] = []
     hashes: dict[str, str] = {}
     for layer_index in (2, 3):
-        wrapper = model.model.layers[layer_index].mlp
+        wrapper = model.anchor_model.model.layers[layer_index].mlp
         assert isinstance(wrapper, RoutedMLP)
         expert = FullMLPExpert.from_anchor(
             wrapper.anchor_mlp,
@@ -98,7 +98,7 @@ def _export_package(root: Path, model: Qwen3ForCausalLM) -> ExpertPackage:
         package_structure="single_expert",
         base_model_repository="local-random-qwen3",
         base_model_revision="synthetic-seed-13",
-        base_config_sha256=sha256_json(model.config.to_dict()),
+        base_config_sha256=sha256_json(model.anchor_model.config.to_dict()),
         base_weight_sha256={"model.safetensors": "0" * 64},
         tokenizer_repository="local-random-qwen3",
         tokenizer_revision="synthetic-seed-13",
@@ -146,34 +146,27 @@ def _export_package(root: Path, model: Qwen3ForCausalLM) -> ExpertPackage:
 
 
 def main() -> None:
-    """Exercise install, explicit sync, unload, and exact reinsertion."""
+    """Exercise the public model facade and explicit package lifecycle."""
 
-    model = _tiny_model()
+    anchor = _tiny_model()
     input_ids = torch.tensor([[1, 7, 11, 3]])
     with torch.no_grad():
-        dense_logits = model(input_ids=input_ids).logits
+        dense_logits = anchor(input_ids=input_ids).logits
 
-    backend = Qwen3Backend()
-    backend.convert(model, AnchoredMoEConfig(converted_layers=[2, 3]))
-    registry = ExpertRegistry()
+    model = AnchoredMoEForCausalLM.from_anchor_model(
+        anchor,
+        converted_layers=[2, 3],
+    )
 
     with TemporaryDirectory(prefix="anchored-moe-runtime-") as temporary:
         package = _export_package(Path(temporary), model)
-        registry.install(package)
-        installed = synchronize_anchored_top1_registry(
-            model,
-            backend=backend,
-            registry=registry,
-        )
+        model.install(package)
+        installed = model.synchronize_registry()
         with torch.no_grad():
             routed_logits = model(input_ids=input_ids).logits
 
-        registry.unload(package.identity)
-        synchronize_anchored_top1_registry(
-            model,
-            backend=backend,
-            registry=registry,
-        )
+        model.unload(package.identity)
+        model.synchronize_registry()
         with torch.no_grad():
             removed_logits = model(input_ids=input_ids).logits
         assert_tensors_equivalent(
@@ -184,12 +177,10 @@ def main() -> None:
             rtol=0.0,
         )
 
-        registry.install(ExpertPackage.from_directory(package.package_directory))
-        reinserted = synchronize_anchored_top1_registry(
-            model,
-            backend=backend,
-            registry=registry,
+        model.install(
+            ExpertPackage.from_directory(package.package_directory)
         )
+        reinserted = model.synchronize_registry()
         with torch.no_grad():
             reinserted_logits = model(input_ids=input_ids).logits
         assert_tensors_equivalent(
@@ -202,7 +193,7 @@ def main() -> None:
         assert reinserted.registry_sha256 == installed.registry_sha256
 
         print(
-            "PKG-007 runtime validation passed: "
+            "CORE-005/NB-005 composition validation passed: "
             f"layers={installed.configured_layers}, "
             f"experts={installed.expert_ids_by_layer}, "
             f"registry_sha256={installed.registry_sha256}"

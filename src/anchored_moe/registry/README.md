@@ -175,6 +175,12 @@ paths and never duplicate an anchor implicitly.
 contract. The inference subpackage consumes it only during an explicit
 registry-to-model synchronization operation.
 
+`AnchoredMoEForCausalLM.install()` and `.unload()` are thin public delegates to
+the owned `ExpertRegistry`; neither method changes model routes. Calling
+`.synchronize_registry()` separately applies the active registry through
+PKG-007. This preserves the same lifecycle semantics behind the higher-level
+Hugging Face facade.
+
 ## Configuration and examples
 
 ```python
@@ -209,8 +215,9 @@ An attachable full-MLP manifest includes:
 }
 ```
 
-See `examples/verify_registry_lifecycle.py` for an executable local lifecycle
-example.
+See `examples/verify_registry_lifecycle.py` for an executable registry-only
+lifecycle example and `examples/verify_package_runtime.py` for the complete
+model-facade lifecycle.
 
 ## References
 

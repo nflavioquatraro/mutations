@@ -27,7 +27,11 @@ from anchored_moe.inference import (
     Top1DispatchResult,
     synchronize_anchored_top1_registry,
 )
-from anchored_moe.modeling import RoutedMLP
+from anchored_moe.modeling import (
+    AnchoredModelError,
+    AnchoredMoEForCausalLM,
+    RoutedMLP,
+)
 from anchored_moe.policies import (
     AnchoredTop1Selection,
     CapacityDecision,
@@ -58,16 +62,23 @@ from anchored_moe.routers import (
     RouterSerializationError,
 )
 from anchored_moe.training import (
+    ExpertObjectiveConfig,
+    ExpertObjectiveError,
+    ExpertObjectiveReport,
+    ExpertWeightDrift,
     ForcedExpertBinding,
     ForcedPathExpertTrainer,
     ForcedPathTrainingError,
     ForcedPathTrainingReport,
+    ReplayKLPreservation,
     prepare_forced_path_training,
 )
 
 __all__ = [
     "AffineRouterHead",
     "AnchoredMoEConfig",
+    "AnchoredModelError",
+    "AnchoredMoEForCausalLM",
     "AnchoredTop1Dispatcher",
     "AnchoredTop1Selection",
     "AppendOnlyRouterHeads",
@@ -75,11 +86,15 @@ __all__ = [
     "DomainLabelBank",
     "EXPERT_PAYLOAD_BINDING_FORMAT_VERSION",
     "Expert",
+    "ExpertObjectiveConfig",
+    "ExpertObjectiveError",
+    "ExpertObjectiveReport",
     "ExpertPackage",
     "ExpertPackageManifest",
     "ExpertPayloadBinding",
     "ExpertRegistry",
     "ExpertSerializationError",
+    "ExpertWeightDrift",
     "FeatureBankSerializationError",
     "ForcedExpertBinding",
     "ForcedPathExpertTrainer",
@@ -95,6 +110,7 @@ __all__ = [
     "PackageMaterializationError",
     "PackageIdentity",
     "ResolvedStrategyConfig",
+    "ReplayKLPreservation",
     "ROUTER_FEATURE_BANK_FORMAT_VERSION",
     "ROUTER_LABEL_BANK_FORMAT_VERSION",
     "RidgeFittingError",

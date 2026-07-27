@@ -72,10 +72,15 @@ from anchored_moe.routers import (
     RouterSerializationError,
 )
 from anchored_moe.training import (
+    ExpertObjectiveConfig,
+    ExpertObjectiveError,
+    ExpertObjectiveReport,
+    ExpertWeightDrift,
     ForcedExpertBinding,
     ForcedPathExpertTrainer,
     ForcedPathTrainingError,
     ForcedPathTrainingReport,
+    ReplayKLPreservation,
     prepare_forced_path_training,
 )
 from anchored_moe.utils import canonical_json_bytes, sha256_file, sha256_json
@@ -96,6 +101,8 @@ def test_feature_bearing_subpackages_have_theory_readmes() -> None:
 def test_current_public_symbols_have_docstrings() -> None:
     public_symbols = [
         anchored_moe.AnchoredMoEConfig,
+        anchored_moe.AnchoredModelError,
+        anchored_moe.AnchoredMoEForCausalLM,
         anchored_moe.ResolvedStrategyConfig,
         anchored_moe.RoutedMLP,
         ConversionReport,
@@ -159,6 +166,11 @@ def test_current_public_symbols_have_docstrings() -> None:
         ForcedPathExpertTrainer,
         ForcedPathTrainingError,
         ForcedPathTrainingReport,
+        ExpertObjectiveConfig,
+        ExpertObjectiveError,
+        ExpertObjectiveReport,
+        ExpertWeightDrift,
+        ReplayKLPreservation,
         prepare_forced_path_training,
         canonical_json_bytes,
         sha256_file,

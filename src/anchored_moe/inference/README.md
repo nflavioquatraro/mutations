@@ -10,9 +10,10 @@ module objects for one routed layer. PKG-007 safely materializes those objects
 from active local packages.
 
 It does not install packages implicitly, estimate serving capacity, combine
-top-2 experts, manage distributed all-to-all execution, or expose a complete
-`AnchoredMoEForCausalLM`. Those remain separate registry, capacity,
-combination, scaling, and model-integration features.
+top-2 experts, or manage distributed all-to-all execution. CORE-005 exposes
+the existing explicit composition boundary through
+`AnchoredMoEForCausalLM.synchronize_registry`; inference remains responsible
+for materialization rather than model loading or package lifecycle.
 
 ## Implemented strategies
 
@@ -22,6 +23,7 @@ combination, scaling, and model-integration features.
 | EVAL-002 | `RouteTelemetry`, `RouteRecord`, `RouteSummary` | `telemetry.py` | Validated |
 | PKG-007 | `synchronize_anchored_top1_registry` | `composition.py`, `modeling.py` | Validated |
 | TRN-001 | `RoutedMLP.configure_forced_expert` | `modeling.py` | Validated |
+| CORE-005 | `AnchoredMoEForCausalLM.synchronize_registry` | `modeling.py` | Validated |
 
 ## Mathematical formulation
 
@@ -152,10 +154,13 @@ discover wrappers and synchronize an active local registry. The wrapper
 preserves the Qwen3 MLP tensor return contract, so surrounding Hugging Face
 forward and generation paths require no changes.
 
-`AnchoredMoEConfig` still rejects model-level `anchored_top1` configuration.
-Package installation and complete model composition are required before that
-declarative model configuration can be executable rather than silently
-incomplete.
+CORE-005 wraps the native causal LM in a `PreTrainedModel` facade. Its
+`forward()` and `generate()` delegate to that native implementation, while
+`install()` and `unload()` change only its `ExpertRegistry`.
+`synchronize_registry()` is the explicit operation that applies PKG-007.
+`AnchoredMoEConfig` still rejects declarative model-level `anchored_top1`
+configuration because synchronization, rather than configuration parsing,
+currently proves that all required package payloads exist.
 
 ## Configuration and examples
 
@@ -196,6 +201,8 @@ synchronize_anchored_top1_registry(
 
 See `examples/verify_routed_top1.py` and
 `examples/verify_package_runtime.py` for deterministic offline examples.
+The latter uses `AnchoredMoEForCausalLM` for the complete public composition
+lifecycle.
 
 ## References
 
