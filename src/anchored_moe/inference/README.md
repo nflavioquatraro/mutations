@@ -6,12 +6,15 @@ The inference subpackage owns token dispatch, output reconstruction,
 privacy-safe in-memory route telemetry, and explicit registry-to-model runtime
 synchronization. INF-001 connects already calibrated router scores, anchored
 top-1 selection, BAL-001 capacity fallback, the immutable anchor, and expert
-module objects for one routed layer. PKG-007 safely materializes those objects
-from active local packages.
+module objects for one routed layer. INF-002 connects anchor-veto top-2
+selection, sparse specialist execution, and score-softmax activation
+combination through a standalone model-family-neutral dispatcher. PKG-007
+safely materializes top-1 runtime objects from active local packages.
 
-It does not install packages implicitly, estimate serving capacity, combine
-top-2 experts, or manage distributed all-to-all execution. CORE-005 exposes
-the existing explicit composition boundary through
+It does not install packages implicitly, estimate serving capacity, attach
+top-2 dispatch to `RoutedMLP`, validate pair compatibility, or manage
+distributed all-to-all execution. CORE-005 exposes the existing explicit
+composition boundary through
 `AnchoredMoEForCausalLM.synchronize_registry`; inference remains responsible
 for materialization rather than model loading or package lifecycle.
 
@@ -20,6 +23,7 @@ for materialization rather than model loading or package lifecycle.
 | Feature ID | Public API | Module | Status |
 |---|---|---|---|
 | INF-001 | `AnchoredTop1Dispatcher`, `RoutedMLP.configure_anchored_top1` | `dispatch.py`, `modeling.py` | Validated |
+| INF-002 | `AnchoredTop2Dispatcher`, `Top2DispatchResult` | `dispatch.py` | Validated |
 | EVAL-002 | `RouteTelemetry`, `RouteRecord`, `RouteSummary` | `telemetry.py` | Validated |
 | PKG-007 | `synchronize_anchored_top1_registry` | `composition.py`, `modeling.py` | Validated |
 | TRN-001 | `RoutedMLP.configure_forced_expert` | `modeling.py` | Validated |
@@ -44,6 +48,40 @@ Every token belongs to exactly one candidate group. Candidate zero is always
 the anchor, while candidate \(k\) corresponds to `expert_ids[k - 1]`. The
 output preserves the complete token-leading shape and uses the common trailing
 shape returned by the anchor and experts.
+
+For INF-002, POL-002 returns ranked candidates
+\((c_{t,1},c_{t,2})\) and the approved specialist-pair indicator
+
+\[
+m_t=\mathbb{1}[c_{t,1}\ne0\land c_{t,2}\ne0].
+\]
+
+Dispatch computes
+
+\[
+y_t =
+\begin{cases}
+A(h_t), & m_t=0,\\
+\alpha_{t,1}E_{c_{t,1}}(h_t)
++\alpha_{t,2}E_{c_{t,2}}(h_t), & m_t=1,
+\end{cases}
+\]
+
+\[
+\left[\alpha_{t,1},\alpha_{t,2}\right]
+=
+\operatorname{softmax}
+\left(
+\left[g_{t,c_{t,1}},g_{t,c_{t,2}}\right]/T_{\mathrm{mix}}
+\right).
+\]
+
+Every vetoed token executes the anchor once. Every approved token executes two
+distinct specialists, each gathered into one sparse batch regardless of its
+first or second rank. `Top2DispatchResult.mixture_weights` has shape
+\(D_1\times\cdots\times D_n\times2\): approved tokens contain \(\alpha_t\),
+while vetoed tokens contain \([0,0]\) because their anchor coefficient is one
+outside the specialist mixture.
 
 Telemetry records selected candidate indices, effective candidate indices,
 selected scores, and overflow flags:
@@ -73,7 +111,7 @@ routed wrapper changes:
 
 ## Algorithms
 
-Dispatch:
+Anchored top-1 dispatch:
 
 1. Validate score shape, expert count, devices, and module types before
    executing a candidate.
@@ -86,10 +124,26 @@ Dispatch:
 8. Reconstruct output order with differentiable `torch.index_copy`.
 9. Optionally copy route metadata into a bounded CPU telemetry history.
 
+Anchor-veto top-2 dispatch:
+
+1. Validate score shape, score/activation dtype, expert count, devices,
+   forwarding containers, and policy types before executing any candidate.
+2. Apply POL-002 and flatten only token-leading dimensions.
+3. Gather all vetoed tokens and execute the anchor in one sparse call.
+4. For each specialist in stable append order, find approved occurrences in
+   either ranked slot, gather their hidden states, and execute one sparse call.
+5. Map original token positions to a compact approved-pair batch.
+6. Reconstruct specialist outputs in exact first/second ranked order with
+   differentiable `torch.index_copy`.
+7. Apply COM-001 to approved scores and pair-ordered activations.
+8. Reconstruct anchor and combined outputs in original token order.
+9. Return selected routes and full-shape weights, using zeros for vetoed
+   tokens.
+
 `RoutedMLP` remains in exact `forced_anchor` mode until
 `configure_anchored_top1()` is called explicitly. An empty configured expert
 set constructs an empty score dimension and dispatches every token to the
-anchor.
+anchor. INF-002 is standalone and does not add another `RoutedMLP` mode.
 
 For training, `configure_forced_expert()` provides a separate router-free mode
 in which every token executes one expert directly. The training subpackage
@@ -114,11 +168,20 @@ Registry synchronization:
 
 ## Assumptions and invariants
 
-- There is exactly one effective route per token and no token dropping.
+- INF-001 executes exactly one effective candidate per token.
+- INF-002 executes either the anchor or exactly two distinct specialists per
+  token; it never executes all three.
+- Neither dispatcher drops a token.
 - Anchor candidate zero is permanent.
 - Experts execute in affine-router append order.
 - Inactive experts are not executed.
 - Overflow executes the anchor, not another specialist.
+- INF-002 vetoes specialist execution whenever the anchor appears in the
+  ranked pair.
+- INF-002 preserves first/second ranked order when assigning COM-001 weights.
+- INF-002 emits zero specialist weights for anchor-vetoed tokens and
+  non-negative sum-to-one weights for approved tokens.
+- INF-002 does not check capacity or pair compatibility.
 - The feature extractor and router heads are frozen at inference attachment.
 - Existing expert gradient flags are preserved.
 - Anchor and expert outputs must share trailing shape, dtype, and device.
@@ -126,10 +189,10 @@ Registry synchronization:
 - Telemetry is opt-in, bounded, detached, copied to CPU, and contains no model
   inputs or activations.
 - Additional MLP arguments are forwarded unchanged. Token-aligned auxiliary
-  tensors requiring sparse indexing are not supported by INF-001.
-- Package-driven attachment, distributed dispatch, and top-2 execution are not
-  separate concerns; PKG-007 implements local explicit attachment while
-  distributed dispatch and top-2 remain excluded.
+  tensors requiring sparse indexing are not supported by INF-001 or INF-002.
+- PKG-007 implements local explicit top-1 attachment. Top-2 package
+  attachment, `RoutedMLP` integration, capacity handling, telemetry, pair
+  compatibility, and distributed dispatch remain separate features.
 - Registry installation and unloading never mutate a model. Synchronization is
   a distinct, explicit API call.
 - Active package order and serialized router-head order determine runtime
@@ -142,8 +205,10 @@ Registry synchronization:
 - Forced-expert mode has exactly one expert, no router heads, and no capacity
   or selection decision.
 
-For \(N=\prod_i D_i\), router selection is \(O(NK)\), grouping is \(O(NK)\) in
-the initial implementation, and each selected token executes exactly one MLP.
+For \(N=\prod_i D_i\), router selection and initial mask-scan grouping are
+\(O(NK)\). INF-001 executes one MLP per token. INF-002 executes one MLP for a
+vetoed token or two MLPs for an approved token; combination is linear in the
+selected activation size.
 
 ## Hugging Face integration
 
@@ -153,6 +218,12 @@ constructed. PKG-007 uses the same model-family-neutral backend interface to
 discover wrappers and synchronize an active local registry. The wrapper
 preserves the Qwen3 MLP tensor return contract, so surrounding Hugging Face
 forward and generation paths require no changes.
+
+INF-002 operates on ordinary PyTorch modules and tensors, so affine router
+heads and `FullMLPExpert` objects can be exercised without a model-family
+adapter. It is deliberately not exposed through `RoutedMLP`,
+`AnchoredMoEForCausalLM`, registry synchronization, or declarative
+configuration yet.
 
 CORE-005 wraps the native causal LM in a `PreTrainedModel` facade. Its
 `forward()` and `generate()` delegate to that native implementation, while
@@ -181,6 +252,25 @@ output = routed_mlp(
 print(telemetry.summarize())
 ```
 
+Standalone top-2 dispatch:
+
+```python
+result = AnchoredTop2Dispatcher(
+    combination_policy=ScoreSoftmaxCombination(mix_temperature=1.0),
+).dispatch(
+    hidden_states,
+    expert_scores=scores,
+    expert_ids=("code:0", "math:0"),
+    anchor_mlp=anchor,
+    experts=(code_expert, math_expert),
+)
+
+output = result.output
+approved_weights = result.mixture_weights[
+    result.selected_routes.expert_pair_mask
+]
+```
+
 Explicit package composition:
 
 ```python
@@ -199,17 +289,17 @@ synchronize_anchored_top1_registry(
 )
 ```
 
-See `examples/verify_routed_top1.py` and
-`examples/verify_package_runtime.py` for deterministic offline examples.
-The latter uses `AnchoredMoEForCausalLM` for the complete public composition
+See `examples/verify_routed_top1.py`, `examples/verify_top2_dispatch.py`, and
+`examples/verify_package_runtime.py` for deterministic offline examples. The
+last uses `AnchoredMoEForCausalLM` for the complete public top-1 composition
 lifecycle.
 
 ## References
 
 - The repository
   [architecture blueprint](../../../anchored-plugin-moe-architecture.md)
-  defines anchored top-1 inference, exact fallback, stable ordering, and
-  overflow-to-anchor behavior.
+  defines anchored top-1 inference, anchor-veto weighted top-2, exact fallback,
+  stable ordering, and overflow-to-anchor behavior.
 - [PyTorch `index_select` documentation](https://docs.pytorch.org/docs/stable/generated/torch.index_select.html)
   defines sparse token gathering.
 - [PyTorch `index_copy` documentation](https://docs.pytorch.org/docs/stable/generated/torch.index_copy.html)
@@ -217,9 +307,12 @@ lifecycle.
 - [PyTorch `ModuleList` documentation](https://docs.pytorch.org/docs/stable/generated/torch.nn.ModuleList.html)
   motivates registering ordered expert modules without encoding expert IDs as
   Python attribute names.
+- [PyTorch `softmax` documentation](https://docs.pytorch.org/docs/stable/generated/torch.nn.functional.softmax.html)
+  defines the normalized score weights applied after ranked pair
+  reconstruction.
 
-INF-001 and EVAL-002 are framework infrastructure and do not derive a training
-or optimization algorithm from a paper.
+INF-001, INF-002, and EVAL-002 are framework infrastructure and do not derive
+a training or optimization algorithm from a paper.
 
 ## Tests and known limitations
 
@@ -231,8 +324,17 @@ when a selected expert is an anchor copy. PKG-007 adds package-driven
 multi-layer materialization, exact removal fallback, deterministic reinsertion,
 and malformed router/binding failure before model mutation.
 
+INF-002 acceptance tests cover mixed anchor/pair decisions, exact ranked
+mixtures, sparse call counts, inactive specialists, empty and single-expert
+registries, arbitrary token-leading shapes, no token dropping, configurable
+temperature, score/hidden/expert gradients, structural validation before
+execution, candidate output contracts, affine-router and full-MLP integration,
+public result invariants, and preservation of all INF-001 tests.
+
 The initial implementation groups each candidate with a separate mask scan.
 Optimized batched dispatch, token-aligned auxiliary MLP arguments, capacity
 estimation, live-model checkpoint hash verification, route serialization,
 automatic install hooks, model-level configuration, multi-device
-materialization, and top-2 combinations remain unsupported.
+materialization, top-2 telemetry, pair compatibility, top-2 capacity
+degradation, `RoutedMLP` top-2 integration, and package-driven top-2 attachment
+remain unsupported.

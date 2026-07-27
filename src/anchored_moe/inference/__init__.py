@@ -7,7 +7,9 @@ from anchored_moe.inference.composition import (
 )
 from anchored_moe.inference.dispatch import (
     AnchoredTop1Dispatcher,
+    AnchoredTop2Dispatcher,
     Top1DispatchResult,
+    Top2DispatchResult,
 )
 from anchored_moe.inference.telemetry import (
     RouteRecord,
@@ -17,11 +19,13 @@ from anchored_moe.inference.telemetry import (
 
 __all__ = [
     "AnchoredTop1Dispatcher",
+    "AnchoredTop2Dispatcher",
     "PackageMaterializationError",
     "RegistryCompositionReport",
     "RouteRecord",
     "RouteSummary",
     "RouteTelemetry",
     "Top1DispatchResult",
+    "Top2DispatchResult",
     "synchronize_anchored_top1_registry",
 ]

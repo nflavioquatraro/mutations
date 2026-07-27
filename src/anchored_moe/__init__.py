@@ -19,12 +19,14 @@ from anchored_moe.configuration import AnchoredMoEConfig, ResolvedStrategyConfig
 from anchored_moe.experts import Expert, ExpertSerializationError, FullMLPExpert
 from anchored_moe.inference import (
     AnchoredTop1Dispatcher,
+    AnchoredTop2Dispatcher,
     PackageMaterializationError,
     RegistryCompositionReport,
     RouteRecord,
     RouteSummary,
     RouteTelemetry,
     Top1DispatchResult,
+    Top2DispatchResult,
     synchronize_anchored_top1_registry,
 )
 from anchored_moe.modeling import (
@@ -33,11 +35,16 @@ from anchored_moe.modeling import (
     RoutedMLP,
 )
 from anchored_moe.policies import (
+    ActivationCombinationResult,
+    AnchorVetoTop2Selection,
     AnchoredTop1Selection,
     CapacityDecision,
+    CombinationPolicy,
     OverflowToAnchorCapacity,
     RouteDecision,
+    ScoreSoftmaxCombination,
     SelectionPolicy,
+    Top2RouteDecision,
 )
 from anchored_moe.registry import (
     EXPERT_PAYLOAD_BINDING_FORMAT_VERSION,
@@ -82,13 +89,17 @@ from anchored_moe.training import (
 
 __all__ = [
     "AffineRouterHead",
+    "ActivationCombinationResult",
+    "AnchorVetoTop2Selection",
     "AnchoredMoEConfig",
     "AnchoredModelError",
     "AnchoredMoEForCausalLM",
     "AnchoredTop1Dispatcher",
+    "AnchoredTop2Dispatcher",
     "AnchoredTop1Selection",
     "AppendOnlyRouterHeads",
     "CapacityDecision",
+    "CombinationPolicy",
     "CalibratedRouterPackageConfig",
     "DomainLabelBank",
     "EXPERT_PAYLOAD_BINDING_FORMAT_VERSION",
@@ -138,9 +149,12 @@ __all__ = [
     "RouterSerializationError",
     "RoutedMLP",
     "SelectionPolicy",
+    "ScoreSoftmaxCombination",
     "TemperatureThresholdCalibrationError",
     "TemperatureThresholdCalibrationReport",
     "Top1DispatchResult",
+    "Top2DispatchResult",
+    "Top2RouteDecision",
     "UtilityLabelBank",
     "calibrate_temperature_and_thresholds",
     "derive_calibrated_router_package",

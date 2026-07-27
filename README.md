@@ -7,7 +7,8 @@ model. The dense model remains an exact fallback while expert representation,
 routing, combination, calibration, and package lifecycle remain independently
 configurable.
 
-The current implementation covers the first dense-equivalence foundation:
+The current implementation covers the modular top-1 foundation and the first
+standalone weighted top-2 strategy primitives:
 
 - declarative `AnchoredMoEConfig` configuration;
 - a model-family-neutral backend contract;
@@ -23,6 +24,10 @@ The current implementation covers the first dense-equivalence foundation:
   strict, deterministic safetensors serialization;
 - anchored hard top-1 selection with fixed-zero anchor evidence and stable
   anchor-first tie-breaking;
+- deterministic anchor-veto top-2 selection and temperature-scaled
+  score-softmax activation combination, kept separate from expert dispatch;
+- standalone sparse anchor-veto top-2 dispatch with ranked specialist
+  execution, weighted activation reconstruction, and auditable mixture weights;
 - versioned router feature caches with deterministic row alignment, provenance,
   strict safetensors validation, and embedded tensor integrity digests;
 - feature-bank-bound domain and individual-utility label datasets with
@@ -57,8 +62,9 @@ The current implementation covers the first dense-equivalence foundation:
   custom package composition.
 
 Automatic model mutation during installation, online replay-teacher execution,
-multi-expert training, top-2 execution, persistent registry storage, Hub
-transfer, and full-model serialization are intentionally not implemented yet.
+multi-expert training, model-integrated and package-driven top-2 execution,
+persistent registry storage, Hub transfer, and full-model serialization are
+intentionally not implemented yet.
 
 ## Development setup
 
@@ -80,6 +86,8 @@ python examples/inspect_expert_package.py
 python examples/verify_full_mlp_expert.py
 python examples/verify_affine_router.py
 python examples/verify_anchored_top1.py
+python examples/verify_anchor_veto_top2.py
+python examples/verify_top2_dispatch.py
 python examples/verify_router_feature_bank.py
 python examples/verify_router_label_banks.py
 python examples/verify_independent_ridge.py

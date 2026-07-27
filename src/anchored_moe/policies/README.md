@@ -3,29 +3,41 @@
 ## Scope
 
 The policies subpackage owns decisions made from already calibrated router
-scores and capacity metadata. POL-001 implements fixed-zero anchored hard
-top-1 selection. BAL-001 rewrites unavailable selected experts to the anchor.
+scores, already selected specialist outputs, and capacity metadata. POL-001
+implements fixed-zero anchored hard top-1 selection. POL-002 ranks an
+anchor-veto top-2 pair, COM-001 combines an approved specialist pair with
+score-softmax weights, and BAL-001 rewrites unavailable top-1 experts to the
+anchor.
 
 This subpackage does not extract router features, produce or fit expert scores,
-attach experts, execute MLPs, combine outputs, estimate serving capacity,
+attach experts, execute MLPs, dispatch tokens, estimate serving capacity,
 install packages, or record telemetry. Those responsibilities remain with
-routers, calibration, modeling and inference, combination, later capacity,
-registry, and evaluation features.
+routers, calibration, modeling and inference, later capacity, registry, and
+evaluation features.
 
 ## Implemented strategies
 
 | Feature ID | Public configuration | Module | Status |
 |---|---|---|---|
 | POL-001 | `selection.policy: anchored_top1` | `selection.py` | Validated |
+| POL-002 | `selection.policy: anchor_veto_top2` | `selection.py` | Validated |
+| COM-001 | `combination.policy: score_softmax` | `combination.py` | Validated |
 | BAL-001 | `capacity.overflow: anchor` | `capacity.py` | Validated |
 
-`SelectionPolicy` is the strategy interface. `AnchoredTop1Selection` implements
-the initial policy, and `RouteDecision` defines the stable result consumed by
-INF-001 dispatch and EVAL-002 evaluation components.
+`SelectionPolicy` is the selection strategy interface.
+`AnchoredTop1Selection` returns `RouteDecision`, while
+`AnchorVetoTop2Selection` returns pair-shaped `Top2RouteDecision` metadata.
+The top-1 result is consumed by INF-001 dispatch and EVAL-002 evaluation
+components. Top-2 dispatch remains separate work.
 
 `OverflowToAnchorCapacity` consumes a `RouteDecision` and optional per-token
 expert availability. `CapacityDecision` exposes the effective routes and the
 tokens that overflowed.
+
+`CombinationPolicy` is the activation-combination interface.
+`ScoreSoftmaxCombination` consumes only already approved, already ordered
+specialist pairs and returns `ActivationCombinationResult`, containing the
+weighted activation and exact deployed weights.
 
 ## Mathematical formulation
 
@@ -74,6 +86,49 @@ The policy deliberately defines stable ties:
 2. experts appear in router append order, so the earliest appended expert wins
    an equal positive score.
 
+For anchor-veto top-2, let
+\((c_{t,1},c_{t,2})\) be the first two candidates after a stable descending
+rank of
+
+\[
+\left[0,g_{t,1},\ldots,g_{t,K}\right].
+\]
+
+The specialist-pair approval indicator is
+
+\[
+m_t =
+\mathbb{1}[c_{t,1}\ne 0 \land c_{t,2}\ne 0].
+\]
+
+Because the anchor is first among scores tied at zero, \(m_t=1\) exactly when
+at least two specialists have scores strictly greater than zero. Selected
+indices and scores have shape
+\(D_1\times\cdots\times D_n\times 2\). An empty registry duplicates the anchor
+only to preserve this pair-shaped metadata contract; it never represents two
+executions.
+
+For an approved pair \(i,j\), COM-001 computes
+
+\[
+\alpha_i =
+\frac{\exp(g_i/T_{\mathrm{mix}})}
+{\exp(g_i/T_{\mathrm{mix}})+\exp(g_j/T_{\mathrm{mix}})},
+\qquad
+\alpha_j = 1-\alpha_i,
+\]
+
+\[
+y_t = \alpha_i E_i(h_t)+\alpha_j E_j(h_t),
+\qquad T_{\mathrm{mix}}>0.
+\]
+
+For scores with shape
+\(D_1\times\cdots\times D_n\times2\) and selected outputs with shape
+\(D_1\times\cdots\times D_n\times2\times O_1\cdots\times O_m\), weights have
+the score shape and the combined output has shape
+\(D_1\times\cdots\times D_n\times O_1\cdots\times O_m\).
+
 For selected route \(r_t\) and availability
 \(C_{t,k}\in\{\mathrm{false},\mathrm{true}\}\), BAL-001 computes
 
@@ -108,6 +163,27 @@ An empty registry has score shape `[..., 0]`. Prepending the anchor still
 produces one valid candidate, so every token deterministically selects index
 zero.
 
+Anchor-veto top-2:
+
+1. Apply the same score, identifier, shape, and finite-value validation as
+   anchored top-1.
+2. Prepend the fixed-zero anchor column.
+3. Stable-sort candidates in descending score order.
+4. Retain the first two indices and scores.
+5. Mark a token anchor-vetoed if either retained index is zero.
+6. For an empty registry, return a duplicated anchor pair and a false
+   specialist-pair mask.
+
+Score-softmax combination:
+
+1. Require finite pair scores and matching pair-ordered activation prefixes.
+2. Require scores and activations to share dtype and device so combination
+   cannot silently promote the model output.
+3. Divide selected scores by the finite positive mixture temperature.
+4. Apply numerically stable `torch.softmax` over the pair dimension.
+5. Broadcast weights across all trailing activation dimensions.
+6. Sum the two weighted activations and return both output and weights.
+
 Capacity fallback:
 
 1. Treat omitted availability as all experts available.
@@ -127,6 +203,15 @@ Capacity fallback:
 - Candidate zero always means the anchor.
 - Candidate `i + 1` always means `expert_ids[i]`.
 - Anchor-first and append-order tie-breaking are deterministic.
+- POL-002 approves a pair only when the anchor is absent from both ranked
+  positions.
+- POL-002 does not assert that a specialist pair is compatible or available.
+- COM-001 receives specialists in POL-002 ranked order and never mixes the
+  anchor.
+- COM-001 requires a finite, strictly positive `mix_temperature`.
+- COM-001 preserves the shared activation/score dtype and device.
+- COM-001 weights are non-negative, finite, and sum to one.
+- Selection and combination do not execute expert modules.
 - Scores containing NaN or infinity are rejected rather than routed.
 - Selection does not mutate the input scores.
 - Selected indices use `torch.long`; selected scores preserve score dtype and
@@ -144,17 +229,23 @@ specific Transformers model family. INF-001 integrates them with `RoutedMLP`
 only after an explicit `configure_anchored_top1()` call.
 
 `AnchoredMoEConfig` continues to reject
-`selection.policy: anchored_top1` for model-level configuration because
-registry installation does not yet materialize payloads or attach them to a
-complete model.
-Expert package manifests may declare `anchored_top1`, and standalone
-experiments or routed wrappers can use it explicitly. This avoids silently
-accepting an incomplete model configuration.
+`selection.policy: anchored_top1` and `selection.policy: anchor_veto_top2` for
+model-level configuration because runtime strategy construction is not yet
+configuration-driven. Expert package manifests may declare `anchored_top1`;
+top-2 package attachment remains unsupported. Standalone experiments can use
+both selection strategies explicitly, and INF-002 composes POL-002 with
+COM-001 in a standalone sparse dispatcher. This avoids silently accepting an
+incomplete model configuration.
 
 ## Configuration and examples
 
 ```python
-from anchored_moe import AnchoredTop1Selection, OverflowToAnchorCapacity
+from anchored_moe import (
+    AnchorVetoTop2Selection,
+    AnchoredTop1Selection,
+    OverflowToAnchorCapacity,
+    ScoreSoftmaxCombination,
+)
 
 expert_ids = router.expert_ids_for_layer(layer_index)
 expert_scores = router(features, layer_index=layer_index)
@@ -171,11 +262,22 @@ effective = OverflowToAnchorCapacity()(
     decision,
     expert_availability=availability,
 )
+
+top2 = AnchorVetoTop2Selection()(
+    expert_scores,
+    expert_ids=expert_ids,
+)
+approved_scores = top2.selected_scores[top2.expert_pair_mask]
+mixed = ScoreSoftmaxCombination(mix_temperature=1.0)(
+    pair_ordered_expert_outputs,
+    selected_scores=approved_scores,
+)
 ```
 
-The public strategy name is `anchored_top1`. See
-`examples/verify_anchored_top1.py` for deterministic integration with identity
-features and append-only affine heads.
+The public strategy names are `anchored_top1`, `anchor_veto_top2`, and
+`score_softmax`. See `examples/verify_anchored_top1.py` and
+`examples/verify_anchor_veto_top2.py` for deterministic integration with
+identity features and append-only affine heads.
 
 ## References
 
@@ -184,13 +286,17 @@ features and append-only affine heads.
   decisions.
 - [PyTorch `gather` documentation](https://docs.pytorch.org/docs/stable/generated/torch.gather.html)
   defines collection of selected scores and expert availability.
+- [PyTorch `argsort` documentation](https://docs.pytorch.org/docs/stable/generated/torch.argsort.html)
+  defines the stable descending ordering used for deterministic top-2 ties.
+- [PyTorch `softmax` documentation](https://docs.pytorch.org/docs/stable/generated/torch.nn.functional.softmax.html)
+  defines normalized exponentiation used for COM-001 mixture weights.
 - The repository
   [architecture blueprint](../../../anchored-plugin-moe-architecture.md)
-  defines fixed-zero anchor evidence, anchored hard top-1 selection, and the
-  stable reference inference policy.
+  defines fixed-zero anchor evidence, anchored hard top-1, anchor-veto top-2,
+  and score-softmax activation combination.
 
-POL-001 and BAL-001 are framework infrastructure and do not derive a training
-or optimization algorithm from a paper.
+POL-001, POL-002, COM-001, and BAL-001 are framework infrastructure and do not
+derive a training or optimization algorithm from a paper.
 
 ## Tests and known limitations
 
@@ -201,9 +307,16 @@ input immutability, malformed identifiers, shape mismatches, non-floating and
 non-finite scores, public result validation, affine-router integration,
 expert-package policy metadata, available routes, unavailable specialist
 fallback, empty registries, availability shape/dtype validation, and no-token
-dropping.
+dropping. POL-002 tests additionally cover the strict two-positive-specialist
+gate, ranked scores and indices, anchor and append-order ties, empty and
+single-expert registries, pair masks, and affine-router integration. COM-001
+tests cover exact and extreme-score weights, temperature behavior, arbitrary
+leading and trailing shapes, dtype/device preservation, gradient flow, input
+immutability, and malformed public construction.
 
-INF-001 executes effective routes and EVAL-002 records them. Capacity
-estimation, second-choice fallback, top-2 degradation, decision serialization,
-and model-level `selection.policy: anchored_top1` configuration remain future
+INF-001 executes effective top-1 routes, INF-002 executes standalone
+anchor-veto specialist pairs, and EVAL-002 records top-1 routes. Capacity
+estimation, second-choice fallback, top-2 degradation, pair compatibility,
+top-2 telemetry, decision serialization, package attachment, `RoutedMLP`
+top-2 integration, and model-level top-1/top-2 configuration remain future
 work.

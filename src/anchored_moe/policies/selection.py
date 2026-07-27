@@ -1,4 +1,4 @@
-"""Deterministic anchored hard top-1 selection."""
+"""Deterministic anchored top-1 and anchor-veto top-2 selection."""
 
 from __future__ import annotations
 
@@ -95,6 +95,92 @@ class RouteDecision:
         return self.selected_indices == candidate_index
 
 
+@dataclass(frozen=True)
+class Top2RouteDecision:
+    """Ranked candidate pair returned by anchor-veto top-2 selection.
+
+    Candidate index ``0`` represents the immutable anchor. Candidate index
+    ``i + 1`` represents ``expert_ids[i]``. The final dimension of
+    ``selected_indices`` and ``selected_scores`` has size two and stores the
+    candidates in descending score order.
+
+    An empty registry has only one distinct candidate. In that case both
+    entries are the anchor, which preserves the fixed pair-shaped contract
+    while :attr:`expert_pair_mask` remains false.
+
+    Attributes:
+        selected_indices:
+            Integer tensor with shape ``token_shape + (2,)``.
+        selected_scores:
+            Floating-point tensor with the same shape and ranked scores.
+        expert_ids:
+            Expert identifiers in the stable order used by candidate indices.
+    """
+
+    selected_indices: Tensor
+    selected_scores: Tensor
+    expert_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        """Validate pair shape, dtype, device, identifier, and index invariants."""
+
+        if not isinstance(self.selected_indices, Tensor):
+            raise TypeError("selected_indices must be a torch.Tensor.")
+        if self.selected_indices.dtype != torch.long:
+            raise TypeError("selected_indices must use torch.long.")
+        if not isinstance(self.selected_scores, Tensor):
+            raise TypeError("selected_scores must be a torch.Tensor.")
+        if not self.selected_scores.is_floating_point():
+            raise TypeError("selected_scores must use a floating-point dtype.")
+        if self.selected_indices.shape != self.selected_scores.shape:
+            raise ValueError(
+                "selected_indices and selected_scores must have the same shape."
+            )
+        if self.selected_indices.ndim < 1 or self.selected_indices.shape[-1] != 2:
+            raise ValueError(
+                "top-2 selected_indices and selected_scores must have a final "
+                "dimension of size two."
+            )
+        if self.selected_indices.device != self.selected_scores.device:
+            raise ValueError(
+                "selected_indices and selected_scores must share one device."
+            )
+
+        normalized_ids = _normalize_expert_ids(self.expert_ids)
+        object.__setattr__(self, "expert_ids", normalized_ids)
+        if self.selected_indices.numel():
+            minimum = int(self.selected_indices.min().item())
+            maximum = int(self.selected_indices.max().item())
+            if minimum < 0 or maximum > len(normalized_ids):
+                raise ValueError(
+                    "selected_indices contains a candidate outside the anchor "
+                    f"and {len(normalized_ids)} declared experts."
+                )
+        if not torch.isfinite(self.selected_scores).all().item():
+            raise ValueError("selected_scores must contain only finite values.")
+
+    @property
+    def anchor_mask(self) -> Tensor:
+        """Return tokens vetoed because the anchor appears in the ranked pair."""
+
+        return torch.any(self.selected_indices == 0, dim=-1)
+
+    @property
+    def expert_pair_mask(self) -> Tensor:
+        """Return tokens whose two ranked candidates are both specialists."""
+
+        return ~self.anchor_mask
+
+    def mask_for_expert(self, expert_id: str) -> Tensor:
+        """Return tokens whose ranked pair contains one declared expert."""
+
+        try:
+            candidate_index = self.expert_ids.index(expert_id) + 1
+        except ValueError as error:
+            raise KeyError(f"Unknown expert_id: {expert_id!r}.") from error
+        return torch.any(self.selected_indices == candidate_index, dim=-1)
+
+
 class SelectionPolicy(ABC):
     """Interface for choosing anchor or expert candidates from router scores.
 
@@ -111,7 +197,7 @@ class SelectionPolicy(ABC):
         expert_scores: Tensor,
         *,
         expert_ids: Sequence[str],
-    ) -> RouteDecision:
+    ) -> RouteDecision | Top2RouteDecision:
         """Delegate to :meth:`select` for ordinary callable use."""
 
         return self.select(expert_scores, expert_ids=expert_ids)
@@ -122,8 +208,8 @@ class SelectionPolicy(ABC):
         expert_scores: Tensor,
         *,
         expert_ids: Sequence[str],
-    ) -> RouteDecision:
-        """Choose one candidate per token from calibrated expert scores."""
+    ) -> RouteDecision | Top2RouteDecision:
+        """Choose candidate routes per token from calibrated expert scores."""
 
 
 class AnchoredTop1Selection(SelectionPolicy):
@@ -206,6 +292,112 @@ class AnchoredTop1Selection(SelectionPolicy):
             index=selected_indices.unsqueeze(-1),
         ).squeeze(-1)
         return RouteDecision(
+            selected_indices=selected_indices,
+            selected_scores=selected_scores,
+            expert_ids=normalized_ids,
+        )
+
+
+class AnchorVetoTop2Selection(SelectionPolicy):
+    """Rank two candidates and allow specialists only when anchor is absent.
+
+    Given calibrated expert scores ``G[..., K]``, the policy prepends the
+    permanent anchor score and ranks
+
+    ``[0, g_1(h), ..., g_K(h)]``.
+
+    The anchor vetoes specialist execution whenever it appears in the first
+    two positions. Consequently :attr:`Top2RouteDecision.expert_pair_mask` is
+    true exactly when at least two specialists have scores strictly greater
+    than zero. Stable sorting makes the anchor win score ties at zero and
+    makes earlier appended experts win equal specialist-score ties.
+
+    This class returns route metadata only. COM-001 computes mixture weights;
+    sparse expert execution, capacity handling, pair compatibility, and output
+    reconstruction remain separate responsibilities.
+    """
+
+    policy_name = "anchor_veto_top2"
+    anchor_score = 0.0
+
+    def select(
+        self,
+        expert_scores: Tensor,
+        *,
+        expert_ids: Sequence[str],
+    ) -> Top2RouteDecision:
+        """Return deterministic ranked pairs and anchor-veto masks.
+
+        Args:
+            expert_scores:
+                Floating-point tensor with shape ``[..., K]``. The last
+                dimension follows ``expert_ids`` order and may be empty.
+            expert_ids:
+                Unique, stable identifiers for the ``K`` expert columns.
+
+        Returns:
+            A :class:`Top2RouteDecision` with pair tensors of shape
+            ``expert_scores.shape[:-1] + (2,)``.
+
+        Raises:
+            TypeError:
+                If scores are not a floating-point tensor or identifiers are
+                not a sequence of strings.
+            ValueError:
+                If shapes, identifiers, or score values are invalid.
+        """
+
+        if not isinstance(expert_scores, Tensor):
+            raise TypeError("expert_scores must be a torch.Tensor.")
+        if not expert_scores.is_floating_point():
+            raise TypeError("expert_scores must use a floating-point dtype.")
+        if expert_scores.ndim < 1:
+            raise ValueError(
+                "expert_scores must have a final expert-candidate dimension."
+            )
+
+        normalized_ids = _normalize_expert_ids(expert_ids)
+        expert_count = expert_scores.shape[-1]
+        if expert_count != len(normalized_ids):
+            raise ValueError(
+                "expert_scores final dimension must match expert_ids: "
+                f"{expert_count} != {len(normalized_ids)}."
+            )
+        if not torch.isfinite(expert_scores).all().item():
+            raise ValueError("expert_scores must contain only finite values.")
+
+        anchor_scores = expert_scores.new_zeros(
+            expert_scores.shape[:-1] + (1,)
+        )
+        candidate_scores = torch.cat((anchor_scores, expert_scores), dim=-1)
+        if candidate_scores.shape[-1] == 1:
+            # Pair-shaped metadata makes downstream policy inspection uniform.
+            # The duplicated anchor is never interpreted as two active routes.
+            selected_indices = torch.zeros(
+                expert_scores.shape[:-1] + (2,),
+                dtype=torch.long,
+                device=expert_scores.device,
+            )
+            selected_scores = anchor_scores.expand(
+                expert_scores.shape[:-1] + (2,)
+            )
+        else:
+            # Stable descending order preserves semantic candidate order:
+            # anchor first, followed by experts in append order.
+            ranked_indices = torch.argsort(
+                candidate_scores,
+                dim=-1,
+                descending=True,
+                stable=True,
+            )
+            selected_indices = ranked_indices[..., :2]
+            selected_scores = torch.gather(
+                candidate_scores,
+                dim=-1,
+                index=selected_indices,
+            )
+
+        return Top2RouteDecision(
             selected_indices=selected_indices,
             selected_scores=selected_scores,
             expert_ids=normalized_ids,
