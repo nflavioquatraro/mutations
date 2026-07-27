@@ -14,10 +14,23 @@ from anchored_moe.evaluation import (
     fingerprint_module,
 )
 from anchored_moe.experts import Expert, ExpertSerializationError, FullMLPExpert
+from anchored_moe.policies import (
+    AnchoredTop1Selection,
+    RouteDecision,
+    SelectionPolicy,
+)
 from anchored_moe.registry import (
     ExpertPackageManifest,
     PackageValidationError,
     PackageValidationReport,
+)
+from anchored_moe.routers import (
+    AffineRouterHead,
+    AppendOnlyRouterHeads,
+    IdentityRouterFeatureExtractor,
+    RouterFeatureExtractor,
+    RouterHead,
+    RouterSerializationError,
 )
 from anchored_moe.utils import canonical_json_bytes, sha256_file, sha256_json
 
@@ -50,9 +63,18 @@ def test_current_public_symbols_have_docstrings() -> None:
         Expert,
         ExpertSerializationError,
         FullMLPExpert,
+        SelectionPolicy,
+        AnchoredTop1Selection,
+        RouteDecision,
         ExpertPackageManifest,
         PackageValidationError,
         PackageValidationReport,
+        RouterFeatureExtractor,
+        IdentityRouterFeatureExtractor,
+        RouterHead,
+        AffineRouterHead,
+        AppendOnlyRouterHeads,
+        RouterSerializationError,
         canonical_json_bytes,
         sha256_file,
         sha256_json,

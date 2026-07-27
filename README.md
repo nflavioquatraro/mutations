@@ -18,11 +18,17 @@ The current implementation covers the first dense-equivalence foundation:
   validation;
 - full copied-MLP experts with independent trainable storage and strict,
   deterministic safetensors serialization;
+- frozen identity router features over pre-MLP hidden states;
+- independent append-only affine router heads with calibrated scores and
+  strict, deterministic safetensors serialization;
+- anchored hard top-1 selection with fixed-zero anchor evidence and stable
+  anchor-first tie-breaking;
 - executable offline notebooks for base-model inspection and exact
   dense-equivalence verification.
 
-Routed expert attachment, learned routers, package installation, training, and
-full-model serialization are intentionally not implemented yet.
+Routed expert attachment and dispatch, model-integrated selection, router
+fitting and calibration, package installation, training, and full-model
+serialization are intentionally not implemented yet.
 
 ## Development setup
 
@@ -42,6 +48,8 @@ downloading model weights:
 python examples/verify_dense_equivalence.py
 python examples/inspect_expert_package.py
 python examples/verify_full_mlp_expert.py
+python examples/verify_affine_router.py
+python examples/verify_anchored_top1.py
 ```
 
 The equivalent guided workflows are available in:
