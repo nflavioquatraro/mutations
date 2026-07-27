@@ -187,10 +187,10 @@ scores = heads(features, layer_index=18)
 See `examples/verify_affine_router.py` for deterministic scoring, append
 invariance, and safe serialization without model downloads.
 
-`AnchoredMoEConfig` continues to reject non-anchor selection policies. The
-router objects are configured directly until POL-001 integrates their scores
-with model execution; this prevents a declared router from silently affecting
-the exact anchor fallback.
+`AnchoredMoEConfig` continues to reject non-anchor selection policies. INF-001
+allows router objects to be attached explicitly to one `RoutedMLP`; package
+installation and complete model composition are still required before a
+declarative model configuration can be executable.
 
 ## References
 
@@ -217,10 +217,12 @@ ordering, exact safetensors round trips, overwrite protection, malformed
 metadata and tensor rejection, finite-value checks, and expert-package
 manifest compatibility.
 
-The current router implementation has no learned projection, head removal,
-model attachment, or capacity behavior. CAL-001 provides feature caches and
+The current router implementation has no learned projection or head removal.
+CAL-001 provides feature caches and
 CAL-004 fits utility-target affine heads in the calibration subpackage.
 CAL-005 calibrates their temperatures and thresholds without mutating affine
 parameters. Standalone anchor comparison and top-1 selection are implemented
-by POL-001; model dispatch remains a follow-up. The other limitations remain
-tracked as CAL-006, PKG-002, and BAL-001.
+by POL-001; INF-001 explicitly attaches them for routed-layer dispatch and
+BAL-001 handles supplied availability masks. Package-driven attachment,
+capacity estimation, and the other limitations remain tracked as CAL-006 or
+as later runtime-composition and capacity features.

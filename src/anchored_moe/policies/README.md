@@ -3,24 +3,29 @@
 ## Scope
 
 The policies subpackage owns decisions made from already calibrated router
-scores. POL-001 implements fixed-zero anchored hard top-1 selection and returns
-structured, per-token route metadata.
+scores and capacity metadata. POL-001 implements fixed-zero anchored hard
+top-1 selection. BAL-001 rewrites unavailable selected experts to the anchor.
 
 This subpackage does not extract router features, produce or fit expert scores,
-attach experts, execute MLPs, combine outputs, enforce capacity, install
-packages, or record telemetry. Those responsibilities remain with routers,
-calibration, modeling and inference, combination, capacity, registry, and
-evaluation features.
+attach experts, execute MLPs, combine outputs, estimate serving capacity,
+install packages, or record telemetry. Those responsibilities remain with
+routers, calibration, modeling and inference, combination, later capacity,
+registry, and evaluation features.
 
 ## Implemented strategies
 
 | Feature ID | Public configuration | Module | Status |
 |---|---|---|---|
 | POL-001 | `selection.policy: anchored_top1` | `selection.py` | Validated |
+| BAL-001 | `capacity.overflow: anchor` | `capacity.py` | Validated |
 
 `SelectionPolicy` is the strategy interface. `AnchoredTop1Selection` implements
 the initial policy, and `RouteDecision` defines the stable result consumed by
-future dispatch and evaluation components.
+INF-001 dispatch and EVAL-002 evaluation components.
+
+`OverflowToAnchorCapacity` consumes a `RouteDecision` and optional per-token
+expert availability. `CapacityDecision` exposes the effective routes and the
+tokens that overflowed.
 
 ## Mathematical formulation
 
@@ -69,6 +74,22 @@ The policy deliberately defines stable ties:
 2. experts appear in router append order, so the earliest appended expert wins
    an equal positive score.
 
+For selected route \(r_t\) and availability
+\(C_{t,k}\in\{\mathrm{false},\mathrm{true}\}\), BAL-001 computes
+
+\[
+r'_t =
+\begin{cases}
+r_t, & r_t=0,\\
+r_t, & C_{t,r_t-1}=\mathrm{true},\\
+0, & C_{t,r_t-1}=\mathrm{false}.
+\end{cases}
+\]
+
+Availability has shape \(D_1\times\cdots\times D_n\times K\), while the
+effective route and overflow mask have token shape
+\(D_1\times\cdots\times D_n\).
+
 ## Algorithms
 
 For one tensor of calibrated expert scores:
@@ -87,6 +108,15 @@ An empty registry has score shape `[..., 0]`. Prepending the anchor still
 produces one valid candidate, so every token deterministically selects index
 zero.
 
+Capacity fallback:
+
+1. Treat omitted availability as all experts available.
+2. Gather availability for each selected expert in stable expert order.
+3. Leave existing anchor routes unchanged.
+4. Mark unavailable specialist selections in the overflow mask.
+5. Replace their candidate index and selected score with anchor values of zero.
+6. Return every token in a `CapacityDecision`; none are dropped.
+
 ## Assumptions and invariants
 
 - Expert scores are already calibrated against the anchor's fixed-zero
@@ -103,27 +133,28 @@ zero.
   device.
 - Route decisions expose masks but contain no prompts, tokens, hidden states,
   or other sensitive content.
-- The policy does not claim that the selected expert has capacity. BAL-001
-  will define overflow-to-anchor behavior.
+- Selection does not claim that the selected expert has capacity.
+- BAL-001 consumes explicit availability but does not estimate capacity.
+- Overflow never selects another expert and never drops a token.
 
 ## Hugging Face integration
 
-The policy operates on ordinary PyTorch tensors produced by router modules and
-does not depend on a specific Transformers model family. It is intentionally
-separate from `RoutedMLP`: selecting a candidate does not alter the exact
-forced-anchor execution path until an explicit dispatch integration is added.
+The policies operate on ordinary PyTorch tensors and do not depend on a
+specific Transformers model family. INF-001 integrates them with `RoutedMLP`
+only after an explicit `configure_anchored_top1()` call.
 
 `AnchoredMoEConfig` continues to reject
-`selection.policy: anchored_top1` for model execution because routed expert
-dispatch is not implemented yet. Expert package manifests may declare
-`anchored_top1` under `routing_policies_supported`, and standalone experiments
-can construct the policy directly. This avoids silently accepting a model
-configuration that would still execute only the anchor.
+`selection.policy: anchored_top1` for model-level configuration because
+registry installation does not yet materialize payloads or attach them to a
+complete model.
+Expert package manifests may declare `anchored_top1`, and standalone
+experiments or routed wrappers can use it explicitly. This avoids silently
+accepting an incomplete model configuration.
 
 ## Configuration and examples
 
 ```python
-from anchored_moe import AnchoredTop1Selection
+from anchored_moe import AnchoredTop1Selection, OverflowToAnchorCapacity
 
 expert_ids = router.expert_ids_for_layer(layer_index)
 expert_scores = router(features, layer_index=layer_index)
@@ -135,6 +166,11 @@ decision = AnchoredTop1Selection()(
 
 anchor_tokens = decision.anchor_mask
 code_tokens = decision.mask_for_expert("code:0")
+
+effective = OverflowToAnchorCapacity()(
+    decision,
+    expert_availability=availability,
+)
 ```
 
 The public strategy name is `anchored_top1`. See
@@ -147,14 +183,14 @@ features and append-only affine heads.
   defines first-maximum tie behavior used for anchor-first and append-order
   decisions.
 - [PyTorch `gather` documentation](https://docs.pytorch.org/docs/stable/generated/torch.gather.html)
-  defines collection of the selected per-token scores.
+  defines collection of selected scores and expert availability.
 - The repository
   [architecture blueprint](../../../anchored-plugin-moe-architecture.md)
   defines fixed-zero anchor evidence, anchored hard top-1 selection, and the
   stable reference inference policy.
 
-POL-001 is framework infrastructure and does not derive a training or
-optimization algorithm from a paper.
+POL-001 and BAL-001 are framework infrastructure and do not derive a training
+or optimization algorithm from a paper.
 
 ## Tests and known limitations
 
@@ -162,10 +198,12 @@ Acceptance tests cover mixed anchor/expert decisions, exact selected scores,
 anchor masks, per-expert masks, anchor ties, expert ties, empty registries,
 arbitrary leading dimensions, dtype and device preservation, repeatability,
 input immutability, malformed identifiers, shape mismatches, non-floating and
-non-finite scores, public result validation, affine-router integration, and
-expert-package policy metadata.
+non-finite scores, public result validation, affine-router integration,
+expert-package policy metadata, available routes, unavailable specialist
+fallback, empty registries, availability shape/dtype validation, and no-token
+dropping.
 
-The current implementation does not execute selected experts, check capacity,
-log routes, serialize decisions, or expose model-integrated
-`selection.policy: anchored_top1`. Those behaviors remain part of the routed
-dispatch follow-up, BAL-001, EVAL-002, and later configuration integration.
+INF-001 executes effective routes and EVAL-002 records them. Capacity
+estimation, second-choice fallback, top-2 degradation, decision serialization,
+and model-level `selection.policy: anchored_top1` configuration remain future
+work.

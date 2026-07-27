@@ -31,12 +31,18 @@ The current implementation covers the first dense-equivalence foundation:
   affine router heads;
 - immutable per-head temperature scaling and held-out threshold selection
   under an explicit false-activation budget;
+- opt-in sparse anchored top-1 execution for configured routed MLPs;
+- deterministic overflow-to-anchor fallback with no token dropping;
+- bounded privacy-safe route telemetry and exact route-agreement metrics;
+- strictly validated local expert-package descriptors with atomic in-memory
+  install, unload, stable ordering, compatibility binding, and registry hashes;
 - executable offline notebooks for base-model inspection and exact
   dense-equivalence verification.
 
-Routed expert attachment and dispatch, model-integrated selection, router
-stability refinement, package installation, training, and full-model
-serialization are intentionally not implemented yet.
+Package payload materialization, package-driven routed attachment, model-level
+composition, router stability refinement, training, top-2 execution, persistent
+registry storage, and full-model serialization are intentionally not
+implemented yet.
 
 ## Development setup
 
@@ -62,6 +68,8 @@ python examples/verify_router_feature_bank.py
 python examples/verify_router_label_banks.py
 python examples/verify_independent_ridge.py
 python examples/verify_temperature_thresholds.py
+python examples/verify_routed_top1.py
+python examples/verify_registry_lifecycle.py
 ```
 
 The equivalent guided workflows are available in:

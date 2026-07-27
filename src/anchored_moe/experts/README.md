@@ -159,6 +159,7 @@ storage, anchor freezing, expert-only gradients, inference-only loading,
 deterministic safetensors output, round trips, overwrite protection, metadata
 validation, and state-schema rejection.
 
-The expert is not yet attached to `RoutedMLP`, selected by a router, trained by
-a framework trainer, or composed across layers. Those behaviors belong to
-TRN-001, RTR-001/RTR-002, POL-001, and PKG-002.
+INF-001 can explicitly attach an expert object to one `RoutedMLP`, and PKG-002
+can activate its validated package descriptor in a registry. Payload
+materialization, package-driven model attachment, framework training, and
+multi-layer composition remain future work.
