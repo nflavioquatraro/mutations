@@ -258,6 +258,13 @@ class ExpertPackageManifest:
         object.__setattr__(self, "calibration_metrics", calibration_metrics)
         object.__setattr__(self, "activation_thresholds", activation_thresholds)
 
+        # Import locally to avoid a module cycle: bindings depend on the
+        # completed immutable manifest type. Legacy v1 manifests may omit the
+        # block, but any declared binding metadata is validated immediately.
+        from anchored_moe.registry.bindings import parse_expert_payload_bindings
+
+        parse_expert_payload_bindings(self)
+
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> ExpertPackageManifest:
         """Construct a manifest while rejecting missing and unknown fields."""

@@ -36,13 +36,20 @@ The current implementation covers the first dense-equivalence foundation:
 - bounded privacy-safe route telemetry and exact route-agreement metrics;
 - strictly validated local expert-package descriptors with atomic in-memory
   install, unload, stable ordering, compatibility binding, and registry hashes;
+- explicit versioned `(layer, expert_id)` payload bindings and safe local
+  package materialization into converted anchored top-1 layers;
+- explicit registry-to-model synchronization with exact anchor restoration on
+  unload and deterministic routed behavior after reinsertion;
+- forced-path single-expert training with complete converted-layer coverage,
+  mechanical backbone freezing, exact trainable-parameter assertions, and a
+  constrained Hugging Face Trainer/Accelerate integration;
 - executable offline notebooks for base-model inspection and exact
   dense-equivalence verification.
 
-Package payload materialization, package-driven routed attachment, model-level
-composition, router stability refinement, training, top-2 execution, persistent
-registry storage, and full-model serialization are intentionally not
-implemented yet.
+Automatic model mutation during installation, complete
+`AnchoredMoEForCausalLM` composition, replay-preservation training objectives,
+multi-expert training, top-2 execution, persistent registry storage, Hub
+transfer, and full-model serialization are intentionally not implemented yet.
 
 ## Development setup
 
@@ -70,6 +77,8 @@ python examples/verify_independent_ridge.py
 python examples/verify_temperature_thresholds.py
 python examples/verify_routed_top1.py
 python examples/verify_registry_lifecycle.py
+python examples/verify_package_runtime.py
+python examples/verify_forced_path_training.py
 ```
 
 The equivalent guided workflows are available in:

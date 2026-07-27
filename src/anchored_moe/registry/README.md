@@ -8,9 +8,10 @@ binding, and deterministic registry identity.
 
 PKG-001 defines the versioned manifest and safe payload contract. PKG-002 adds
 strict local `ExpertPackage` descriptors and an atomic in-memory
-`ExpertRegistry`. It does not materialize payload tensors, infer layer/expert
-ownership from filenames, attach modules to a model, recalibrate routers,
-perform upgrades or rollback, persist registry state, or transfer Hub content.
+`ExpertRegistry`. PKG-007 defines explicit full-MLP payload ownership metadata
+used by the inference composition boundary. The registry never infers
+layer/expert ownership from filenames and installation never attaches modules
+or recalibrates routing.
 
 ## Implemented strategies
 
@@ -18,6 +19,7 @@ perform upgrades or rollback, persist registry state, or transfer Hub content.
 |---|---|---|---|
 | PKG-001 | `package_format_version: 1` | `manifest.py` | Validated |
 | PKG-002 | `ExpertPackage.from_directory`, `ExpertRegistry` | `package.py`, `registry.py` | Validated |
+| PKG-007 | `payload_binding_format_version: 1`, `ExpertPayloadBinding` | `bindings.py` | Validated |
 
 `PackageIdentity` is the portable specialization/version/content identity.
 `RegistrySnapshot` and `RegistryChange` provide immutable audit records for
@@ -71,6 +73,18 @@ compatibility digest over:
 This compatibility identity remains bound when the active registry becomes
 empty.
 
+For converted layers \(L\), stable package expert identifiers \(K\), and
+expert tensor payloads \(F\), PKG-007 records the explicit relation
+
+\[
+B=\{(\ell,k,f):\ell\in L,\;k\in K,\;f\in F\}.
+\]
+
+For the current full-MLP format, \(B\) must be a bijection between runtime
+slots \(L\times K\) and `expert_weight_files`. Every converted layer has the
+same \(K\), and \(|K|=\text{expert_count}\). File paths contribute no implied
+ownership.
+
 ## Algorithms
 
 Package descriptor construction:
@@ -105,6 +119,20 @@ Unload and reinsertion:
 
 Every failure condition is checked before active state changes.
 
+Payload-binding validation:
+
+1. Legacy package-format-v1 manifests may omit bindings and remain usable for
+   registry lifecycle operations.
+2. If either binding key is declared, require both
+   `payload_binding_format_version` and `payload_bindings`.
+3. Parse only the exact fields `layer_index`, `expert_id`, and `weight_file`.
+4. Reject duplicate slots, duplicate files, unconverted layers, and unsafe or
+   undeclared paths.
+5. Require exact file coverage, `expert_count` experts per layer, and the same
+   expert-ID set at every converted layer.
+6. Runtime materialization requires the block and fails explicitly when a
+   legacy package does not provide it.
+
 ## Assumptions and invariants
 
 - Package format version 1 and registry format version 1 are the only accepted
@@ -124,6 +152,12 @@ Every failure condition is checked before active state changes.
 - Registry transitions are in-memory, lock-protected, and atomic with respect
   to registry readers.
 - Installation never triggers router fitting, recalibration, or model mutation.
+- Package format v1 remains backward compatible: binding-free manifests keep
+  their existing serialization and identity behavior.
+- Declared bindings are validated during manifest construction and again
+  before runtime materialization.
+- Full-MLP payloads own exactly one `(layer_index, expert_id)` slot.
+- Expert IDs, not filenames, are matched against serialized router-head keys.
 
 The registry validates compatibility between packages. Validation against a
 concrete live model and exact runtime environment remains part of future model
@@ -136,9 +170,10 @@ Packages are independently uploadable because manifests contain package-local
 paths and never duplicate an anchor implicitly.
 
 `ExpertPackage.from_directory()` currently supports local directories only.
-`from_pretrained()` and Hub download behavior are deferred to PKG-006. A future
-runtime package format must explicitly map payloads to `(layer, expert_id)`
-slots before package-driven `RoutedMLP` attachment can be implemented safely.
+`from_pretrained()` and Hub download behavior are deferred to PKG-006.
+`ExpertPackage.payload_bindings` exposes the validated materialization
+contract. The inference subpackage consumes it only during an explicit
+registry-to-model synchronization operation.
 
 ## Configuration and examples
 
@@ -154,6 +189,24 @@ print(installed.after.registry_sha256)
 registry.unload(package.identity)
 registry.install(ExpertPackage.from_directory("./code-experts"))
 assert registry.active_registry_sha256 == installed.after.registry_sha256
+```
+
+An attachable full-MLP manifest includes:
+
+```json
+{
+  "expert_parameterization_config": {
+    "initialization": "anchor_copy",
+    "payload_binding_format_version": 1,
+    "payload_bindings": [
+      {
+        "layer_index": 18,
+        "expert_id": "code:0",
+        "weight_file": "experts/layer-18-code-0.safetensors"
+      }
+    ]
+  }
+}
 ```
 
 See `examples/verify_registry_lifecycle.py` for an executable local lifecycle
@@ -187,9 +240,11 @@ strict directory closure, malformed formats, portable identities, deterministic
 empty and active registry hashes, stable installation order, live-file
 revalidation, duplicate activation, exact unloading, reinsertion restoration,
 compatibility rejection, immutable-version conflicts, non-strict descriptor
-rejection, atomic failure behavior, documentation, examples, and wheel content.
+rejection, atomic failure behavior, legacy binding-free manifests, explicit
+binding coverage and uniqueness, documentation, examples, and wheel content.
 
-Payload materialization, model attachment, persistent registry files,
-cross-process locking, runtime-version enforcement, atomic upgrades, rollback,
+PKG-007 materializes the supported binding contract in the inference
+subpackage. Persistent registry files, cross-process locking, exact live-model
+checkpoint hashing, runtime-version enforcement, atomic upgrades, rollback,
 registry-specific routers, Hub transfer, and distributed lifecycle operations
 remain unsupported.

@@ -12,6 +12,10 @@ from anchored_moe.registry.manifest import (
     PackageValidationError,
     PackageValidationReport,
 )
+from anchored_moe.registry.bindings import (
+    ExpertPayloadBinding,
+    parse_expert_payload_bindings,
+)
 
 
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -190,6 +194,12 @@ class ExpertPackage:
             specialization_version=self.manifest.specialization_version,
             manifest_sha256=self.manifest.manifest_sha256,
         )
+
+    @property
+    def payload_bindings(self) -> tuple[ExpertPayloadBinding, ...]:
+        """Return validated runtime bindings, requiring an attachable package."""
+
+        return parse_expert_payload_bindings(self.manifest, require=True)
 
     def validate_live_files(self) -> PackageValidationReport:
         """Revalidate on-disk manifest identity and every tracked payload.

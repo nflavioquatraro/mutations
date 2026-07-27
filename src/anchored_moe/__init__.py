@@ -19,10 +19,13 @@ from anchored_moe.configuration import AnchoredMoEConfig, ResolvedStrategyConfig
 from anchored_moe.experts import Expert, ExpertSerializationError, FullMLPExpert
 from anchored_moe.inference import (
     AnchoredTop1Dispatcher,
+    PackageMaterializationError,
+    RegistryCompositionReport,
     RouteRecord,
     RouteSummary,
     RouteTelemetry,
     Top1DispatchResult,
+    synchronize_anchored_top1_registry,
 )
 from anchored_moe.modeling import RoutedMLP
 from anchored_moe.policies import (
@@ -33,8 +36,10 @@ from anchored_moe.policies import (
     SelectionPolicy,
 )
 from anchored_moe.registry import (
+    EXPERT_PAYLOAD_BINDING_FORMAT_VERSION,
     ExpertPackage,
     ExpertPackageManifest,
+    ExpertPayloadBinding,
     ExpertRegistry,
     PackageIdentity,
     PackageValidationError,
@@ -42,6 +47,7 @@ from anchored_moe.registry import (
     RegistryChange,
     RegistryLifecycleError,
     RegistrySnapshot,
+    parse_expert_payload_bindings,
 )
 from anchored_moe.routers import (
     AffineRouterHead,
@@ -50,6 +56,13 @@ from anchored_moe.routers import (
     RouterFeatureExtractor,
     RouterHead,
     RouterSerializationError,
+)
+from anchored_moe.training import (
+    ForcedExpertBinding,
+    ForcedPathExpertTrainer,
+    ForcedPathTrainingError,
+    ForcedPathTrainingReport,
+    prepare_forced_path_training,
 )
 
 __all__ = [
@@ -60,12 +73,18 @@ __all__ = [
     "AppendOnlyRouterHeads",
     "CapacityDecision",
     "DomainLabelBank",
+    "EXPERT_PAYLOAD_BINDING_FORMAT_VERSION",
     "Expert",
     "ExpertPackage",
     "ExpertPackageManifest",
+    "ExpertPayloadBinding",
     "ExpertRegistry",
     "ExpertSerializationError",
     "FeatureBankSerializationError",
+    "ForcedExpertBinding",
+    "ForcedPathExpertTrainer",
+    "ForcedPathTrainingError",
+    "ForcedPathTrainingReport",
     "FullMLPExpert",
     "HeadCalibrationReport",
     "IdentityRouterFeatureExtractor",
@@ -73,6 +92,7 @@ __all__ = [
     "PackageValidationReport",
     "LabelBankSerializationError",
     "OverflowToAnchorCapacity",
+    "PackageMaterializationError",
     "PackageIdentity",
     "ResolvedStrategyConfig",
     "ROUTER_FEATURE_BANK_FORMAT_VERSION",
@@ -80,6 +100,7 @@ __all__ = [
     "RidgeFittingError",
     "RegistryChange",
     "RegistryLifecycleError",
+    "RegistryCompositionReport",
     "RegistrySnapshot",
     "RouteRecord",
     "RouteDecision",
@@ -97,6 +118,9 @@ __all__ = [
     "UtilityLabelBank",
     "calibrate_temperature_and_thresholds",
     "fit_independent_ridge",
+    "parse_expert_payload_bindings",
+    "prepare_forced_path_training",
+    "synchronize_anchored_top1_registry",
 ]
 
 __version__ = "0.1.0.dev0"

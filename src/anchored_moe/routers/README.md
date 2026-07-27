@@ -222,7 +222,8 @@ CAL-001 provides feature caches and
 CAL-004 fits utility-target affine heads in the calibration subpackage.
 CAL-005 calibrates their temperatures and thresholds without mutating affine
 parameters. Standalone anchor comparison and top-1 selection are implemented
-by POL-001; INF-001 explicitly attaches them for routed-layer dispatch and
-BAL-001 handles supplied availability masks. Package-driven attachment,
-capacity estimation, and the other limitations remain tracked as CAL-006 or
-as later runtime-composition and capacity features.
+by POL-001; INF-001 explicitly attaches them for routed-layer dispatch,
+PKG-007 validates serialized router ownership against expert payload bindings,
+and BAL-001 handles supplied availability masks. Learned projections, capacity
+estimation, top-2 routing, and the other limitations remain tracked as later
+calibration, runtime-composition, and capacity features.

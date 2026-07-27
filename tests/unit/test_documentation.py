@@ -34,10 +34,13 @@ from anchored_moe.evaluation import (
 from anchored_moe.experts import Expert, ExpertSerializationError, FullMLPExpert
 from anchored_moe.inference import (
     AnchoredTop1Dispatcher,
+    PackageMaterializationError,
+    RegistryCompositionReport,
     RouteRecord,
     RouteSummary,
     RouteTelemetry,
     Top1DispatchResult,
+    synchronize_anchored_top1_registry,
 )
 from anchored_moe.policies import (
     AnchoredTop1Selection,
@@ -47,8 +50,10 @@ from anchored_moe.policies import (
     SelectionPolicy,
 )
 from anchored_moe.registry import (
+    EXPERT_PAYLOAD_BINDING_FORMAT_VERSION,
     ExpertPackage,
     ExpertPackageManifest,
+    ExpertPayloadBinding,
     ExpertRegistry,
     PackageIdentity,
     PackageValidationError,
@@ -56,6 +61,7 @@ from anchored_moe.registry import (
     RegistryChange,
     RegistryLifecycleError,
     RegistrySnapshot,
+    parse_expert_payload_bindings,
 )
 from anchored_moe.routers import (
     AffineRouterHead,
@@ -64,6 +70,13 @@ from anchored_moe.routers import (
     RouterFeatureExtractor,
     RouterHead,
     RouterSerializationError,
+)
+from anchored_moe.training import (
+    ForcedExpertBinding,
+    ForcedPathExpertTrainer,
+    ForcedPathTrainingError,
+    ForcedPathTrainingReport,
+    prepare_forced_path_training,
 )
 from anchored_moe.utils import canonical_json_bytes, sha256_file, sha256_json
 
@@ -122,8 +135,12 @@ def test_current_public_symbols_have_docstrings() -> None:
         RouteRecord,
         RouteSummary,
         RouteTelemetry,
+        PackageMaterializationError,
+        RegistryCompositionReport,
+        synchronize_anchored_top1_registry,
         ExpertPackage,
         ExpertPackageManifest,
+        ExpertPayloadBinding,
         ExpertRegistry,
         PackageIdentity,
         PackageValidationError,
@@ -131,15 +148,22 @@ def test_current_public_symbols_have_docstrings() -> None:
         RegistryChange,
         RegistryLifecycleError,
         RegistrySnapshot,
+        parse_expert_payload_bindings,
         RouterFeatureExtractor,
         IdentityRouterFeatureExtractor,
         RouterHead,
         AffineRouterHead,
         AppendOnlyRouterHeads,
         RouterSerializationError,
+        ForcedExpertBinding,
+        ForcedPathExpertTrainer,
+        ForcedPathTrainingError,
+        ForcedPathTrainingReport,
+        prepare_forced_path_training,
         canonical_json_bytes,
         sha256_file,
         sha256_json,
     ]
 
+    assert EXPERT_PAYLOAD_BINDING_FORMAT_VERSION == 1
     assert all(inspect.getdoc(symbol) for symbol in public_symbols)

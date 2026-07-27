@@ -1,5 +1,10 @@
 """Versioned package manifests and registry lifecycle primitives."""
 
+from anchored_moe.registry.bindings import (
+    EXPERT_PAYLOAD_BINDING_FORMAT_VERSION,
+    ExpertPayloadBinding,
+    parse_expert_payload_bindings,
+)
 from anchored_moe.registry.manifest import (
     PACKAGE_FORMAT_VERSION,
     ExpertPackageManifest,
@@ -16,10 +21,12 @@ from anchored_moe.registry.registry import (
 )
 
 __all__ = [
+    "EXPERT_PAYLOAD_BINDING_FORMAT_VERSION",
     "PACKAGE_FORMAT_VERSION",
     "REGISTRY_FORMAT_VERSION",
     "ExpertPackage",
     "ExpertPackageManifest",
+    "ExpertPayloadBinding",
     "ExpertRegistry",
     "PackageIdentity",
     "PackageValidationError",
@@ -27,4 +34,5 @@ __all__ = [
     "RegistryChange",
     "RegistryLifecycleError",
     "RegistrySnapshot",
+    "parse_expert_payload_bindings",
 ]

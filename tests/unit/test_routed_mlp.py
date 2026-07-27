@@ -83,3 +83,93 @@ def test_routed_mlp_rejects_expert_and_router_ownership_mismatch() -> None:
 
     assert wrapper.routing_mode == "forced_anchor"
     assert wrapper.expert_ids == ()
+
+
+def test_routed_mlp_explicit_replacement_and_reset_preserve_anchor() -> None:
+    wrapper, features, heads, expert = _top1_components()
+    anchor = wrapper.anchor_mlp
+    wrapper.configure_anchored_top1(
+        layer_index=4,
+        router_feature_extractor=features,
+        router_heads=heads,
+        experts={"code": expert},
+    )
+
+    replacement = FullMLPExpert.from_anchor(anchor)
+    with torch.no_grad():
+        replacement.expert_mlp.weight.copy_(torch.eye(2) * 3.0)
+    replacement_heads = AppendOnlyRouterHeads(2)
+    replacement_head = AffineRouterHead(
+        2,
+        layer_index=4,
+        expert_id="math",
+    )
+    with torch.no_grad():
+        replacement_head.linear.bias.fill_(1.0)
+    replacement_heads.append(replacement_head)
+    wrapper.replace_anchored_top1(
+        layer_index=4,
+        router_feature_extractor=IdentityRouterFeatureExtractor(2),
+        router_heads=replacement_heads,
+        experts={"math": replacement},
+    )
+
+    assert wrapper.anchor_mlp is anchor
+    assert wrapper.expert_ids == ("math",)
+    assert torch.equal(
+        wrapper(torch.tensor([[1.0, 2.0]])),
+        torch.tensor([[3.0, 6.0]]),
+    )
+
+    wrapper.reset_to_forced_anchor()
+
+    assert wrapper.anchor_mlp is anchor
+    assert wrapper.routing_mode == "forced_anchor"
+    assert wrapper.expert_ids == ()
+    assert torch.equal(
+        wrapper(torch.tensor([[1.0, 2.0]])),
+        torch.tensor([[1.0, 2.0]]),
+    )
+
+
+def test_invalid_replacement_preserves_existing_routed_runtime() -> None:
+    wrapper, features, heads, expert = _top1_components()
+    wrapper.configure_anchored_top1(
+        layer_index=4,
+        router_feature_extractor=features,
+        router_heads=heads,
+        experts={"code": expert},
+    )
+    expected = wrapper(torch.tensor([[1.0, 2.0]]))
+
+    mismatched_heads = AppendOnlyRouterHeads(2)
+    mismatched_heads.append(
+        AffineRouterHead(2, layer_index=4, expert_id="math")
+    )
+    with pytest.raises(ValueError, match="exactly match"):
+        wrapper.replace_anchored_top1(
+            layer_index=4,
+            router_feature_extractor=IdentityRouterFeatureExtractor(2),
+            router_heads=mismatched_heads,
+            experts={"code": expert},
+        )
+
+    assert wrapper.routing_mode == "anchored_top1"
+    assert wrapper.expert_ids == ("code",)
+    assert torch.equal(wrapper(torch.tensor([[1.0, 2.0]])), expected)
+
+
+def test_forced_expert_mode_executes_every_token_without_router() -> None:
+    wrapper, _, _, expert = _top1_components()
+
+    wrapper.configure_forced_expert(
+        layer_index=4,
+        expert_id="code",
+        expert=expert,
+    )
+    output = wrapper(torch.tensor([[1.0, 2.0], [3.0, 4.0]]))
+
+    assert wrapper.routing_mode == "forced_expert"
+    assert wrapper.router_heads is None
+    assert wrapper.expert_ids == ("code",)
+    assert torch.equal(output, torch.tensor([[2.0, 4.0], [6.0, 8.0]]))

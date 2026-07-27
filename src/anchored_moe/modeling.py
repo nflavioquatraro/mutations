@@ -102,6 +102,130 @@ class RoutedMLP(nn.Module):
 
         if self.routing_mode != "forced_anchor":
             raise RuntimeError("RoutedMLP routing is already configured.")
+        self._replace_anchored_top1(
+            layer_index=layer_index,
+            router_feature_extractor=router_feature_extractor,
+            router_heads=router_heads,
+            experts=experts,
+            capacity_policy=capacity_policy,
+            route_telemetry=route_telemetry,
+        )
+
+    def configure_forced_expert(
+        self,
+        *,
+        layer_index: int,
+        expert_id: str,
+        expert: Expert,
+    ) -> None:
+        """Attach one expert as the unconditional training path.
+
+        Forced-path mode implements TRN-001: every token at this converted
+        layer executes the supplied expert and no router or selection policy is
+        evaluated. The method is one-shot from exact ``forced_anchor`` mode so
+        training setup cannot silently replace an inference registry.
+
+        Args:
+            layer_index: Zero-based decoder layer represented by this wrapper.
+            expert_id: Stable package expert identifier shared across layers.
+            expert: Independently owned trainable expert transformation.
+
+        Raises:
+            RuntimeError: If the wrapper is not in ``forced_anchor`` mode.
+            TypeError: If ``expert`` does not implement :class:`Expert`.
+            ValueError: If layer or expert ownership metadata is invalid.
+        """
+
+        if self.routing_mode != "forced_anchor":
+            raise RuntimeError(
+                "Forced-expert training requires forced_anchor mode."
+            )
+        if (
+            isinstance(layer_index, bool)
+            or not isinstance(layer_index, int)
+            or layer_index < 0
+        ):
+            raise ValueError("layer_index must be a non-negative integer.")
+        if (
+            not isinstance(expert_id, str)
+            or not expert_id
+            or expert_id != expert_id.strip()
+        ):
+            raise ValueError(
+                "expert_id must be a non-empty string without surrounding "
+                "whitespace."
+            )
+        if not isinstance(expert, Expert):
+            raise TypeError("expert must implement the Expert interface.")
+
+        self.layer_index = layer_index
+        self.expert_ids = (expert_id,)
+        self.router_feature_extractor = None
+        self.router_heads = None
+        self.experts = nn.ModuleList([expert])
+        self._dispatcher = None
+        self._route_telemetry = None
+        self.routing_mode = "forced_expert"
+
+    def replace_anchored_top1(
+        self,
+        *,
+        layer_index: int,
+        router_feature_extractor: RouterFeatureExtractor,
+        router_heads: AppendOnlyRouterHeads,
+        experts: Mapping[str, Expert],
+        capacity_policy: OverflowToAnchorCapacity | None = None,
+        route_telemetry: RouteTelemetry | None = None,
+    ) -> None:
+        """Atomically replace this layer's explicit top-1 runtime.
+
+        This method supports explicit registry synchronization after package
+        installation, unloading, or reinsertion. All candidate components are
+        validated and ordered before any existing runtime reference changes.
+        The anchor module and its parameter values are never replaced.
+
+        Args:
+            layer_index: Zero-based decoder layer represented by this wrapper.
+            router_feature_extractor: Frozen pre-MLP feature transformation.
+            router_heads: Complete affine-head bank for the new active registry.
+            experts: Complete expert mapping for the new active registry.
+            capacity_policy: Optional overflow-to-anchor capacity policy.
+            route_telemetry: Optional recorder owned by this layer.
+        """
+
+        self._replace_anchored_top1(
+            layer_index=layer_index,
+            router_feature_extractor=router_feature_extractor,
+            router_heads=router_heads,
+            experts=experts,
+            capacity_policy=capacity_policy,
+            route_telemetry=route_telemetry,
+        )
+
+    def reset_to_forced_anchor(self) -> None:
+        """Remove the routed runtime and restore the exact anchor-only path."""
+
+        self.layer_index = None
+        self.expert_ids = ()
+        self.router_feature_extractor = None
+        self.router_heads = None
+        self.experts = nn.ModuleList()
+        self._dispatcher = None
+        self._route_telemetry = None
+        self.routing_mode = "forced_anchor"
+
+    def _replace_anchored_top1(
+        self,
+        *,
+        layer_index: int,
+        router_feature_extractor: RouterFeatureExtractor,
+        router_heads: AppendOnlyRouterHeads,
+        experts: Mapping[str, Expert],
+        capacity_policy: OverflowToAnchorCapacity | None,
+        route_telemetry: RouteTelemetry | None,
+    ) -> None:
+        """Validate a complete candidate runtime before swapping references."""
+
         if (
             isinstance(layer_index, bool)
             or not isinstance(layer_index, int)
@@ -168,6 +292,10 @@ class RoutedMLP(nn.Module):
 
         if self.routing_mode == "forced_anchor":
             return self.anchor_mlp(hidden_states, *args, **kwargs)
+        if self.routing_mode == "forced_expert":
+            if len(self.experts) != 1:
+                raise RuntimeError("RoutedMLP forced-expert runtime is incomplete.")
+            return self.experts[0](hidden_states, *args, **kwargs)
 
         if (
             self.layer_index is None

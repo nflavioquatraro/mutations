@@ -7,8 +7,9 @@ replace an anchor MLP when a future routing policy selects them. EXP-001
 implements a complete copied MLP for one converted layer.
 
 This subpackage does not decide routes, attach experts to `RoutedMLP`, install
-packages, manage capacity, or provide training loops. Those responsibilities
-remain with the modeling, routing, registry, capacity, and training features.
+packages, manage capacity, or provide training loops. TRN-001 consumes the
+public `Expert` interface from the separate training subpackage so expert
+parameterization remains independently configurable.
 
 ## Implemented strategies
 
@@ -159,7 +160,9 @@ storage, anchor freezing, expert-only gradients, inference-only loading,
 deterministic safetensors output, round trips, overwrite protection, metadata
 validation, and state-schema rejection.
 
-INF-001 can explicitly attach an expert object to one `RoutedMLP`, and PKG-002
-can activate its validated package descriptor in a registry. Payload
-materialization, package-driven model attachment, framework training, and
-multi-layer composition remain future work.
+INF-001 can explicitly attach an expert object to one `RoutedMLP`, TRN-001 can
+force one trainable expert at every converted layer, PKG-002 can
+activate its validated package descriptor in a registry, and PKG-007 can
+materialize explicitly bound full-MLP payloads across converted layers.
+Replay-preserving objectives, alternative expert parameterizations, and
+distributed materialization remain future work.
