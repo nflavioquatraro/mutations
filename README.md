@@ -45,11 +45,16 @@ The current implementation covers the first dense-equivalence foundation:
   constrained Hugging Face Trainer/Accelerate integration;
 - optional token-masked replay KL against precomputed immutable-anchor logits
   and normalized expert-initialization weight-drift regularization;
+- staged expert-only package export with deterministic payload bindings,
+  derived metadata, strict reload, and failure cleanup;
+- immutable calibrated-router package derivation with disjoint data
+  provenance, exact expert-byte preservation, and strict runtime attachment;
 - a Hugging Face `AnchoredMoEForCausalLM` facade with base-checkpoint loading,
   exact native forward and generation delegation, backend-driven conversion,
   and an explicit install/synchronize/unload lifecycle;
-- executable offline notebooks for base-model inspection and exact
-  dense-equivalence verification and custom package composition.
+- executable offline notebooks for base-model inspection, exact
+  dense-equivalence verification, forced-path expert training/export, and
+  custom package composition.
 
 Automatic model mutation during installation, online replay-teacher execution,
 multi-expert training, top-2 execution, persistent registry storage, Hub
@@ -83,6 +88,8 @@ python examples/verify_routed_top1.py
 python examples/verify_registry_lifecycle.py
 python examples/verify_package_runtime.py
 python examples/verify_forced_path_training.py
+python examples/train_expert_package.py
+python examples/fit_router.py
 ```
 
 The equivalent guided workflows are available in:
@@ -90,7 +97,13 @@ The equivalent guided workflows are available in:
 - [`notebooks/00_inspect_base_model.ipynb`](./notebooks/00_inspect_base_model.ipynb)
   for a resolved configuration, model inspection, and reproducibility hashes;
 - [`notebooks/01_convert_dense_model.ipynb`](./notebooks/01_convert_dense_model.ipynb)
-  for conversion, freezing assertions, and exact hidden-state and logit checks.
+  for conversion, freezing assertions, and exact hidden-state and logit checks;
+- [`notebooks/02_train_expert_package.ipynb`](./notebooks/02_train_expert_package.ipynb)
+  for forced-path training, immutable-anchor checks, and safe expert-only
+  package export;
+- [`notebooks/03_fit_and_calibrate_router.ipynb`](./notebooks/03_fit_and_calibrate_router.ipynb)
+  for deterministic ridge fitting, held-out temperature/threshold calibration,
+  immutable router-package derivation, and runtime materialization;
 - [`notebooks/04_compose_custom_model.ipynb`](./notebooks/04_compose_custom_model.ipynb)
   for explicit package installation, synchronization, unloading, and
   deterministic reinsertion through `AnchoredMoEForCausalLM`.

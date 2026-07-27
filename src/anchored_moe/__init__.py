@@ -41,7 +41,11 @@ from anchored_moe.policies import (
 )
 from anchored_moe.registry import (
     EXPERT_PAYLOAD_BINDING_FORMAT_VERSION,
+    CalibratedRouterPackageConfig,
     ExpertPackage,
+    ExpertPackageExportBinding,
+    ExpertPackageExportConfig,
+    ExpertPackageExportError,
     ExpertPackageManifest,
     ExpertPayloadBinding,
     ExpertRegistry,
@@ -51,6 +55,8 @@ from anchored_moe.registry import (
     RegistryChange,
     RegistryLifecycleError,
     RegistrySnapshot,
+    derive_calibrated_router_package,
+    export_full_mlp_expert_package,
     parse_expert_payload_bindings,
 )
 from anchored_moe.routers import (
@@ -83,6 +89,7 @@ __all__ = [
     "AnchoredTop1Selection",
     "AppendOnlyRouterHeads",
     "CapacityDecision",
+    "CalibratedRouterPackageConfig",
     "DomainLabelBank",
     "EXPERT_PAYLOAD_BINDING_FORMAT_VERSION",
     "Expert",
@@ -90,6 +97,9 @@ __all__ = [
     "ExpertObjectiveError",
     "ExpertObjectiveReport",
     "ExpertPackage",
+    "ExpertPackageExportBinding",
+    "ExpertPackageExportConfig",
+    "ExpertPackageExportError",
     "ExpertPackageManifest",
     "ExpertPayloadBinding",
     "ExpertRegistry",
@@ -133,7 +143,9 @@ __all__ = [
     "Top1DispatchResult",
     "UtilityLabelBank",
     "calibrate_temperature_and_thresholds",
+    "derive_calibrated_router_package",
     "fit_independent_ridge",
+    "export_full_mlp_expert_package",
     "parse_expert_payload_bindings",
     "prepare_forced_path_training",
     "synchronize_anchored_top1_registry",

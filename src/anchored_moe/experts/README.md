@@ -118,8 +118,11 @@ class from configuration.
 
 The `.safetensors` payload is suitable for inclusion in the
 `expert_weight_files` declared by an `ExpertPackageManifest`. Package
-construction, base-checkpoint validation, and multi-layer tensor layout remain
-separate registry concerns.
+construction, base-checkpoint validation, and multi-layer tensor layout are
+separate registry concerns. NB-003's
+`export_full_mlp_expert_package()` consumes trained `FullMLPExpert` objects,
+derives explicit layer/expert payload bindings, and publishes a strictly
+validated expert-only package without serializing the anchor.
 
 ## Configuration and examples
 
@@ -138,7 +141,8 @@ reloaded = FullMLPExpert.from_safetensors(
 ```
 
 See `examples/verify_full_mlp_expert.py` for an offline Qwen3 example covering
-copy equality, gradient isolation, and tensor serialization.
+copy equality, gradient isolation, and tensor serialization. See
+`examples/train_expert_package.py` for multi-layer training and package export.
 
 ## References
 

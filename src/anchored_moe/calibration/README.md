@@ -11,6 +11,11 @@ using deterministic ridge regression. CAL-005 calibrates those heads with
 per-head binary temperature scaling and held-out false-activation-constrained
 threshold selection.
 
+NB-004 composes the validated CAL-004/CAL-005 outputs with an immutable
+NB-003 expert-only package. Its registry-owned artifact boundary verifies the
+exact feature space, data identities, expert/head topology, and report before
+publishing a new router-bearing package version.
+
 This subpackage does not extract hidden states through model hooks, execute
 counterfactual model paths, construct pair utilities, refine stability margins,
 or install packages. Those responsibilities remain with CAL-003, CAL-006,
@@ -24,6 +29,7 @@ CAL-007, model backends, routers, and the registry.
 | CAL-002 | `router_label_bank_format_version: 1` | `labels.py` | Validated |
 | CAL-004 | `fitting: independent_ridge`, `regularization: <positive float>` | `ridge.py` | Validated |
 | CAL-005 | `calibration: temperature_threshold`, `false_activation_rate: <0..1>` | `temperature.py` | Validated |
+| NB-004 | `CalibratedRouterPackageConfig`, `derive_calibrated_router_package` | `registry/export.py` | Validated |
 
 `RouterFeatureBank` is the immutable in-memory and safetensors-backed format.
 `FeatureBankSerializationError` reports unsafe or incompatible payloads.
@@ -39,6 +45,10 @@ new frozen router plus a JSON-compatible
 `TemperatureThresholdCalibrationReport`. Per-head metrics are represented by
 `HeadCalibrationReport`; `TemperatureThresholdCalibrationError` reports
 numerically unusable calibration results.
+
+`derive_calibrated_router_package` does not refit either stage. It binds the
+already fitted frozen heads and complete report to immutable feature/utility
+bank identities and a new package version.
 
 ## Mathematical formulation
 
@@ -194,6 +204,26 @@ minimizes false-positive count, then selects the higher threshold. With no
 negative rows FAR is defined as zero; with no positive rows the tie rules
 select a conservative no-activation threshold.
 
+For expert-only source package \(P_E\), calibrated router \(R\), fitting-bank
+identity \(d_F\), calibration-bank identity \(d_C\), and report \(Q\), NB-004
+publishes a new package
+
+\[
+P_R=\operatorname{Derive}(P_E,R,d_F,d_C,Q).
+\]
+
+For every expert payload \(f\), its bytes and digest are invariant:
+
+\[
+\operatorname{bytes}_{P_R}(f)=\operatorname{bytes}_{P_E}(f),
+\qquad
+d_{P_R}(f)=d_{P_E}(f).
+\]
+
+The new manifest identity changes because it adds a new immutable version,
+router payload hash, calibration identities, thresholds, metrics, and runtime
+provenance.
+
 ## Algorithms
 
 Feature-batch collection:
@@ -280,6 +310,23 @@ Temperature and threshold calibration:
 10. Return canonical row partitions and per-head losses, counts, rates,
     statuses, temperatures, and thresholds in a JSON-compatible report.
 
+NB-004 package derivation:
+
+1. Require a strictly validated router-free NB-003 source package.
+2. Revalidate both feature/utility pairs and require globally disjoint fitting
+   and calibration row IDs.
+3. Require both feature specifications, converted layers, and expert-column
+   order to exactly match the source payload bindings.
+4. Require frozen finite calibrated heads with exact binding and report
+   ownership, temperature, threshold, feature size, and dtype agreement.
+5. Copy every expert payload byte-for-byte into private staging and verify its
+   original SHA-256 digest.
+6. Serialize calibrated heads with the existing RTR-002 safetensors format.
+7. Record source identity, bank identities and dataset provenance, ridge
+   regularization, the complete CAL-005 report, and calibration runtime.
+8. Strictly validate and publish a new immutable package version without
+   changing the source package.
+
 ## Assumptions and invariants
 
 - Input features have already been produced by a frozen
@@ -349,6 +396,15 @@ Temperature and threshold calibration:
   exact copies, global head order is preserved, and output heads are frozen.
 - Reports contain row IDs, calibration bounds, iteration count, losses,
   thresholds, counts, rates, and fallback statuses, but no prompt text.
+- NB-004 fitting and calibration banks use disjoint global row IDs.
+- Both NB-004 banks exactly match the source package's feature specification,
+  converted layers, and expert order.
+- Every calibrated head is frozen, finite, dtype-compatible, and has one exact
+  source payload binding and report entry.
+- The source package version cannot be reused for the derived artifact.
+- Expert payload bytes and hashes are unchanged in the derived package.
+- NB-004 records but does not embed feature or utility tensors in the deployed
+  package; notebooks save those reproducibility banks separately.
 
 ## Hugging Face integration
 
@@ -380,6 +436,13 @@ The resulting router uses the existing RTR-002 safetensors format, which
 already stores each head's temperature and threshold. The separate report can
 be written as resolved experiment JSON beside that payload.
 
+NB-004 makes that deployment boundary explicit:
+`derive_calibrated_router_package()` consumes the exact banks, calibrated
+router, and report; emits a new local package version; and leaves the original
+expert-only package untouched. The derived manifest retains Hugging Face model,
+tokenizer, and dataset identities while recording the calibration runtime and
+source manifest digest.
+
 Every feature or label payload is one safetensors file and can be included in
 an experiment artifact or covered by an expert-package manifest hash. It
 contains no executable Python or pickle content.
@@ -388,11 +451,13 @@ contains no executable Python or pickle content.
 
 ```python
 from anchored_moe import (
+    CalibratedRouterPackageConfig,
     DomainLabelBank,
     IdentityRouterFeatureExtractor,
     RouterFeatureBank,
     UtilityLabelBank,
     calibrate_temperature_and_thresholds,
+    derive_calibrated_router_package,
     fit_independent_ridge,
 )
 
@@ -443,6 +508,23 @@ calibrated_router, calibration_report = (
 )
 calibrated_router.save_safetensors("calibrated-router.safetensors")
 resolved_metadata = calibration_report.to_dict()
+
+routed_package = derive_calibrated_router_package(
+    expert_only_package,
+    "./code-experts-1.0.0-router-1",
+    calibrated_router=calibrated_router,
+    calibration_report=calibration_report,
+    fitting_feature_bank=bank,
+    fitting_utility_labels=utilities,
+    calibration_feature_bank=held_out_bank,
+    calibration_utility_labels=held_out_utilities,
+    config=CalibratedRouterPackageConfig(
+        specialization_version="1.0.0+router.1",
+        calibration_dataset_version="router-data-v1",
+        ridge_regularization=1e-3,
+        runtime_versions=runtime_versions,
+    ),
+)
 ```
 
 See `examples/verify_router_feature_bank.py` for deterministic collection,
@@ -454,6 +536,9 @@ and anchored top-1 selection without model downloads.
 See `examples/verify_temperature_thresholds.py` for separate fitting and
 held-out calibration banks, explicit row partitions, immutable calibration,
 budgeted threshold selection, and anchored top-1 routes.
+See `examples/fit_router.py` and
+`notebooks/03_fit_and_calibrate_router.ipynb` for immutable NB-004 package
+derivation and PKG-007 materialization.
 
 ## References
 
@@ -485,6 +570,8 @@ budgeted threshold selection, and anchored top-1 routes.
 
 CAL-001 and CAL-002 are framework infrastructure and do not derive an
 optimization algorithm from a paper.
+NB-004 only validates and packages CAL-004/CAL-005 outputs; it introduces no
+additional paper-derived fitting algorithm.
 
 ## Tests and known limitations
 
@@ -519,6 +606,11 @@ metadata, exact global head order, incompatible router rejection,
 JSON-compatible reports, calibrated-head serialization, CAL-004 integration
 with a separate held-out bank, anchored top-1 routing, public documentation,
 and executable example behavior.
+
+NB-004 tests additionally cover immutable source bytes, deterministic derived
+identity, unchanged expert hashes, exact head/binding/report agreement,
+disjoint fit/calibration identities, router payload hashing, anchored
+anchor/expert decisions, strict reload, and PKG-007 materialization.
 
 The current formats have no automatic model hooks, counterfactual execution,
 pair utility, sharding, streaming writer, memory mapping, compression,

@@ -5,6 +5,14 @@ from anchored_moe.registry.bindings import (
     ExpertPayloadBinding,
     parse_expert_payload_bindings,
 )
+from anchored_moe.registry.export import (
+    CalibratedRouterPackageConfig,
+    ExpertPackageExportBinding,
+    ExpertPackageExportConfig,
+    ExpertPackageExportError,
+    derive_calibrated_router_package,
+    export_full_mlp_expert_package,
+)
 from anchored_moe.registry.manifest import (
     PACKAGE_FORMAT_VERSION,
     ExpertPackageManifest,
@@ -24,7 +32,11 @@ __all__ = [
     "EXPERT_PAYLOAD_BINDING_FORMAT_VERSION",
     "PACKAGE_FORMAT_VERSION",
     "REGISTRY_FORMAT_VERSION",
+    "CalibratedRouterPackageConfig",
     "ExpertPackage",
+    "ExpertPackageExportBinding",
+    "ExpertPackageExportConfig",
+    "ExpertPackageExportError",
     "ExpertPackageManifest",
     "ExpertPayloadBinding",
     "ExpertRegistry",
@@ -34,5 +46,7 @@ __all__ = [
     "RegistryChange",
     "RegistryLifecycleError",
     "RegistrySnapshot",
+    "derive_calibrated_router_package",
+    "export_full_mlp_expert_package",
     "parse_expert_payload_bindings",
 ]

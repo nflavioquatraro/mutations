@@ -27,6 +27,18 @@ NOTEBOOK_CASES = (
         "validation_summary",
     ),
     (
+        PROJECT_ROOT / "notebooks" / "02_train_expert_package.ipynb",
+        "NB-003",
+        "NB-003 validation passed",
+        "validation_summary",
+    ),
+    (
+        PROJECT_ROOT / "notebooks" / "03_fit_and_calibrate_router.ipynb",
+        "NB-004",
+        "NB-004 validation passed",
+        "calibration_summary",
+    ),
+    (
         PROJECT_ROOT / "notebooks" / "04_compose_custom_model.ipynb",
         "NB-005",
         "NB-005 validation passed",

@@ -185,8 +185,8 @@ TRN-005 objective execution:
   parameter identity set.
 - `model_init` is rejected because bindings own concrete expert objects.
 - Full-model Trainer checkpoint saving is rejected. Expert safetensors and the
-  complete package manifest are exported explicitly in later package workflow
-  features.
+  complete expert-only package manifest are exported explicitly through the
+  NB-003 registry export workflow.
 - Checkpoint resume is rejected until expert-only optimizer and scheduler state
   has a versioned serialization contract.
 - Objective snapshots are ordinary detached tensors outside model state and
@@ -225,9 +225,11 @@ The subclass deliberately constrains standard Trainer capabilities:
 - `save_model()` and checkpoint resume are rejected to prevent full-anchor
   serialization or restoration.
 
-After training, callers serialize each `FullMLPExpert` with
-`save_safetensors()`. NB-003 will assemble those payloads, explicit PKG-007
-bindings, router metadata, and provenance into a complete expert package.
+After training, callers pass the same independently owned expert objects to
+`export_full_mlp_expert_package()`. NB-003 assembles safe payloads, explicit
+PKG-007 bindings, checkpoint/runtime/dataset provenance, and an expert-only
+manifest. It deliberately emits no router metadata beyond the frozen router
+feature specification; NB-004 owns router fitting and calibrated heads.
 
 ## Configuration and examples
 
@@ -262,7 +264,9 @@ print(trainer.last_objective_report)
 
 See `examples/verify_forced_path_training.py` for a deterministic offline
 training run using a randomly initialized tiny Qwen3 model, precomputed anchor
-logits, token masks, and both TRN-005 terms.
+logits, token masks, and both TRN-005 terms. See
+`examples/train_expert_package.py` and
+`notebooks/02_train_expert_package.ipynb` for the NB-003 export boundary.
 
 ## References
 
@@ -302,9 +306,10 @@ snapshot immutability, gradient flow, weighted loss composition, Trainer
 column retention, real two-step optimization, exact optimizer ownership, and
 byte-exact incumbent preservation.
 
-Teacher-logit generation and provenance serialization remain NB-003 follow-up
-work. Precomputed full-vocabulary logits can also be storage-intensive; compact
-teacher targets are not implemented. Online teacher execution, dataset
-streaming, multi-expert objectives, local mini-MoE, router, mixture-aware
-training, checkpoint resume, mixed-precision, multi-device, and distributed
-acceptance tests remain future work.
+NB-003 records training-dataset and base-checkpoint provenance but does not
+serialize per-example teacher logits or generate them online. Precomputed
+full-vocabulary logits can also be storage-intensive; compact teacher targets
+are not implemented. Online teacher execution, dataset streaming,
+multi-expert objectives, local mini-MoE, router fitting, mixture-aware
+training, expert-only optimizer checkpoint resume, mixed-precision,
+multi-device, and distributed acceptance tests remain future work.

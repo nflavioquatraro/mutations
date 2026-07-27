@@ -51,7 +51,11 @@ from anchored_moe.policies import (
 )
 from anchored_moe.registry import (
     EXPERT_PAYLOAD_BINDING_FORMAT_VERSION,
+    CalibratedRouterPackageConfig,
     ExpertPackage,
+    ExpertPackageExportBinding,
+    ExpertPackageExportConfig,
+    ExpertPackageExportError,
     ExpertPackageManifest,
     ExpertPayloadBinding,
     ExpertRegistry,
@@ -61,6 +65,8 @@ from anchored_moe.registry import (
     RegistryChange,
     RegistryLifecycleError,
     RegistrySnapshot,
+    derive_calibrated_router_package,
+    export_full_mlp_expert_package,
     parse_expert_payload_bindings,
 )
 from anchored_moe.routers import (
@@ -145,7 +151,11 @@ def test_current_public_symbols_have_docstrings() -> None:
         PackageMaterializationError,
         RegistryCompositionReport,
         synchronize_anchored_top1_registry,
+        CalibratedRouterPackageConfig,
         ExpertPackage,
+        ExpertPackageExportBinding,
+        ExpertPackageExportConfig,
+        ExpertPackageExportError,
         ExpertPackageManifest,
         ExpertPayloadBinding,
         ExpertRegistry,
@@ -155,6 +165,8 @@ def test_current_public_symbols_have_docstrings() -> None:
         RegistryChange,
         RegistryLifecycleError,
         RegistrySnapshot,
+        derive_calibrated_router_package,
+        export_full_mlp_expert_package,
         parse_expert_payload_bindings,
         RouterFeatureExtractor,
         IdentityRouterFeatureExtractor,
