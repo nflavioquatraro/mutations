@@ -23,6 +23,10 @@ The current implementation covers the first dense-equivalence foundation:
   strict, deterministic safetensors serialization;
 - anchored hard top-1 selection with fixed-zero anchor evidence and stable
   anchor-first tie-breaking;
+- versioned router feature caches with deterministic row alignment, provenance,
+  strict safetensors validation, and embedded tensor integrity digests;
+- feature-bank-bound domain and individual-utility label datasets with
+  deterministic class and expert ordering;
 - executable offline notebooks for base-model inspection and exact
   dense-equivalence verification.
 
@@ -50,6 +54,8 @@ python examples/inspect_expert_package.py
 python examples/verify_full_mlp_expert.py
 python examples/verify_affine_router.py
 python examples/verify_anchored_top1.py
+python examples/verify_router_feature_bank.py
+python examples/verify_router_label_banks.py
 ```
 
 The equivalent guided workflows are available in:

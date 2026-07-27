@@ -7,6 +7,13 @@ from pathlib import Path
 
 import anchored_moe
 from anchored_moe.backends import ConversionReport, MLPReference, ModelBackend, Qwen3Backend
+from anchored_moe.calibration import (
+    DomainLabelBank,
+    FeatureBankSerializationError,
+    LabelBankSerializationError,
+    RouterFeatureBank,
+    UtilityLabelBank,
+)
 from anchored_moe.evaluation import (
     TensorEquivalence,
     assert_tensors_equivalent,
@@ -63,6 +70,11 @@ def test_current_public_symbols_have_docstrings() -> None:
         Expert,
         ExpertSerializationError,
         FullMLPExpert,
+        RouterFeatureBank,
+        FeatureBankSerializationError,
+        DomainLabelBank,
+        UtilityLabelBank,
+        LabelBankSerializationError,
         SelectionPolicy,
         AnchoredTop1Selection,
         RouteDecision,
