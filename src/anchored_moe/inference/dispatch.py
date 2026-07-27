@@ -13,7 +13,10 @@ from anchored_moe.policies.capacity import (
     CapacityDecision,
     OverflowToAnchorCapacity,
 )
-from anchored_moe.policies.combination import ScoreSoftmaxCombination
+from anchored_moe.policies.combination import (
+    CombinationPolicy,
+    ScoreSoftmaxCombination,
+)
 from anchored_moe.policies.selection import (
     AnchorVetoTop2Selection,
     AnchoredTop1Selection,
@@ -348,7 +351,7 @@ class AnchoredTop2Dispatcher:
     2. one sparse anchor call for all vetoed tokens;
     3. one sparse call per specialist selected by any approved pair;
     4. ranked pair reconstruction;
-    5. score-softmax activation combination;
+    5. configured activation combination;
     6. differentiable reconstruction in original token order.
 
     The anchor is candidate zero and ``experts[i]`` is candidate ``i + 1``.
@@ -370,19 +373,27 @@ class AnchoredTop2Dispatcher:
         self,
         *,
         selection_policy: AnchorVetoTop2Selection | None = None,
-        combination_policy: ScoreSoftmaxCombination | None = None,
+        combination_policy: CombinationPolicy | None = None,
     ) -> None:
         """Create a dispatcher from independently configurable policies."""
 
-        self.selection_policy = selection_policy or AnchorVetoTop2Selection()
-        self.combination_policy = combination_policy or ScoreSoftmaxCombination()
+        self.selection_policy = (
+            AnchorVetoTop2Selection()
+            if selection_policy is None
+            else selection_policy
+        )
+        self.combination_policy = (
+            ScoreSoftmaxCombination()
+            if combination_policy is None
+            else combination_policy
+        )
         if not isinstance(self.selection_policy, AnchorVetoTop2Selection):
             raise TypeError(
                 "selection_policy must be AnchorVetoTop2Selection."
             )
-        if not isinstance(self.combination_policy, ScoreSoftmaxCombination):
+        if not isinstance(self.combination_policy, CombinationPolicy):
             raise TypeError(
-                "combination_policy must be ScoreSoftmaxCombination."
+                "combination_policy must implement CombinationPolicy."
             )
 
     def dispatch(

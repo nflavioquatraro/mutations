@@ -10,6 +10,9 @@ from anchored_moe import (
     AnchorVetoTop2Selection,
     AnchoredTop1Selection,
     AnchoredTop2Dispatcher,
+    CombinationPolicy,
+    EqualWeightCombination,
+    NormalizedPositiveEvidenceCombination,
     ScoreSoftmaxCombination,
     Top2DispatchResult,
 )
@@ -163,6 +166,47 @@ def test_top2_dispatch_uses_configured_mixture_temperature() -> None:
     expected_weights = torch.softmax(torch.tensor([1.0, 0.5]), dim=0)
     assert torch.allclose(result.mixture_weights[0], expected_weights)
     assert anchor.calls == []
+
+
+@pytest.mark.parametrize(
+    ("combination_policy", "expected_weights"),
+    [
+        (EqualWeightCombination(), torch.tensor([0.5, 0.5])),
+        (
+            NormalizedPositiveEvidenceCombination(),
+            torch.tensor([2.0 / 3.0, 1.0 / 3.0]),
+        ),
+    ],
+)
+def test_top2_dispatch_composes_combination_policy_interface(
+    combination_policy: CombinationPolicy,
+    expected_weights: torch.Tensor,
+) -> None:
+    hidden = torch.tensor([[1.0, 2.0]])
+    anchor = _CountingLinear(1.0)
+    code = _CountingLinear(2.0)
+    math = _CountingLinear(-1.0)
+    dispatcher = AnchoredTop2Dispatcher(
+        combination_policy=combination_policy,
+    )
+
+    result = dispatcher.dispatch(
+        hidden,
+        expert_scores=torch.tensor([[2.0, 1.0]]),
+        expert_ids=("code", "math"),
+        anchor_mlp=anchor,
+        experts=(code, math),
+    )
+
+    expected_output = (
+        expected_weights[0] * (hidden * 2.0)
+        + expected_weights[1] * (hidden * -1.0)
+    )
+    assert torch.allclose(result.mixture_weights[0], expected_weights)
+    assert torch.allclose(result.output, expected_output)
+    assert anchor.calls == []
+    assert code.calls == [1]
+    assert math.calls == [1]
 
 
 def test_top2_dispatch_validates_inputs_before_module_execution() -> None:

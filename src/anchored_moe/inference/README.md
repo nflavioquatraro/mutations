@@ -7,8 +7,9 @@ privacy-safe in-memory route telemetry, and explicit registry-to-model runtime
 synchronization. INF-001 connects already calibrated router scores, anchored
 top-1 selection, BAL-001 capacity fallback, the immutable anchor, and expert
 module objects for one routed layer. INF-002 connects anchor-veto top-2
-selection, sparse specialist execution, and score-softmax activation
-combination through a standalone model-family-neutral dispatcher. PKG-007
+selection, sparse specialist execution, and configurable activation
+combination through a standalone model-family-neutral dispatcher. COM-001
+score-softmax remains the default, while COM-002 supplies two baselines. PKG-007
 safely materializes top-1 runtime objects from active local packages.
 
 It does not install packages implicitly, estimate serving capacity, attach
@@ -67,14 +68,11 @@ A(h_t), & m_t=0,\\
 \end{cases}
 \]
 
-\[
-\left[\alpha_{t,1},\alpha_{t,2}\right]
-=
-\operatorname{softmax}
-\left(
-\left[g_{t,c_{t,1}},g_{t,c_{t,2}}\right]/T_{\mathrm{mix}}
-\right).
-\]
+The configured `CombinationPolicy` computes
+\(\left[\alpha_{t,1},\alpha_{t,2}\right]\). COM-001 uses score-softmax,
+while COM-002 can use fixed equal weights or normalized positive evidence.
+All policies return non-negative, sum-to-one weights in the shared activation
+dtype and device.
 
 Every vetoed token executes the anchor once. Every approved token executes two
 distinct specialists, each gathered into one sparse batch regardless of its
@@ -135,7 +133,8 @@ Anchor-veto top-2 dispatch:
 5. Map original token positions to a compact approved-pair batch.
 6. Reconstruct specialist outputs in exact first/second ranked order with
    differentiable `torch.index_copy`.
-7. Apply COM-001 to approved scores and pair-ordered activations.
+7. Apply the configured COM-001 or COM-002 policy to approved scores and
+   pair-ordered activations.
 8. Reconstruct anchor and combined outputs in original token order.
 9. Return selected routes and full-shape weights, using zeros for vetoed
    tokens.
@@ -178,7 +177,8 @@ Registry synchronization:
 - Overflow executes the anchor, not another specialist.
 - INF-002 vetoes specialist execution whenever the anchor appears in the
   ranked pair.
-- INF-002 preserves first/second ranked order when assigning COM-001 weights.
+- INF-002 preserves first/second ranked order when assigning configured
+  combination weights.
 - INF-002 emits zero specialist weights for anchor-vetoed tokens and
   non-negative sum-to-one weights for approved tokens.
 - INF-002 does not check capacity or pair compatibility.
@@ -221,9 +221,10 @@ forward and generation paths require no changes.
 
 INF-002 operates on ordinary PyTorch modules and tensors, so affine router
 heads and `FullMLPExpert` objects can be exercised without a model-family
-adapter. It is deliberately not exposed through `RoutedMLP`,
-`AnchoredMoEForCausalLM`, registry synchronization, or declarative
-configuration yet.
+adapter. Its dispatcher accepts the model-family-neutral `CombinationPolicy`
+interface and defaults to COM-001. It is deliberately not exposed through
+`RoutedMLP`, `AnchoredMoEForCausalLM`, registry synchronization, or
+declarative configuration yet.
 
 CORE-005 wraps the native causal LM in a `PreTrainedModel` facade. Its
 `forward()` and `generate()` delegate to that native implementation, while
@@ -269,6 +270,9 @@ output = result.output
 approved_weights = result.mixture_weights[
     result.selected_routes.expert_pair_mask
 ]
+
+# Use EqualWeightCombination() or
+# NormalizedPositiveEvidenceCombination() for COM-002 comparisons.
 ```
 
 Explicit package composition:
@@ -289,7 +293,8 @@ synchronize_anchored_top1_registry(
 )
 ```
 
-See `examples/verify_routed_top1.py`, `examples/verify_top2_dispatch.py`, and
+See `examples/verify_routed_top1.py`, `examples/verify_top2_dispatch.py`,
+`examples/verify_combination_baselines.py`, and
 `examples/verify_package_runtime.py` for deterministic offline examples. The
 last uses `AnchoredMoEForCausalLM` for the complete public top-1 composition
 lifecycle.
@@ -327,9 +332,10 @@ and malformed router/binding failure before model mutation.
 INF-002 acceptance tests cover mixed anchor/pair decisions, exact ranked
 mixtures, sparse call counts, inactive specialists, empty and single-expert
 registries, arbitrary token-leading shapes, no token dropping, configurable
-temperature, score/hidden/expert gradients, structural validation before
-execution, candidate output contracts, affine-router and full-MLP integration,
-public result invariants, and preservation of all INF-001 tests.
+temperature and combination policy, COM-001/COM-002 weights,
+score/hidden/expert gradients, structural validation before execution,
+candidate output contracts, affine-router and full-MLP integration, public
+result invariants, and preservation of all INF-001 tests.
 
 The initial implementation groups each candidate with a separate mask scan.
 Optimized batched dispatch, token-aligned auxiliary MLP arguments, capacity

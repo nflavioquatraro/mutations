@@ -7,9 +7,13 @@ from anchored_moe.policies.capacity import (
 from anchored_moe.policies.combination import (
     ActivationCombinationResult,
     CombinationPolicy,
+    EqualWeightCombination,
+    NormalizedPositiveEvidenceCombination,
     ScoreSoftmaxCombination,
 )
 from anchored_moe.policies.selection import (
+    AdaptiveRouteDecision,
+    AdaptiveTop1Top2Selection,
     AnchorVetoTop2Selection,
     AnchoredTop1Selection,
     RouteDecision,
@@ -19,10 +23,14 @@ from anchored_moe.policies.selection import (
 
 __all__ = [
     "ActivationCombinationResult",
+    "AdaptiveRouteDecision",
+    "AdaptiveTop1Top2Selection",
     "AnchorVetoTop2Selection",
     "AnchoredTop1Selection",
     "CapacityDecision",
     "CombinationPolicy",
+    "EqualWeightCombination",
+    "NormalizedPositiveEvidenceCombination",
     "OverflowToAnchorCapacity",
     "RouteDecision",
     "ScoreSoftmaxCombination",

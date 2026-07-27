@@ -24,8 +24,11 @@ standalone weighted top-2 strategy primitives:
   strict, deterministic safetensors serialization;
 - anchored hard top-1 selection with fixed-zero anchor evidence and stable
   anchor-first tie-breaking;
-- deterministic anchor-veto top-2 selection and temperature-scaled
-  score-softmax activation combination, kept separate from expert dispatch;
+- deterministic anchor-veto top-2 selection with temperature-scaled
+  score-softmax, equal-weight, and normalized-positive-evidence activation
+  combination policies;
+- adaptive anchor/top-1/top-2 selection with explicit auditable route arity
+  and deterministic mixture-threshold behavior;
 - standalone sparse anchor-veto top-2 dispatch with ranked specialist
   execution, weighted activation reconstruction, and auditable mixture weights;
 - versioned router feature caches with deterministic row alignment, provenance,
@@ -87,6 +90,8 @@ python examples/verify_full_mlp_expert.py
 python examples/verify_affine_router.py
 python examples/verify_anchored_top1.py
 python examples/verify_anchor_veto_top2.py
+python examples/verify_adaptive_selection.py
+python examples/verify_combination_baselines.py
 python examples/verify_top2_dispatch.py
 python examples/verify_router_feature_bank.py
 python examples/verify_router_label_banks.py

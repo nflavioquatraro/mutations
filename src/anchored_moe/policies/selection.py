@@ -1,10 +1,11 @@
-"""Deterministic anchored top-1 and anchor-veto top-2 selection."""
+"""Deterministic anchored top-1, top-2, and adaptive selection policies."""
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass
+from math import isfinite
 from typing import ClassVar
 
 import torch
@@ -181,6 +182,163 @@ class Top2RouteDecision:
         return torch.any(self.selected_indices == candidate_index, dim=-1)
 
 
+@dataclass(frozen=True)
+class AdaptiveRouteDecision:
+    """Ranked specialists and per-token anchor/top-1/top-2 route arity.
+
+    ``ranked_indices`` and ``ranked_scores`` have shape
+    ``token_shape + (2,)``. Candidate index ``i + 1`` represents
+    ``expert_ids[i]``; candidate zero is reserved for padding when fewer than
+    two specialists exist. Ranked specialists remain visible even when the
+    anchor is selected so threshold behavior is auditable.
+
+    ``route_arity`` has ``token_shape`` and contains:
+
+    - ``0`` when the anchor should execute;
+    - ``1`` when only the first ranked specialist should execute;
+    - ``2`` when both ranked specialists should execute.
+
+    Attributes:
+        ranked_indices:
+            Stable specialist ranking padded to a final dimension of size two.
+        ranked_scores:
+            Calibrated scores aligned with ``ranked_indices``; padding scores
+            are zero.
+        route_arity:
+            Integer tensor containing the active specialist count per token.
+        expert_ids:
+            Expert identifiers in the stable order used by candidate indices.
+    """
+
+    ranked_indices: Tensor
+    ranked_scores: Tensor
+    route_arity: Tensor
+    expert_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        """Validate pair shape, route arity, identifiers, and active slots."""
+
+        if not isinstance(self.ranked_indices, Tensor):
+            raise TypeError("ranked_indices must be a torch.Tensor.")
+        if self.ranked_indices.dtype != torch.long:
+            raise TypeError("ranked_indices must use torch.long.")
+        if not isinstance(self.ranked_scores, Tensor):
+            raise TypeError("ranked_scores must be a torch.Tensor.")
+        if not self.ranked_scores.is_floating_point():
+            raise TypeError("ranked_scores must use a floating-point dtype.")
+        if self.ranked_indices.shape != self.ranked_scores.shape:
+            raise ValueError(
+                "ranked_indices and ranked_scores must have the same shape."
+            )
+        if self.ranked_indices.ndim < 1 or self.ranked_indices.shape[-1] != 2:
+            raise ValueError(
+                "adaptive ranked_indices and ranked_scores must have a final "
+                "dimension of size two."
+            )
+        if not isinstance(self.route_arity, Tensor):
+            raise TypeError("route_arity must be a torch.Tensor.")
+        if self.route_arity.dtype != torch.long:
+            raise TypeError("route_arity must use torch.long.")
+        if self.route_arity.shape != self.ranked_indices.shape[:-1]:
+            raise ValueError(
+                "route_arity must have the ranked-pair token-leading shape."
+            )
+        if not (
+            self.ranked_indices.device
+            == self.ranked_scores.device
+            == self.route_arity.device
+        ):
+            raise ValueError(
+                "ranked_indices, ranked_scores, and route_arity must share "
+                "one device."
+            )
+
+        normalized_ids = _normalize_expert_ids(self.expert_ids)
+        object.__setattr__(self, "expert_ids", normalized_ids)
+        if self.ranked_indices.numel():
+            minimum = int(self.ranked_indices.min().item())
+            maximum = int(self.ranked_indices.max().item())
+            if minimum < 0 or maximum > len(normalized_ids):
+                raise ValueError(
+                    "ranked_indices contains a candidate outside the padding "
+                    f"index and {len(normalized_ids)} declared experts."
+                )
+        if not torch.isfinite(self.ranked_scores).all().item():
+            raise ValueError("ranked_scores must contain only finite values.")
+        if self.route_arity.numel():
+            minimum_arity = int(self.route_arity.min().item())
+            maximum_arity = int(self.route_arity.max().item())
+            if minimum_arity < 0 or maximum_arity > 2:
+                raise ValueError("route_arity values must be zero, one, or two.")
+
+        ranked_count = min(2, len(normalized_ids))
+        if ranked_count:
+            if torch.any(self.ranked_indices[..., :ranked_count] == 0).item():
+                raise ValueError(
+                    "available specialists must occupy every ranked slot "
+                    "before padding."
+                )
+        if ranked_count < 2:
+            if torch.any(self.ranked_indices[..., ranked_count:] != 0).item():
+                raise ValueError(
+                    "missing specialist ranking slots must use padding index zero."
+                )
+            if torch.any(self.ranked_scores[..., ranked_count:] != 0).item():
+                raise ValueError(
+                    "missing specialist ranking slots must use padding score zero."
+                )
+        if ranked_count == 2 and torch.any(
+            self.ranked_indices[..., 0] == self.ranked_indices[..., 1]
+        ).item():
+            raise ValueError(
+                "adaptive rankings must contain two distinct specialists."
+            )
+
+        active_slots = self._active_slot_mask()
+        if torch.any(self.ranked_indices[active_slots] == 0).item():
+            raise ValueError("active adaptive routes cannot use padding index zero.")
+
+    @property
+    def anchor_mask(self) -> Tensor:
+        """Return tokens assigned to the immutable anchor."""
+
+        return self.route_arity == 0
+
+    @property
+    def top1_mask(self) -> Tensor:
+        """Return tokens assigned to exactly one specialist."""
+
+        return self.route_arity == 1
+
+    @property
+    def top2_mask(self) -> Tensor:
+        """Return tokens assigned to two specialists."""
+
+        return self.route_arity == 2
+
+    def mask_for_expert(self, expert_id: str) -> Tensor:
+        """Return tokens where one declared expert is an active route."""
+
+        try:
+            candidate_index = self.expert_ids.index(expert_id) + 1
+        except ValueError as error:
+            raise KeyError(f"Unknown expert_id: {expert_id!r}.") from error
+        active_matches = (
+            self.ranked_indices == candidate_index
+        ) & self._active_slot_mask()
+        return torch.any(active_matches, dim=-1)
+
+    def _active_slot_mask(self) -> Tensor:
+        """Return pair slots enabled by each token's route arity."""
+
+        slot_indices = torch.arange(
+            2,
+            dtype=torch.long,
+            device=self.route_arity.device,
+        )
+        return slot_indices < self.route_arity.unsqueeze(-1)
+
+
 class SelectionPolicy(ABC):
     """Interface for choosing anchor or expert candidates from router scores.
 
@@ -197,7 +355,7 @@ class SelectionPolicy(ABC):
         expert_scores: Tensor,
         *,
         expert_ids: Sequence[str],
-    ) -> RouteDecision | Top2RouteDecision:
+    ) -> RouteDecision | Top2RouteDecision | AdaptiveRouteDecision:
         """Delegate to :meth:`select` for ordinary callable use."""
 
         return self.select(expert_scores, expert_ids=expert_ids)
@@ -208,7 +366,7 @@ class SelectionPolicy(ABC):
         expert_scores: Tensor,
         *,
         expert_ids: Sequence[str],
-    ) -> RouteDecision | Top2RouteDecision:
+    ) -> RouteDecision | Top2RouteDecision | AdaptiveRouteDecision:
         """Choose candidate routes per token from calibrated expert scores."""
 
 
@@ -400,6 +558,157 @@ class AnchorVetoTop2Selection(SelectionPolicy):
         return Top2RouteDecision(
             selected_indices=selected_indices,
             selected_scores=selected_scores,
+            expert_ids=normalized_ids,
+        )
+
+
+class AdaptiveTop1Top2Selection(SelectionPolicy):
+    """Choose anchor, one specialist, or two specialists by score evidence.
+
+    For descending specialist scores ``g_(1)`` and ``g_(2)``, POL-003 uses
+
+    - anchor when ``g_(1) <= 0``;
+    - top-1 when ``g_(1) > 0`` and either no second specialist exists or
+      ``g_(2) <= mix_threshold``;
+    - top-2 when a second specialist exists and
+      ``g_(2) > mix_threshold``.
+
+    ``mix_threshold`` is finite and non-negative, so top-2 always requires two
+    strictly positive specialists. An exact threshold tie remains top-1.
+    Stable descending sorting preserves expert append order for score ties.
+
+    This class returns selection metadata only. Sparse execution, mixture
+    weighting, capacity handling, pair compatibility, and telemetry remain
+    separate responsibilities.
+    """
+
+    policy_name = "adaptive_top1_top2"
+    anchor_score = 0.0
+
+    def __init__(self, mix_threshold: float = 0.0) -> None:
+        """Create adaptive selection with a finite non-negative threshold."""
+
+        if isinstance(mix_threshold, bool) or not isinstance(
+            mix_threshold,
+            (int, float),
+        ):
+            raise TypeError("mix_threshold must be a real number.")
+        normalized_threshold = float(mix_threshold)
+        if not isfinite(normalized_threshold) or normalized_threshold < 0:
+            raise ValueError(
+                "mix_threshold must be finite and greater than or equal to zero."
+            )
+        self.mix_threshold = normalized_threshold
+
+    def select(
+        self,
+        expert_scores: Tensor,
+        *,
+        expert_ids: Sequence[str],
+    ) -> AdaptiveRouteDecision:
+        """Return deterministic adaptive route arity for every score vector.
+
+        Args:
+            expert_scores:
+                Floating-point tensor with shape ``[..., K]``. The final
+                dimension follows ``expert_ids`` order and may be empty.
+            expert_ids:
+                Unique, stable identifiers for the ``K`` specialist columns.
+
+        Returns:
+            An :class:`AdaptiveRouteDecision` with pair-shaped rankings and
+            token-shaped route arity.
+
+        Raises:
+            TypeError:
+                If scores are not a floating-point tensor or identifiers are
+                not a sequence of strings.
+            ValueError:
+                If shapes, identifiers, or score values are invalid.
+        """
+
+        if not isinstance(expert_scores, Tensor):
+            raise TypeError("expert_scores must be a torch.Tensor.")
+        if not expert_scores.is_floating_point():
+            raise TypeError("expert_scores must use a floating-point dtype.")
+        if expert_scores.ndim < 1:
+            raise ValueError(
+                "expert_scores must have a final expert-candidate dimension."
+            )
+
+        normalized_ids = _normalize_expert_ids(expert_ids)
+        expert_count = expert_scores.shape[-1]
+        if expert_count != len(normalized_ids):
+            raise ValueError(
+                "expert_scores final dimension must match expert_ids: "
+                f"{expert_count} != {len(normalized_ids)}."
+            )
+        if not torch.isfinite(expert_scores).all().item():
+            raise ValueError("expert_scores must contain only finite values.")
+
+        token_shape = expert_scores.shape[:-1]
+        route_arity = torch.zeros(
+            token_shape,
+            dtype=torch.long,
+            device=expert_scores.device,
+        )
+        if expert_count == 0:
+            ranked_indices = torch.zeros(
+                token_shape + (2,),
+                dtype=torch.long,
+                device=expert_scores.device,
+            )
+            ranked_scores = expert_scores.new_zeros(token_shape + (2,))
+        else:
+            # Stable specialist-only ranking makes equal scores follow the
+            # declared append order independently of the anchor threshold.
+            all_ranked_indices = torch.argsort(
+                expert_scores,
+                dim=-1,
+                descending=True,
+                stable=True,
+            )
+            retained_count = min(2, expert_count)
+            retained_indices = all_ranked_indices[..., :retained_count]
+            retained_scores = torch.gather(
+                expert_scores,
+                dim=-1,
+                index=retained_indices,
+            )
+            ranked_indices = retained_indices + 1
+            ranked_scores = retained_scores
+            if retained_count == 1:
+                padding_indices = torch.zeros(
+                    token_shape + (1,),
+                    dtype=torch.long,
+                    device=expert_scores.device,
+                )
+                padding_scores = expert_scores.new_zeros(token_shape + (1,))
+                ranked_indices = torch.cat(
+                    (ranked_indices, padding_indices),
+                    dim=-1,
+                )
+                ranked_scores = torch.cat(
+                    (ranked_scores, padding_scores),
+                    dim=-1,
+                )
+
+            best_is_positive = ranked_scores[..., 0] > self.anchor_score
+            route_arity = best_is_positive.to(dtype=torch.long)
+            if expert_count >= 2:
+                second_supports_mixing = (
+                    ranked_scores[..., 1] > self.mix_threshold
+                )
+                route_arity = torch.where(
+                    best_is_positive & second_supports_mixing,
+                    torch.full_like(route_arity, 2),
+                    route_arity,
+                )
+
+        return AdaptiveRouteDecision(
+            ranked_indices=ranked_indices,
+            ranked_scores=ranked_scores,
+            route_arity=route_arity,
             expert_ids=normalized_ids,
         )
 

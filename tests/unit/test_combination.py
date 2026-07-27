@@ -10,6 +10,8 @@ import torch
 from anchored_moe import (
     ActivationCombinationResult,
     CombinationPolicy,
+    EqualWeightCombination,
+    NormalizedPositiveEvidenceCombination,
     ScoreSoftmaxCombination,
 )
 
@@ -67,6 +69,85 @@ def test_mix_temperature_controls_weight_sharpness() -> None:
     assert cold.output[0, 0] < warm.output[0, 0]
 
 
+def test_equal_weight_combination_is_an_exact_diagnostic_baseline() -> None:
+    scores = torch.tensor([[9.0, -4.0], [0.1, 20.0]], dtype=torch.float64)
+    outputs = torch.tensor(
+        [
+            [[2.0, 6.0], [8.0, 4.0]],
+            [[1.0, 3.0], [5.0, 11.0]],
+        ],
+        dtype=torch.float64,
+    )
+
+    result = EqualWeightCombination()(outputs, selected_scores=scores)
+
+    assert isinstance(EqualWeightCombination(), CombinationPolicy)
+    assert EqualWeightCombination.policy_name == "equal_weight"
+    assert torch.equal(
+        result.weights,
+        torch.full((2, 2), 0.5, dtype=torch.float64),
+    )
+    assert torch.equal(
+        result.output,
+        torch.tensor([[5.0, 5.0], [3.0, 7.0]], dtype=torch.float64),
+    )
+
+
+def test_normalized_positive_evidence_clamps_and_normalizes_scores() -> None:
+    scores = torch.tensor([[3.0, 1.0], [-2.0, 5.0]], dtype=torch.float64)
+    outputs = torch.tensor(
+        [
+            [[4.0, 8.0], [0.0, 4.0]],
+            [[100.0, 100.0], [7.0, 11.0]],
+        ],
+        dtype=torch.float64,
+    )
+
+    result = NormalizedPositiveEvidenceCombination()(
+        outputs,
+        selected_scores=scores,
+    )
+
+    assert isinstance(NormalizedPositiveEvidenceCombination(), CombinationPolicy)
+    assert (
+        NormalizedPositiveEvidenceCombination.policy_name
+        == "normalized_positive_evidence"
+    )
+    assert torch.equal(
+        result.weights,
+        torch.tensor([[0.75, 0.25], [0.0, 1.0]], dtype=torch.float64),
+    )
+    assert torch.equal(
+        result.output,
+        torch.tensor([[3.0, 7.0], [7.0, 11.0]], dtype=torch.float64),
+    )
+
+
+def test_normalized_positive_evidence_rejects_zero_total_evidence() -> None:
+    with pytest.raises(ValueError, match="strictly positive"):
+        NormalizedPositiveEvidenceCombination()(
+            torch.randn(2, 2, 3),
+            selected_scores=torch.tensor([[0.0, -1.0], [-2.0, -3.0]]),
+        )
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [
+        EqualWeightCombination(),
+        NormalizedPositiveEvidenceCombination(),
+    ],
+)
+def test_baselines_reject_nonfinite_selected_scores(
+    policy: CombinationPolicy,
+) -> None:
+    with pytest.raises(ValueError, match="finite"):
+        policy(
+            torch.randn(1, 2, 3),
+            selected_scores=torch.tensor([[float("nan"), 1.0]]),
+        )
+
+
 def test_combination_preserves_leading_and_trailing_shapes_dtype_and_device() -> None:
     scores = torch.randn(2, 3, 2, dtype=torch.float64)
     outputs = torch.randn(2, 3, 2, 4, 5, dtype=torch.float64)
@@ -86,6 +167,33 @@ def test_combination_preserves_leading_and_trailing_shapes_dtype_and_device() ->
         result.weights.sum(dim=-1),
         torch.ones(2, 3, dtype=torch.float64),
     )
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [
+        EqualWeightCombination(),
+        NormalizedPositiveEvidenceCombination(),
+    ],
+)
+def test_baselines_preserve_shapes_dtype_device_and_inputs(
+    policy: CombinationPolicy,
+) -> None:
+    scores = torch.rand(2, 3, 2, dtype=torch.float64)
+    outputs = torch.randn(2, 3, 2, 4, 5, dtype=torch.float64)
+    original_scores = scores.clone()
+    original_outputs = outputs.clone()
+
+    result = policy(outputs, selected_scores=scores)
+
+    assert result.weights.shape == (2, 3, 2)
+    assert result.output.shape == (2, 3, 4, 5)
+    assert result.weights.dtype == outputs.dtype
+    assert result.output.dtype == outputs.dtype
+    assert result.weights.device == outputs.device
+    assert result.output.device == outputs.device
+    assert torch.equal(scores, original_scores)
+    assert torch.equal(outputs, original_outputs)
 
 
 def test_combination_is_differentiable_and_does_not_mutate_inputs() -> None:
@@ -109,6 +217,37 @@ def test_combination_is_differentiable_and_does_not_mutate_inputs() -> None:
     assert outputs.grad is not None
     assert torch.isfinite(scores.grad).all()
     assert torch.isfinite(outputs.grad).all()
+
+
+def test_normalized_positive_evidence_preserves_score_and_output_gradients() -> None:
+    scores = torch.tensor([[3.0, 1.0], [1.0, 2.0]], requires_grad=True)
+    outputs = torch.tensor(
+        [[[1.0, 2.0], [4.0, 8.0]], [[2.0, 3.0], [5.0, 9.0]]],
+        requires_grad=True,
+    )
+
+    result = NormalizedPositiveEvidenceCombination()(
+        outputs,
+        selected_scores=scores,
+    )
+    result.output.square().sum().backward()
+
+    assert scores.grad is not None
+    assert outputs.grad is not None
+    assert torch.isfinite(scores.grad).all()
+    assert torch.isfinite(outputs.grad).all()
+
+
+def test_equal_weight_baseline_has_no_score_dependency() -> None:
+    scores = torch.tensor([[3.0, 1.0]], requires_grad=True)
+    outputs = torch.tensor([[[1.0, 2.0], [4.0, 8.0]]], requires_grad=True)
+
+    result = EqualWeightCombination()(outputs, selected_scores=scores)
+    result.output.sum().backward()
+
+    assert scores.grad is None
+    assert outputs.grad is not None
+    assert torch.equal(outputs.grad, torch.full_like(outputs, 0.5))
 
 
 @pytest.mark.parametrize(

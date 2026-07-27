@@ -1,4 +1,4 @@
-"""Activation-space score-softmax combination for selected specialists."""
+"""Activation-space combination policies for selected specialist pairs."""
 
 from __future__ import annotations
 
@@ -151,37 +151,10 @@ class ScoreSoftmaxCombination(CombinationPolicy):
                 If pair shapes, dtypes, devices, or scores are inconsistent.
         """
 
-        if not isinstance(selected_outputs, Tensor):
-            raise TypeError("selected_outputs must be a torch.Tensor.")
-        if not selected_outputs.is_floating_point():
-            raise TypeError("selected_outputs must use a floating-point dtype.")
-        if not isinstance(selected_scores, Tensor):
-            raise TypeError("selected_scores must be a torch.Tensor.")
-        if not selected_scores.is_floating_point():
-            raise TypeError("selected_scores must use a floating-point dtype.")
-        if selected_scores.ndim < 1 or selected_scores.shape[-1] != 2:
-            raise ValueError(
-                "selected_scores must have a final dimension of size two."
-            )
-        if selected_outputs.ndim <= selected_scores.ndim:
-            raise ValueError(
-                "selected_outputs must include at least one trailing output "
-                "dimension after the selected pair."
-            )
-        if selected_outputs.shape[: selected_scores.ndim] != selected_scores.shape:
-            raise ValueError(
-                "selected_outputs must begin with selected_scores shape."
-            )
-        if selected_outputs.dtype != selected_scores.dtype:
-            raise ValueError(
-                "selected_outputs and selected_scores must share one dtype."
-            )
-        if selected_outputs.device != selected_scores.device:
-            raise ValueError(
-                "selected_outputs and selected_scores must share one device."
-            )
-        if not torch.isfinite(selected_scores).all().item():
-            raise ValueError("selected_scores must contain only finite values.")
+        _validate_combination_inputs(
+            selected_outputs,
+            selected_scores=selected_scores,
+        )
 
         # torch.softmax subtracts the maximum internally, so even extreme
         # calibrated scores produce finite normalized weights. Keeping the
@@ -190,14 +163,161 @@ class ScoreSoftmaxCombination(CombinationPolicy):
             selected_scores / self.mix_temperature,
             dim=-1,
         )
-        trailing_rank = selected_outputs.ndim - selected_scores.ndim
-        broadcast_weights = weights.reshape(
-            *weights.shape,
-            *((1,) * trailing_rank),
+        return _combine_with_weights(
+            selected_outputs,
+            selected_scores=selected_scores,
+            weights=weights,
         )
-        selected_dimension = selected_scores.ndim - 1
-        output = torch.sum(
-            broadcast_weights * selected_outputs,
-            dim=selected_dimension,
+
+
+class EqualWeightCombination(CombinationPolicy):
+    """Mix two selected specialist outputs with fixed equal weights.
+
+    COM-002's diagnostic baseline computes
+
+    ``y = 0.5 * E_i(h) + 0.5 * E_j(h)``
+
+    for every already approved specialist pair. Scores remain a required input
+    so all combination policies share one interface and validate the same
+    ranked-pair contract, but the output intentionally does not depend on
+    their magnitudes.
+
+    Selection and combination remain separate: callers must pass only
+    specialist pairs approved by a selection policy. This policy does not
+    interpret anchor indices, execute experts, check pair compatibility, or
+    handle capacity.
+    """
+
+    policy_name = "equal_weight"
+
+    def combine(
+        self,
+        selected_outputs: Tensor,
+        *,
+        selected_scores: Tensor,
+    ) -> ActivationCombinationResult:
+        """Return the arithmetic mean and exact one-half mixture weights."""
+
+        _validate_combination_inputs(
+            selected_outputs,
+            selected_scores=selected_scores,
         )
-        return ActivationCombinationResult(output=output, weights=weights)
+        weights = torch.full_like(selected_scores, 0.5)
+        return _combine_with_weights(
+            selected_outputs,
+            selected_scores=selected_scores,
+            weights=weights,
+        )
+
+
+class NormalizedPositiveEvidenceCombination(CombinationPolicy):
+    """Mix selected outputs in proportion to non-negative router evidence.
+
+    For calibrated selected scores ``[g_i, g_j]``, COM-002 computes
+
+    ``e_k = max(g_k, 0)`` and ``alpha_k = e_k / (e_i + e_j)``.
+
+    At least one selected score must therefore be strictly positive. A pair
+    with zero total positive evidence is rejected instead of receiving a
+    hidden fallback policy. POL-002-approved specialist pairs always satisfy
+    the stronger condition that both selected scores are positive.
+
+    The piecewise-linear weighting is useful as a non-exponential baseline.
+    It preserves gradients through positive scores and selected activations;
+    non-positive scores have zero evidence and therefore zero local gradient.
+    """
+
+    policy_name = "normalized_positive_evidence"
+
+    def combine(
+        self,
+        selected_outputs: Tensor,
+        *,
+        selected_scores: Tensor,
+    ) -> ActivationCombinationResult:
+        """Return positive-evidence-weighted activations and deployed weights.
+
+        Raises:
+            ValueError:
+                If any selected pair has no strictly positive score and its
+                normalized evidence would therefore be undefined.
+        """
+
+        _validate_combination_inputs(
+            selected_outputs,
+            selected_scores=selected_scores,
+        )
+        evidence = torch.clamp_min(selected_scores, 0)
+        total_evidence = evidence.sum(dim=-1, keepdim=True)
+        if torch.any(total_evidence <= 0).item():
+            raise ValueError(
+                "normalized positive evidence requires at least one strictly "
+                "positive selected score per pair."
+            )
+        weights = evidence / total_evidence
+        return _combine_with_weights(
+            selected_outputs,
+            selected_scores=selected_scores,
+            weights=weights,
+        )
+
+
+def _validate_combination_inputs(
+    selected_outputs: Tensor,
+    *,
+    selected_scores: Tensor,
+) -> None:
+    """Validate the shared pair-shaped activation-combination contract."""
+
+    if not isinstance(selected_outputs, Tensor):
+        raise TypeError("selected_outputs must be a torch.Tensor.")
+    if not selected_outputs.is_floating_point():
+        raise TypeError("selected_outputs must use a floating-point dtype.")
+    if not isinstance(selected_scores, Tensor):
+        raise TypeError("selected_scores must be a torch.Tensor.")
+    if not selected_scores.is_floating_point():
+        raise TypeError("selected_scores must use a floating-point dtype.")
+    if selected_scores.ndim < 1 or selected_scores.shape[-1] != 2:
+        raise ValueError(
+            "selected_scores must have a final dimension of size two."
+        )
+    if selected_outputs.ndim <= selected_scores.ndim:
+        raise ValueError(
+            "selected_outputs must include at least one trailing output "
+            "dimension after the selected pair."
+        )
+    if selected_outputs.shape[: selected_scores.ndim] != selected_scores.shape:
+        raise ValueError(
+            "selected_outputs must begin with selected_scores shape."
+        )
+    if selected_outputs.dtype != selected_scores.dtype:
+        raise ValueError(
+            "selected_outputs and selected_scores must share one dtype."
+        )
+    if selected_outputs.device != selected_scores.device:
+        raise ValueError(
+            "selected_outputs and selected_scores must share one device."
+        )
+    if not torch.isfinite(selected_scores).all().item():
+        raise ValueError("selected_scores must contain only finite values.")
+
+
+def _combine_with_weights(
+    selected_outputs: Tensor,
+    *,
+    selected_scores: Tensor,
+    weights: Tensor,
+) -> ActivationCombinationResult:
+    """Broadcast validated pair weights and combine selected activations."""
+
+    trailing_rank = selected_outputs.ndim - selected_scores.ndim
+    broadcast_weights = weights.reshape(
+        *weights.shape,
+        *((1,) * trailing_rank),
+    )
+    selected_dimension = selected_scores.ndim - 1
+    output = torch.sum(
+        broadcast_weights * selected_outputs,
+        dim=selected_dimension,
+    )
+    return ActivationCombinationResult(output=output, weights=weights)
