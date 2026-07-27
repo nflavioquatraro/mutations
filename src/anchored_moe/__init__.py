@@ -5,9 +5,15 @@ from anchored_moe.calibration import (
     ROUTER_LABEL_BANK_FORMAT_VERSION,
     DomainLabelBank,
     FeatureBankSerializationError,
+    HeadCalibrationReport,
     LabelBankSerializationError,
+    RidgeFittingError,
     RouterFeatureBank,
+    TemperatureThresholdCalibrationError,
+    TemperatureThresholdCalibrationReport,
     UtilityLabelBank,
+    calibrate_temperature_and_thresholds,
+    fit_independent_ridge,
 )
 from anchored_moe.configuration import AnchoredMoEConfig, ResolvedStrategyConfig
 from anchored_moe.experts import Expert, ExpertSerializationError, FullMLPExpert
@@ -42,6 +48,7 @@ __all__ = [
     "ExpertSerializationError",
     "FeatureBankSerializationError",
     "FullMLPExpert",
+    "HeadCalibrationReport",
     "IdentityRouterFeatureExtractor",
     "PackageValidationError",
     "PackageValidationReport",
@@ -49,6 +56,7 @@ __all__ = [
     "ResolvedStrategyConfig",
     "ROUTER_FEATURE_BANK_FORMAT_VERSION",
     "ROUTER_LABEL_BANK_FORMAT_VERSION",
+    "RidgeFittingError",
     "RouteDecision",
     "RouterFeatureBank",
     "RouterFeatureExtractor",
@@ -56,7 +64,11 @@ __all__ = [
     "RouterSerializationError",
     "RoutedMLP",
     "SelectionPolicy",
+    "TemperatureThresholdCalibrationError",
+    "TemperatureThresholdCalibrationReport",
     "UtilityLabelBank",
+    "calibrate_temperature_and_thresholds",
+    "fit_independent_ridge",
 ]
 
 __version__ = "0.1.0.dev0"

@@ -27,11 +27,15 @@ The current implementation covers the first dense-equivalence foundation:
   strict safetensors validation, and embedded tensor integrity digests;
 - feature-bank-bound domain and individual-utility label datasets with
   deterministic class and expert ordering;
+- deterministic independent ridge fitting from utility targets into frozen
+  affine router heads;
+- immutable per-head temperature scaling and held-out threshold selection
+  under an explicit false-activation budget;
 - executable offline notebooks for base-model inspection and exact
   dense-equivalence verification.
 
 Routed expert attachment and dispatch, model-integrated selection, router
-fitting and calibration, package installation, training, and full-model
+stability refinement, package installation, training, and full-model
 serialization are intentionally not implemented yet.
 
 ## Development setup
@@ -56,6 +60,8 @@ python examples/verify_affine_router.py
 python examples/verify_anchored_top1.py
 python examples/verify_router_feature_bank.py
 python examples/verify_router_label_banks.py
+python examples/verify_independent_ridge.py
+python examples/verify_temperature_thresholds.py
 ```
 
 The equivalent guided workflows are available in:

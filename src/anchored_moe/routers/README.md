@@ -217,8 +217,10 @@ ordering, exact safetensors round trips, overwrite protection, malformed
 metadata and tensor rejection, finite-value checks, and expert-package
 manifest compatibility.
 
-The current implementation has no learned projection, feature cache, fitting
-algorithm, head removal, model attachment, or capacity behavior. Standalone
-anchor comparison and top-1 selection are implemented by POL-001; model
-dispatch remains a follow-up. The other limitations remain tracked as
-CAL-001/CAL-004, PKG-002, and BAL-001.
+The current router implementation has no learned projection, head removal,
+model attachment, or capacity behavior. CAL-001 provides feature caches and
+CAL-004 fits utility-target affine heads in the calibration subpackage.
+CAL-005 calibrates their temperatures and thresholds without mutating affine
+parameters. Standalone anchor comparison and top-1 selection are implemented
+by POL-001; model dispatch remains a follow-up. The other limitations remain
+tracked as CAL-006, PKG-002, and BAL-001.
