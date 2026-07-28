@@ -539,6 +539,10 @@ lifecycle example, `examples/verify_compatibility_top2.py` for PKG-003/POL-005
 selection and INF-002 sparse execution, and
 `examples/verify_package_runtime.py` for the complete
 model-facade lifecycle plus CORE-006 save/reload round trip.
+`examples/export_reload_lifecycle.py` and
+`notebooks/06_export_and_reload.ipynb` exercise the complete NB-007 workflow:
+local composition export/reload, explicit unload and reinsertion
+synchronization, slot-preserving upgrade, and exact rollback.
 `examples/train_expert_package.py` and
 `notebooks/02_train_expert_package.ipynb` exercise the NB-003 training/export
 boundary. `examples/fit_router.py` and
@@ -564,11 +568,11 @@ materialization.
 - [Python `threading.RLock` documentation](https://docs.python.org/3/library/threading.html#rlock-objects)
   defines the synchronization primitive protecting registry state.
 
-PKG-001, PKG-002, PKG-003, PKG-004, PKG-007, CORE-006, NB-003 export, and
-NB-004 derivation are framework infrastructure and do not derive a training or
-optimization algorithm from a paper. NB-004 packages the already documented
-CAL-004 ridge and CAL-005 temperature/threshold results without changing their
-algorithms.
+PKG-001, PKG-002, PKG-003, PKG-004, PKG-007, CORE-006, NB-003 export, NB-004
+derivation, and the NB-007 lifecycle workflow are framework infrastructure and
+do not derive a training or optimization algorithm from a paper. NB-004
+packages the already documented CAL-004 ridge and CAL-005
+temperature/threshold results without changing their algorithms.
 
 ## Tests and known limitations
 
@@ -587,7 +591,10 @@ topology and alias rejection, staging cleanup, immutable routed derivation,
 exact expert-copy digests, data/head/report compatibility, router hashing,
 composition file and package tampering, stale-runtime rejection, exact routed
 logit and registry restoration, documentation, examples, notebooks, and wheel
-content.
+content. NB-007 additionally executes composition reload followed by
+unsynchronized and synchronized removal, reinsertion, upgrade, and rollback;
+it checks exact logits, registry hashes, slot restoration, and complete
+parameter freezing.
 
 PKG-007 materializes the supported binding contract in the inference
 subpackage. NB-003 does not fit or serialize a router, save optimizer state, or
@@ -599,4 +606,6 @@ intervening registry change, historical inactive-slot persistence, standalone
 registry persistence, optional anchor bundling, Hub transfer, and distributed
 lifecycle operations remain unsupported. CORE-006 restores only the active
 registry snapshot; it does not retain inactive package content or rollback
-records.
+records. Consequently, NB-007 supplies the prior immutable package explicitly
+when rolling back after reload instead of implying that the composition
+checkpoint persisted inactive history.

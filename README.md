@@ -93,8 +93,9 @@ standalone weighted top-2 strategy primitives:
   checkpoints that reference the pinned anchor, bundle byte-identical active
   packages, reject stale runtime state, and restore exact routed behavior;
 - executable offline notebooks for base-model inspection, exact
-  dense-equivalence verification, forced-path expert training/export, and
-  custom package composition and top-1/top-2 quality/efficiency evaluation.
+  dense-equivalence verification, forced-path expert training/export, custom
+  package composition, top-1/top-2 quality/efficiency evaluation, and an exact
+  export/reload/remove/reinsert/upgrade/rollback lifecycle.
 
 Automatic model mutation during installation, capacity estimation, fallback
 beyond a selected pair, online replay-teacher execution,
@@ -143,6 +144,7 @@ python examples/evaluate_registry_strategies.py
 python examples/verify_routed_top1.py
 python examples/verify_registry_lifecycle.py
 python examples/verify_package_runtime.py
+python examples/export_reload_lifecycle.py
 python examples/verify_forced_path_training.py
 python examples/verify_independent_expert_set.py
 python examples/train_expert_package.py
@@ -166,7 +168,11 @@ The equivalent guided workflows are available in:
   deterministic reinsertion through `AnchoredMoEForCausalLM`;
 - [`notebooks/05_evaluate_registry.ipynb`](./notebooks/05_evaluate_registry.ipynb)
   for an offline top-1/top-2 comparison of counterfactual quality, latency,
-  throughput, state footprint, and active-MLP work.
+  throughput, state footprint, and active-MLP work;
+- [`notebooks/06_export_and_reload.ipynb`](./notebooks/06_export_and_reload.ipynb)
+  for composition export/reload, exact anchor fallback after removal,
+  deterministic reinsertion, and explicitly synchronized package upgrade and
+  rollback.
 
 The notebooks default to deterministic local Qwen3 smoke models and require no
 network access.

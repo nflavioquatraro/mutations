@@ -1,4 +1,4 @@
-"""Executable acceptance tests for the M0 foundation notebooks."""
+"""Executable acceptance tests for the public workflow notebooks."""
 
 from __future__ import annotations
 
@@ -49,6 +49,12 @@ NOTEBOOK_CASES = (
         "NB-006",
         "NB-006 validation passed",
         "evaluation_summary",
+    ),
+    (
+        PROJECT_ROOT / "notebooks" / "06_export_and_reload.ipynb",
+        "NB-007",
+        "NB-007 validation passed",
+        "lifecycle_summary",
     ),
 )
 

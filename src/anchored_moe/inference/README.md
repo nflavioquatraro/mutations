@@ -350,7 +350,10 @@ See `examples/verify_routed_top1.py`, `examples/verify_top2_dispatch.py`,
 `examples/verify_combination_baselines.py`, and
 `examples/verify_package_runtime.py` for deterministic offline examples. The
 last uses `AnchoredMoEForCausalLM` for the complete public top-1 composition
-lifecycle.
+lifecycle. The NB-007 `examples/export_reload_lifecycle.py` companion and
+`notebooks/06_export_and_reload.ipynb` extend that workflow through composition
+reload, explicit removal and reinsertion synchronization, package upgrade, and
+exact rollback.
 
 ## References
 
