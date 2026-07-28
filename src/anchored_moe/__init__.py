@@ -110,8 +110,12 @@ from anchored_moe.training import (
     ForcedPathExpertTrainer,
     ForcedPathTrainingError,
     ForcedPathTrainingReport,
+    IndependentExpertSetTrainingReport,
+    IndependentExpertTrainingReport,
+    IndependentExpertTrainingRun,
     ReplayKLPreservation,
     prepare_forced_path_training,
+    train_independent_expert_set,
 )
 
 __all__ = [
@@ -158,6 +162,9 @@ __all__ = [
     "ForcedPathExpertTrainer",
     "ForcedPathTrainingError",
     "ForcedPathTrainingReport",
+    "IndependentExpertSetTrainingReport",
+    "IndependentExpertTrainingReport",
+    "IndependentExpertTrainingRun",
     "FullMLPExpert",
     "HeadCalibrationReport",
     "IdentityRouterFeatureExtractor",
@@ -214,6 +221,7 @@ __all__ = [
     "parse_expert_payload_bindings",
     "plan_expert_pairs",
     "prepare_forced_path_training",
+    "train_independent_expert_set",
     "synchronize_anchored_top1_registry",
 ]
 

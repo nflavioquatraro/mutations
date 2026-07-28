@@ -64,6 +64,9 @@ standalone weighted top-2 strategy primitives:
 - forced-path single-expert training with complete converted-layer coverage,
   mechanical backbone freezing, exact trainable-parameter assertions, and a
   constrained Hugging Face Trainer/Accelerate integration;
+- independent latent expert-set training with per-expert datasets, seeds, and
+  Trainer configuration, global storage-isolation checks, immutable reports,
+  and failure-safe anchor-route restoration;
 - optional token-masked replay KL against precomputed immutable-anchor logits
   and normalized expert-initialization weight-drift regularization;
 - staged expert-only package export with deterministic payload bindings,
@@ -78,9 +81,9 @@ standalone weighted top-2 strategy primitives:
   custom package composition and top-1/top-2 quality/efficiency evaluation.
 
 Automatic model mutation during installation, online replay-teacher execution,
-multi-expert training, model-integrated and package-driven top-2 execution,
-persistent registry storage, Hub transfer, and full-model serialization are
-intentionally not implemented yet.
+local mini-MoE and mixture-aware joint training, model-integrated and
+package-driven top-2 execution, persistent registry storage, Hub transfer, and
+full-model serialization are intentionally not implemented yet.
 
 ## Development setup
 
@@ -118,6 +121,7 @@ python examples/verify_routed_top1.py
 python examples/verify_registry_lifecycle.py
 python examples/verify_package_runtime.py
 python examples/verify_forced_path_training.py
+python examples/verify_independent_expert_set.py
 python examples/train_expert_package.py
 python examples/fit_router.py
 ```
