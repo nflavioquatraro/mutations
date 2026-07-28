@@ -5,6 +5,12 @@ from anchored_moe.calibration.features import (
     FeatureBankSerializationError,
     RouterFeatureBank,
 )
+from anchored_moe.calibration.global_recalibration import (
+    GlobalRouterRecalibrationError,
+    GlobalRouterRecalibrationReport,
+    LayerGlobalRouterRecalibrationReport,
+    recalibrate_global_router,
+)
 from anchored_moe.calibration.labels import (
     ROUTER_LABEL_BANK_FORMAT_VERSION,
     DomainLabelBank,
@@ -46,9 +52,12 @@ __all__ = [
     "CounterfactualRoute",
     "CounterfactualRouteLosses",
     "FeatureBankSerializationError",
+    "GlobalRouterRecalibrationError",
+    "GlobalRouterRecalibrationReport",
     "HeadCalibrationReport",
     "HeadStabilityMarginReport",
     "LabelBankSerializationError",
+    "LayerGlobalRouterRecalibrationReport",
     "PairSamplingPlan",
     "PairUtilityResult",
     "ROUTER_FEATURE_BANK_FORMAT_VERSION",
@@ -65,5 +74,6 @@ __all__ = [
     "evaluate_counterfactual_oracle",
     "fit_independent_ridge",
     "plan_expert_pairs",
+    "recalibrate_global_router",
     "refine_stability_margins",
 ]

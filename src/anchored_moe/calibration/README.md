@@ -14,7 +14,9 @@ and evaluates router regret against a deterministic anchor-first oracle.
 CAL-003 supplies deterministic bounded pair plans plus pair utility and
 improvement-over-best-single targets from aligned precomputed losses. CAL-006
 refines newly calibrated package heads against an immutable incumbent router
-using explicit stability and useful-win margins.
+using explicit stability and useful-win margins. RTR-004 uses the same aligned
+feature/utility contracts to recalibrate every installed logical-router column
+jointly against a fixed-zero-anchor route objective.
 
 NB-004 composes the validated CAL-004/CAL-005 outputs with an immutable
 NB-003 expert-only package. Its registry-owned artifact boundary verifies the
@@ -23,9 +25,9 @@ publishing a new router-bearing package version.
 
 This subpackage does not extract hidden states through model hooks, execute
 counterfactual model paths, learn pair mixture weights, construct a persistent
-pair-utility bank, mutate an incumbent router, persist registry-specific
-routers, or install packages. Those responsibilities remain with model
-backends, routers, RTR-004, PKG-005, and the registry.
+pair-utility bank, mutate an incumbent router in place, persist
+registry-specific routers, or install packages. Those responsibilities remain
+with model backends, routers, PKG-005, and the registry.
 
 ## Implemented strategies
 
@@ -38,6 +40,7 @@ backends, routers, RTR-004, PKG-005, and the registry.
 | CAL-005 | `calibration: temperature_threshold`, `false_activation_rate: <0..1>` | `temperature.py` | Validated |
 | CAL-006 | `refinement: stability_margin`, explicit stability/win partitions | `margins.py` | Validated |
 | CAL-007 | `CounterfactualRouteLosses`, `evaluate_counterfactual_oracle` | `oracle.py` | Validated |
+| RTR-004 | `recalibrate_global_router`, `strategy: router_only_global` | `global_recalibration.py` | Validated |
 | NB-004 | `CalibratedRouterPackageConfig`, `derive_calibrated_router_package` | `registry/export.py` | Validated |
 
 `RouterFeatureBank` is the immutable in-memory and safetensors-backed format.
@@ -68,6 +71,11 @@ selected-route loss, and regret without executing model paths.
 registry order. `PairUtilityResult` exposes pair advantage over the anchor,
 improvement over the best single expert, stable best-pair targets, a strict
 mixture-margin mask, and direct construction of `CounterfactualRouteLosses`.
+`recalibrate_global_router` consumes one frozen RTR-003 logical router and
+aligned anchor-relative utilities, then returns a storage-independent frozen
+logical router plus `GlobalRouterRecalibrationReport`. Layer-local metrics use
+`LayerGlobalRouterRecalibrationReport`; failures that would publish non-finite
+state use `GlobalRouterRecalibrationError`.
 
 `derive_calibrated_router_package` does not refit either stage. It binds the
 already fitted frozen heads and complete report to immutable feature/utility
@@ -275,6 +283,39 @@ Temperature and threshold remain fixed at their CAL-005 values. Because the
 affine state changes, the CAL-006 report—not the earlier CAL-005 report—is
 authoritative for deployment activation metrics of the refined head.
 
+For RTR-004, prepend zero anchor utility and zero anchor score to every row:
+
+\[
+z_{\ell,t}
+=
+\underset{c\in\{0,\ldots,K_\ell\}}{\arg\max}
+\left[0,a_{\ell,t,1},\ldots,a_{\ell,t,K_\ell}\right]_c,
+\]
+
+\[
+q_{\ell,t}
+=
+\left[0,g_{\ell,t,1},\ldots,g_{\ell,t,K_\ell}\right].
+\]
+
+Class zero is the immutable anchor, so exact ties conservatively choose it.
+All affine columns at one layer are optimized jointly:
+
+\[
+\mathcal L_\ell
+=
+\operatorname{CE}(q_\ell,z_\ell)
++
+\lambda_D
+\frac{\|\theta_\ell-\theta_\ell^{(0)}\|_2^2}{|\theta_\ell|}.
+\]
+
+Temperatures and thresholds remain fixed. The complete source initialization
+is an eligible optimum, and reduced-precision publication falls back to it if
+the deployed objective would increase. Utilities must therefore be measured
+relative to `incumbent_route: anchor`; an arbitrary incumbent is not
+semantically interchangeable with the fixed-zero class.
+
 For \(K\) experts, CAL-003 considers the registry-ordered pair universe
 
 \[
@@ -477,6 +518,22 @@ Stability-margin refinement:
    incumbent-overwrite activations, useful-row counts, and status in a
    JSON-compatible report.
 
+Global router-only recalibration:
+
+1. Require one non-empty CPU RTR-003 router and exactly aligned CAL-001/CAL-002
+   layers, feature dtype, expert identifiers, and column order.
+2. Require anchor-relative utilities plus explicit active-registry and
+   compatibility SHA-256 identities.
+3. Derive anchored best-route targets with stable anchor-first ties.
+4. Optimize all affine weights and biases at each layer jointly using
+   seed-free full-batch float64 Adam and normalized proximal drift.
+5. Preserve every temperature, threshold, ownership key, and global append
+   position.
+6. Re-evaluate after conversion to the deployed dtype and retain the complete
+   source layer if the converted total objective is worse.
+7. Return a new buffer-only logical router and JSON-compatible registry-bound
+   report without mutating or activating any runtime state.
+
 Pair planning and utility construction:
 
 1. Require at least two unique experts in stable registry order.
@@ -586,6 +643,15 @@ NB-004 package derivation:
   define false-activation rate as zero and maximize positive recall.
 - CAL-005 never mutates the source router. Output affine weights and biases are
   exact copies, global head order is preserved, and output heads are frozen.
+- RTR-004 requires a CPU logical router whose dtype, layers, and expert order
+  exactly match the replay banks.
+- RTR-004 utilities are anchor-relative; class zero cannot stand for an
+  arbitrary incumbent route.
+- Recalibration is deterministic for fixed inputs, never mutates the source,
+  preserves temperature and threshold metadata, and returns only frozen
+  buffer state.
+- Every RTR-004 report records the exact registry, compatibility, feature-bank,
+  and utility-label identities needed by PKG-005.
 - Reports contain row IDs, calibration bounds, iteration count, losses,
   thresholds, counts, rates, and fallback statuses, but no prompt text.
 - CAL-006 candidates and incumbents are frozen, finite, feature-compatible,
@@ -714,6 +780,7 @@ from anchored_moe import (
     evaluate_counterfactual_oracle,
     fit_independent_ridge,
     plan_expert_pairs,
+    recalibrate_global_router,
     refine_stability_margins,
 )
 
@@ -778,6 +845,17 @@ refined_router, stability_report = refine_stability_margins(
 refined_router.save_safetensors("stability-refined-router.safetensors")
 resolved_stability_metadata = stability_report.to_dict()
 
+global_router, global_report = recalibrate_global_router(
+    logical_registry_router,
+    replay_bank,
+    replay_utilities,
+    registry_sha256=registry.snapshot().registry_sha256,
+    compatibility_sha256=registry.snapshot().compatibility_sha256,
+    learning_rate=5e-2,
+    optimization_steps=256,
+    drift_weight=1e-3,
+)
+
 routed_package = derive_calibrated_router_package(
     expert_only_package,
     "./code-experts-1.0.0-router-1",
@@ -831,6 +909,9 @@ budgeted threshold selection, and anchored top-1 routes.
 See `examples/verify_stability_margins.py` for deterministic candidate-only
 refinement, exact incumbent/source preservation, post-refinement violation
 metrics, and sequential anchored top-1 routes.
+See `examples/verify_registry_router_versions.py` for deterministic RTR-004
+global recalibration followed by PKG-005 persistence and exact explicit
+registry activation.
 See `examples/verify_pair_utilities.py` for bounded SHA-256 pair planning,
 pair utility, strict mixture margins, best-pair targets, and CAL-007 handoff.
 See `examples/verify_top1_top2_oracle.py` for sparse candidate construction,
@@ -878,6 +959,10 @@ and post-refinement report are documented implementation choices rather than
 paper-derived behavior.
 CAL-007 is also framework evaluation infrastructure rather than a
 paper-derived algorithm.
+RTR-004 implements the architecture blueprint's router-only recalibration mode.
+Its anchored best-route classification target, proximal drift term, full-batch
+optimizer, and deployed-dtype acceptance gate are documented project-specific
+choices rather than a paper-derived algorithm.
 NB-004 only validates and packages CAL-004/CAL-005 outputs; it introduces no
 additional paper-derived fitting algorithm.
 
@@ -937,6 +1022,12 @@ CPU storage, gradient detachment, malformed candidates, non-finite losses,
 shape and index validation, public documentation, policy integration, and the
 executable oracle example.
 
+RTR-004 tests cover anchored target construction, joint loss improvement,
+stable ties, source immutability, storage independence, frozen output,
+deterministic repetition, strict layer/expert/dtype alignment, report
+round-trip validation, registry binding, PKG-005 handoff, and the executable
+offline example.
+
 NB-004 tests additionally cover immutable source bytes, deterministic derived
 identity, unchanged expert hashes, exact head/binding/report agreement,
 disjoint fit/calibration identities, router payload hashing, anchored
@@ -945,8 +1036,8 @@ anchor/expert decisions, strict reload, and PKG-007 materialization.
 The current formats have no automatic model hooks, counterfactual model
 execution, learned pair weights, serialized pair-utility bank, sharding,
 streaming writer, memory mapping, compression,
-distributed merge, joint multiclass calibration, confidence intervals, or
-registry-wide recalibration. CAL-006 does not enforce CAL-005's original
+distributed merge, top-2 pair-aware global objectives, accelerator fitting,
+joint confidence calibration, or confidence intervals. CAL-006 does not enforce CAL-005's original
 false-activation budget after changing affine parameters; its own
 post-refinement report is authoritative. Domain-label ridge targets, weighted
 or incremental fitting, automatic data splitting, and model-integrated

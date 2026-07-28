@@ -39,6 +39,11 @@ from anchored_moe.registry.registry import (
     RegistrySnapshot,
     RegistryUpgradeChange,
 )
+from anchored_moe.registry.router_versions import (
+    REGISTRY_ROUTER_VERSION_FORMAT_VERSION,
+    RegistryRouterVersion,
+    RegistryRouterVersionError,
+)
 
 __all__ = [
     "EXPERT_PAYLOAD_BINDING_FORMAT_VERSION",
@@ -46,6 +51,7 @@ __all__ = [
     "COMPOSITION_MANIFEST_FILENAME",
     "PACKAGE_FORMAT_VERSION",
     "REGISTRY_FORMAT_VERSION",
+    "REGISTRY_ROUTER_VERSION_FORMAT_VERSION",
     "AnchoredCompositionManifest",
     "CalibratedRouterPackageConfig",
     "CompositionCheckpointError",
@@ -64,6 +70,8 @@ __all__ = [
     "PackageValidationReport",
     "RegistryChange",
     "RegistryLifecycleError",
+    "RegistryRouterVersion",
+    "RegistryRouterVersionError",
     "RegistrySnapshot",
     "RegistryUpgradeChange",
     "derive_calibrated_router_package",

@@ -19,6 +19,9 @@ layer/expert ownership from filenames, and lifecycle operations never attach
 modules or recalibrate routing. CORE-006 adds an immutable local composition
 checkpoint that references the external anchor, bundles active packages, and
 persists the exact active registry identity without serializing anchor weights.
+PKG-005 stores an RTR-004 result as a standalone safetensors artifact bound to
+the complete active `RegistrySnapshot`, feature specification, and
+recalibration report. Loading or activation never changes registry state.
 
 ## Implemented strategies
 
@@ -28,6 +31,7 @@ persists the exact active registry identity without serializing anchor weights.
 | PKG-002 | `ExpertPackage.from_directory`, `ExpertRegistry` | `package.py`, `registry.py` | Validated |
 | PKG-003 | `mixture_compatibility_group`, `MixtureCompatibilityIndex` | `compatibility.py`, `registry.py` | Validated |
 | PKG-004 | `ExpertRegistry.upgrade`, `ExpertRegistry.rollback`, `RegistryUpgradeChange` | `registry.py` | Validated |
+| PKG-005 | `RegistryRouterVersion`, `registry_router_version_format_version: 1` | `router_versions.py` | Validated |
 | PKG-007 | `payload_binding_format_version: 1`, `ExpertPayloadBinding` | `bindings.py` | Validated |
 | CORE-006 | `AnchoredMoEForCausalLM.save_pretrained`, local composition `from_pretrained` | `composition.py`, `modeling.py` | Validated |
 | NB-003 | `ExpertPackageExportConfig`, `ExpertPackageExportBinding`, `export_full_mlp_expert_package` | `export.py` | Validated |
@@ -36,6 +40,9 @@ persists the exact active registry identity without serializing anchor weights.
 `PackageIdentity` is the portable specialization/version/content identity.
 `RegistrySnapshot` and `RegistryChange` provide immutable audit records for
 active state and successful transitions.
+`RegistryRouterVersion` owns a defensive frozen router copy and returns a new
+logical router only after exact snapshot equality. `RegistryRouterVersionError`
+reports unsafe payloads, digest failures, or stale activation attempts.
 
 ## Mathematical formulation
 
@@ -142,6 +149,27 @@ under a new specialization version. Every expert payload digest is preserved,
 while the new manifest additionally binds \(d_r=\operatorname{SHA256}(r)\),
 the source manifest digest, calibration-bank identities, and the complete
 CAL-005 report.
+
+For PKG-005 router tensor state \(R\), exact registry snapshot \(S_R\), frozen
+feature specification \(\Phi\), and RTR-004 report \(Q_R\), the standalone
+version identity is
+
+\[
+d_V
+=
+\operatorname{SHA256}
+\left(
+\operatorname{CanonicalJSON}
+\left[
+S_R,\Phi,Q_R,\operatorname{SHA256Tensor}(R)
+\right]
+\right).
+\]
+
+The safetensors metadata records every layer/expert ownership key in global
+append order plus exact tensor digests. Explicit activation succeeds only when
+the supplied live snapshot equals \(S_R\), including ordered package
+identities, registry hash, compatibility hash, and format version.
 
 For anchored configuration bytes \(C\), optional generation configuration
 bytes \(G\), ordered active package identities \(P\), and registry digest
@@ -287,6 +315,24 @@ Calibrated router-package derivation:
 8. Strictly validate and publish the new package without modifying or
    overwriting either source or destination content.
 
+Registry-specific router versions:
+
+1. Require a non-empty frozen CPU logical router, an active registry snapshot,
+   exact feature specification, and matching RTR-004 report.
+2. Convert the logical buffers to storage-independent affine heads while
+   preserving global ownership order, temperatures, and thresholds.
+3. Record the full registry snapshot, feature space, recalibration report,
+   tensor names, dtypes, and exact tensor digests in canonical JSON metadata.
+4. Atomically write only finite floating-point tensors to safetensors without
+   executable Python content.
+5. On load, require the exact schema and tensor-key closure, recheck every
+   digest, reconstruct frozen heads, and require regenerated canonical metadata
+   to equal the stored envelope.
+6. On explicit activation, compare the complete live snapshot before returning
+   a fresh storage-independent logical router.
+7. Never install, unload, upgrade, roll back, synchronize, or recalibrate a
+   model as a side effect.
+
 ## Assumptions and invariants
 
 - Package format version 1 and registry format version 1 are the only accepted
@@ -342,6 +388,13 @@ Calibrated router-package derivation:
 - Router feature size and dtype match the package feature/hidden contract.
 - The manifest records source identity, bank identities, calibration report,
   thresholds, runtime, and router payload hash without embedding prompts.
+- PKG-005 artifacts require an active snapshot and exact agreement between its
+  registry/compatibility hashes and the RTR-004 report.
+- Registry-router tensors are finite CPU values with embedded dtype-aware
+  SHA-256 digests and exact tensor-key closure.
+- Every activation returns new frozen storage and rejects stale, reordered,
+  removed, upgraded, or otherwise different registry snapshots.
+- Saving, loading, and activation never mutate `ExpertRegistry` or a model.
 - CORE-006 composition destinations are new and immutable.
 - Composition checkpoints contain no anchor tensors and require an external
   anchor reference plus live configuration-hash agreement.
@@ -363,6 +416,11 @@ enforcement remain future compatibility work.
 Repository and revision fields use Hugging Face Hub naming conventions.
 Packages are independently uploadable because manifests contain package-local
 paths and never duplicate an anchor implicitly.
+
+Registry router versions are standalone safetensors artifacts rather than
+`PreTrainedModel` checkpoints or package payloads. They can be transferred as
+ordinary Hub files, but PKG-005 performs no network access and requires the
+caller to validate and activate the exact local registry snapshot explicitly.
 
 `ExpertPackage.from_directory()` currently supports local directories only.
 `from_pretrained()` and Hub download behavior are deferred to PKG-006.
@@ -447,6 +505,25 @@ Compatibility metadata is explicit and layer-specific:
 compatibility = registry.mixture_compatibility(layer_index=18)
 assert compatibility.are_compatible("code:0", "code:1")
 assert not compatibility.are_compatible("code:0", "math:0")
+```
+
+An RTR-004 result is persisted independently of package lifecycle:
+
+```python
+from anchored_moe import RegistryRouterVersion
+
+version = RegistryRouterVersion(
+    recalibrated_router,
+    registry_snapshot=registry.snapshot(),
+    feature_specification=router_feature_specification,
+    recalibration_report=recalibration_report,
+)
+version.save_safetensors("./registry-router.safetensors")
+
+loaded = RegistryRouterVersion.from_safetensors(
+    "./registry-router.safetensors"
+)
+router = loaded.activate(registry.snapshot())
 ```
 
 Expert-only export uses one immutable provenance object and explicit live
@@ -539,6 +616,8 @@ lifecycle example, `examples/verify_compatibility_top2.py` for PKG-003/POL-005
 selection and INF-002 sparse execution, and
 `examples/verify_package_runtime.py` for the complete
 model-facade lifecycle plus CORE-006 save/reload round trip.
+`examples/verify_registry_router_versions.py` exercises deterministic RTR-004
+fitting, PKG-005 safe round trip, and exact explicit activation.
 `examples/export_reload_lifecycle.py` and
 `notebooks/06_export_and_reload.ipynb` exercise the complete NB-007 workflow:
 local composition export/reload, explicit unload and reinsertion
@@ -568,9 +647,10 @@ materialization.
 - [Python `threading.RLock` documentation](https://docs.python.org/3/library/threading.html#rlock-objects)
   defines the synchronization primitive protecting registry state.
 
-PKG-001, PKG-002, PKG-003, PKG-004, PKG-007, CORE-006, NB-003 export, NB-004
-derivation, and the NB-007 lifecycle workflow are framework infrastructure and
-do not derive a training or optimization algorithm from a paper. NB-004
+PKG-001, PKG-002, PKG-003, PKG-004, PKG-005, PKG-007, CORE-006, NB-003 export,
+NB-004 derivation, and the NB-007 lifecycle workflow are framework
+infrastructure and do not derive a training or optimization algorithm from a
+paper. NB-004
 packages the already documented CAL-004 ridge and CAL-005
 temperature/threshold results without changing their algorithms.
 
@@ -596,15 +676,22 @@ unsynchronized and synchronized removal, reinsertion, upgrade, and rollback;
 it checks exact logits, registry hashes, slot restoration, and complete
 parameter freezing.
 
+PKG-005 tests additionally cover exact registry/compatibility/report binding,
+canonical metadata round trips, tensor digest tampering, tensor-key closure,
+feature-size rejection, source-storage independence, fresh frozen activation,
+stale removal rejection, exact reinsertion restoration, public documentation,
+and the executable offline example.
+
 PKG-007 materializes the supported binding contract in the inference
 subpackage. NB-003 does not fit or serialize a router, save optimizer state, or
 generate replay teacher labels. NB-004 supports one package-local independent
-affine router and anchored top-1 policy; standalone registry-specific routers
-remain PKG-005. Persistent registry files, cross-process locking, exact
+affine router and anchored top-1 policy. PKG-005 versions are standalone and
+are not yet embedded in CORE-006 composition checkpoints. Persistent registry
+files, cross-process locking, exact
 live-model checkpoint hashing, runtime-version enforcement, rollback across an
 intervening registry change, historical inactive-slot persistence, standalone
-registry persistence, optional anchor bundling, Hub transfer, and distributed
-lifecycle operations remain unsupported. CORE-006 restores only the active
+registry lifecycle persistence, optional anchor bundling, Hub transfer, and
+distributed lifecycle operations remain unsupported. CORE-006 restores only the active
 registry snapshot; it does not retain inactive package content or rollback
 records. Consequently, NB-007 supplies the prior immutable package explicitly
 when rolling back after reload instead of implying that the composition

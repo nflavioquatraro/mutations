@@ -13,9 +13,12 @@ from anchored_moe.calibration import (
     CounterfactualRouteLosses,
     DomainLabelBank,
     FeatureBankSerializationError,
+    GlobalRouterRecalibrationError,
+    GlobalRouterRecalibrationReport,
     HeadCalibrationReport,
     HeadStabilityMarginReport,
     LabelBankSerializationError,
+    LayerGlobalRouterRecalibrationReport,
     PairSamplingPlan,
     PairUtilityResult,
     RidgeFittingError,
@@ -30,6 +33,7 @@ from anchored_moe.calibration import (
     evaluate_counterfactual_oracle,
     fit_independent_ridge,
     plan_expert_pairs,
+    recalibrate_global_router,
     refine_stability_margins,
 )
 from anchored_moe.evaluation import (
@@ -111,6 +115,9 @@ from anchored_moe.registry import (
     PackageValidationReport,
     RegistryChange,
     RegistryLifecycleError,
+    RegistryRouterVersion,
+    RegistryRouterVersionError,
+    REGISTRY_ROUTER_VERSION_FORMAT_VERSION,
     RegistrySnapshot,
     RegistryUpgradeChange,
     derive_calibrated_router_package,
@@ -199,9 +206,12 @@ def test_current_public_symbols_have_docstrings() -> None:
         CounterfactualRouteLosses,
         RouterFeatureBank,
         FeatureBankSerializationError,
+        GlobalRouterRecalibrationError,
+        GlobalRouterRecalibrationReport,
         DomainLabelBank,
         UtilityLabelBank,
         LabelBankSerializationError,
+        LayerGlobalRouterRecalibrationReport,
         PairSamplingPlan,
         PairUtilityResult,
         RidgeFittingError,
@@ -218,6 +228,7 @@ def test_current_public_symbols_have_docstrings() -> None:
         Top1Top2OracleComparison,
         compare_top1_top2_to_oracle,
         plan_expert_pairs,
+        recalibrate_global_router,
         refine_stability_margins,
         SelectionPolicy,
         Top2SelectionPolicy,
@@ -265,6 +276,8 @@ def test_current_public_symbols_have_docstrings() -> None:
         PackageValidationReport,
         RegistryChange,
         RegistryLifecycleError,
+        RegistryRouterVersion,
+        RegistryRouterVersionError,
         RegistrySnapshot,
         RegistryUpgradeChange,
         derive_calibrated_router_package,
@@ -300,4 +313,5 @@ def test_current_public_symbols_have_docstrings() -> None:
 
     assert EXPERT_PAYLOAD_BINDING_FORMAT_VERSION == 1
     assert COMPOSITION_FORMAT_VERSION == 1
+    assert REGISTRY_ROUTER_VERSION_FORMAT_VERSION == 1
     assert all(inspect.getdoc(symbol) for symbol in public_symbols)

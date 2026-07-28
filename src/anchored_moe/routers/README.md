@@ -7,6 +7,8 @@ owned score heads, and registry-level logical score banks. RTR-001 defines the
 initial pre-MLP feature space. RTR-002 maps those features to calibrated scalar
 evidence for an expert at one layer. RTR-003 compiles those package-owned heads
 into frozen layer-local matrices without changing the package wire format.
+RTR-004 creates a new frozen logical router by jointly recalibrating all
+installed affine columns against aligned anchor-relative utility replay data.
 
 This subpackage does not choose between the anchor and experts, execute an MLP,
 combine expert outputs, fit calibration parameters, cache features, enforce
@@ -21,6 +23,7 @@ features.
 | RTR-001 | `feature_type: identity`, `input: pre_mlp_hidden_state` | `base.py`, `features.py` | Validated |
 | RTR-002 | `router_architecture: independent_affine_heads` | `base.py`, `heads.py` | Validated |
 | RTR-003 | `router_architecture: logical_append_only_columns` | `base.py`, `logical.py` | Validated |
+| RTR-004 | `recalibration: router_only_global` | `calibration/global_recalibration.py` | Validated |
 
 `RouterFeatureExtractor`, `RouterHead`, and `RouterScoreBank` are
 model-family-neutral extension interfaces. `IdentityRouterFeatureExtractor`,
@@ -105,6 +108,13 @@ The anchor score remains defined by the architecture as
 \(g_{\ell,0}(h)=0\), but this subpackage does not yet compare expert scores
 against it.
 
+RTR-004 uses the fixed-zero anchor during offline fitting. For replay utility
+matrix \(A_\ell\), it selects the anchor-first best-route class from
+\([0,A_\ell]\) and minimizes cross-entropy over deployed logits
+\([0,G_\ell]\), plus normalized proximal drift from the source affine matrix.
+This changes all specialist score functions for the bound registry and
+therefore deliberately does not preserve RTR-003 append invariance.
+
 ## Algorithms
 
 Identity feature extraction:
@@ -166,6 +176,17 @@ Logical append:
 3. Append its ownership key only after tensor registration succeeds.
 4. Leave every incumbent value, source head, and source storage unchanged.
 
+Global recalibration:
+
+1. Convert a frozen logical router to storage-independent affine heads.
+2. Validate exact replay layer and expert-column alignment.
+3. Jointly optimize every layer's weights and biases while holding temperature
+   and threshold fixed.
+4. Retain the best deterministic full-batch objective, including the source.
+5. Compile the accepted copied heads into a new buffer-only logical router.
+6. Bind the report to one registry and compatibility hash without activating
+   it.
+
 ## Assumptions and invariants
 
 - Router input is the pre-MLP hidden state.
@@ -190,6 +211,10 @@ Logical append:
 - Gradients through logical-router input features are preserved.
 - Appending a logical column preserves incumbent scores bit-for-bit for
   identical inputs, dtype, device, and backend.
+- Global recalibration is explicit, source-immutable, CPU deterministic, and
+  returns no trainable parameters.
+- A recalibrated router is meaningful only for the registry hash and exact
+  expert order recorded by its report.
 - Logical compilation rejects non-finite state even before serialization.
 - Router payloads contain no executable Python content.
 - Router tensor payloads are finite, floating-point, and schema-validated.
@@ -223,8 +248,8 @@ router_feature_specification:
 ```
 
 `logical_append_only_columns` describes the in-memory registry runtime, not a
-package manifest or new payload format. Registry-specific router persistence
-is deferred to PKG-005.
+package manifest. PKG-005 serializes a recalibrated logical router as a
+standalone registry-specific version; it does not change the package format.
 
 ## Configuration and examples
 
@@ -234,6 +259,7 @@ from anchored_moe import (
     AppendOnlyRouterHeads,
     IdentityRouterFeatureExtractor,
     compile_logical_router,
+    recalibrate_global_router,
 )
 
 features = IdentityRouterFeatureExtractor(feature_size=4096)(hidden_states)
@@ -250,6 +276,14 @@ heads.append(
 )
 logical_router = compile_logical_router(heads)
 scores = logical_router(features, layer_index=18)
+
+recalibrated, report = recalibrate_global_router(
+    logical_router,
+    replay_features,
+    replay_utilities,
+    registry_sha256=registry.snapshot().registry_sha256,
+    compatibility_sha256=registry.snapshot().compatibility_sha256,
+)
 ```
 
 See `examples/verify_affine_router.py` for RTR-002 deterministic scoring,
@@ -257,6 +291,8 @@ append invariance, and safe serialization. See
 `examples/verify_logical_router.py` for RTR-003 compilation, exact incumbent
 score preservation, frozen state, and routed execution. Neither example
 downloads model weights.
+See `examples/verify_registry_router_versions.py` for RTR-004 fitting and
+PKG-005 persistence without model downloads.
 
 `AnchoredMoEConfig` continues to reject non-anchor selection policies. INF-001
 allows router objects to be attached explicitly to one `RoutedMLP`; package
@@ -276,8 +312,10 @@ declarative model configuration can be executable.
   defines frozen router features, independent affine heads, calibrated scores,
   fixed-zero anchor evidence, and append-only installation.
 
-RTR-001, RTR-002, and RTR-003 are framework infrastructure and do not derive an
-optimization algorithm from a paper.
+RTR-001, RTR-002, RTR-003, and RTR-004 are framework infrastructure and do not
+derive an optimization algorithm from a paper. RTR-004 implements the
+blueprint's explicit router-only mode using a documented project-specific
+anchored classification objective.
 
 ## Tests and known limitations
 
@@ -293,9 +331,9 @@ score preservation, and `RoutedMLP` plus package-synchronization integration.
 The current router implementation has no learned projection or head removal.
 RTR-003 uses shape-stable per-column affine evaluation to guarantee exact
 append invariance; it does not yet fuse all rows into one GEMM. It has no
-independent on-disk format and cannot be trained. RTR-004 will introduce
-explicit global recalibration semantics, while PKG-005 will own
-registry-specific router persistence.
+independent on-disk format and cannot be trained in place. RTR-004 instead
+optimizes a copied affine representation and returns a new logical router;
+PKG-005 owns registry-specific persistence.
 CAL-001 provides feature caches and
 CAL-004 fits utility-target affine heads in the calibration subpackage.
 CAL-005 calibrates their temperatures and thresholds without mutating affine

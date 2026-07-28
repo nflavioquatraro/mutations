@@ -141,6 +141,55 @@ class LogicalAppendOnlyRouter(RouterScoreBank):
         normalized_layer = _validate_layer_index(layer_index)
         return tuple(self._expert_ids_by_layer.get(normalized_layer, ()))
 
+    def to_independent_heads(
+        self,
+        *,
+        trainable: bool = False,
+    ) -> AppendOnlyRouterHeads:
+        """Return storage-independent affine heads in exact compiled order.
+
+        RTR-004 needs a trainable working copy of an RTR-003 deployment router,
+        while PKG-005 needs the existing package-safe affine representation for
+        serialization. This conversion preserves every ownership key,
+        coefficient, temperature, threshold, dtype, and device without
+        exposing or aliasing the logical router's registered buffers.
+
+        Args:
+            trainable:
+                Whether the returned affine parameters require gradients.
+                The logical source remains buffer-only and immutable.
+        """
+
+        if not isinstance(trainable, bool):
+            raise TypeError("trainable must be a boolean.")
+        heads = AppendOnlyRouterHeads(self.feature_size)
+        positions_by_layer: dict[int, dict[str, int]] = {
+            layer_index: {
+                expert_id: position
+                for position, expert_id in enumerate(expert_ids)
+            }
+            for layer_index, expert_ids in self._expert_ids_by_layer.items()
+        }
+        for layer_index, expert_id in self._head_keys:
+            position = positions_by_layer[layer_index][expert_id]
+            layer = self.layers[str(layer_index)]
+            head = AffineRouterHead(
+                self.feature_size,
+                layer_index=layer_index,
+                expert_id=expert_id,
+                temperature=float(layer.temperature[position].item()),
+                threshold=float(layer.threshold[position].item()),
+                trainable=trainable,
+            ).to(
+                device=layer.weight.device,
+                dtype=layer.weight.dtype,
+            )
+            with torch.no_grad():
+                head.linear.weight.copy_(layer.weight[position : position + 1])
+                head.linear.bias.copy_(layer.bias[position : position + 1])
+            heads.append(head)
+        return heads
+
     def append(self, head: AffineRouterHead) -> None:
         """Copy one compatible affine head into its layer-local matrix.
 

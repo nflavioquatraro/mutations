@@ -24,6 +24,12 @@ standalone weighted top-2 strategy primitives:
   strict, deterministic safetensors serialization;
 - a frozen registry-level logical router that compiles independent heads into
   layer-local append-only matrices while preserving incumbent scores exactly;
+- deterministic router-only global recalibration that jointly optimizes every
+  installed affine score column against anchor-relative utility replay while
+  leaving the source router, anchor, and experts unchanged;
+- standalone safetensors registry-router versions with exact snapshot,
+  feature-space, report, expert-order, and tensor-digest validation plus
+  explicit stale-safe activation;
 - anchored hard top-1 selection with fixed-zero anchor evidence and stable
   anchor-first tie-breaking;
 - deterministic anchor-veto top-2 selection with temperature-scaled
@@ -103,9 +109,9 @@ local mini-MoE and mixture-aware joint training, model-integrated and
 package-driven top-2 execution, persistent registry storage, Hub transfer, and
 anchor-weight bundling are intentionally not implemented yet. Composition
 checkpoints retain the active registry snapshot but not inactive historical
-slots or rollback records. Global router-only recalibration and
-registry-specific refined-router persistence also remain separate tracked
-features.
+slots or rollback records. Pair-aware top-2 global recalibration, embedding
+registry-router histories in composition checkpoints, and automatic router
+activation during registry changes remain separate tracked features.
 
 ## Development setup
 
