@@ -13,7 +13,8 @@ BAL-002 adds explicit per-token availability and deterministic top-2 to top-1
 or anchor degradation to that dispatcher.
 POL-002 supplies ordinary anchor-veto selection and POL-005 supplies
 compatibility-constrained selection. COM-001 score-softmax remains the
-default, while COM-002 supplies two baselines. PKG-007 safely materializes
+default, COM-002 supplies two baselines, and COM-003 supplies separately
+learned frozen mixture weights. PKG-007 safely materializes
 top-1 runtime objects from active local packages. During that materialization,
 RTR-003 compiles package-owned independent affine heads into one frozen
 logical score bank per routed layer.
@@ -81,7 +82,8 @@ E_{c'_{t,1}}(h_t), & a'_t=1,\\
 
 The configured `CombinationPolicy` computes
 \(\left[\alpha_{t,1},\alpha_{t,2}\right]\). COM-001 uses score-softmax,
-while COM-002 can use fixed equal weights or normalized positive evidence.
+COM-002 can use fixed equal weights or normalized positive evidence, and
+COM-003 derives a separate mixing logit from the ordered selected scores.
 All policies return non-negative, sum-to-one weights in the shared activation
 dtype and device.
 
@@ -149,8 +151,8 @@ Pair-shaped top-2 dispatch:
 6. Reconstruct specialist outputs in exact effective slot order with
    differentiable `torch.index_copy`.
 7. Copy arity-one specialist outputs directly with weights \([1,0]\).
-8. Apply the configured COM-001 or COM-002 policy only to arity-two scores and
-   pair-ordered activations.
+8. Apply the configured COM-001, COM-002, or COM-003 policy only to arity-two
+   scores and pair-ordered activations.
 9. Reconstruct anchor, top-1, and combined outputs in original token order.
 10. Return original routes, capacity metadata, and full-shape weights.
 
@@ -310,6 +312,7 @@ degraded_tokens = result.capacity.top1_mask
 
 # Use EqualWeightCombination() or
 # NormalizedPositiveEvidenceCombination() for COM-002 comparisons.
+# Use LearnedMixtureWeightCombination(fitted_head) for COM-003.
 ```
 
 Compatibility-aware top-2 uses the same dispatcher:
@@ -347,7 +350,8 @@ synchronize_anchored_top1_registry(
 
 See `examples/verify_routed_top1.py`, `examples/verify_top2_dispatch.py`,
 `examples/verify_compatibility_top2.py`,
-`examples/verify_combination_baselines.py`, and
+`examples/verify_combination_baselines.py`,
+`examples/verify_learned_mixture_weights.py`, and
 `examples/verify_package_runtime.py` for deterministic offline examples. The
 last uses `AnchoredMoEForCausalLM` for the complete public top-1 composition
 lifecycle. The NB-007 `examples/export_reload_lifecycle.py` companion and
@@ -390,7 +394,7 @@ registry-hash restoration after local save/reload.
 INF-002 acceptance tests cover mixed anchor/pair decisions, exact ranked
 mixtures, sparse call counts, inactive specialists, empty and single-expert
 registries, arbitrary token-leading shapes, no token dropping, configurable
-temperature and combination policy, COM-001/COM-002 weights,
+temperature and combination policy, COM-001/COM-002/COM-003 weights,
 score/hidden/expert gradients, structural validation before execution,
 candidate output contracts, affine-router and full-MLP integration, public
 result invariants, compatibility-constrained sparse execution, registry-index

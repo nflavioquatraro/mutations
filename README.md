@@ -38,6 +38,9 @@ standalone weighted top-2 strategy primitives:
 - deterministic anchor-veto top-2 selection with temperature-scaled
   score-softmax, equal-weight, and normalized-positive-evidence activation
   combination policies;
+- deterministic soft-oracle fitting of a separate frozen affine mixture-weight
+  head, with immutable reports, standalone safetensors serialization, and
+  unchanged top-2 selection;
 - adaptive anchor/top-1/top-2 selection with explicit auditable route arity
   and deterministic mixture-threshold behavior;
 - confidence-gated dynamic-\(k\) selection with stable specialist ranking,
@@ -112,7 +115,9 @@ Automatic model mutation during installation, capacity estimation, fallback
 beyond a selected pair, online replay-teacher execution,
 local mini-MoE and mixture-aware joint training, model-integrated and
 package-driven top-2 execution, persistent registry storage, Hub transfer, and
-anchor-weight bundling are intentionally not implemented yet. Composition
+anchor-weight bundling are intentionally not implemented yet. Learned
+mixture-head package binding and model-integrated oracle weight sweeps also
+remain explicit future work. Composition
 checkpoints retain the active registry snapshot but not inactive historical
 slots or rollback records. Pair-aware top-2 global recalibration, embedding
 registry-router histories in composition checkpoints, and automatic router
@@ -148,6 +153,7 @@ python examples/verify_compatibility_top2.py
 python examples/verify_adaptive_selection.py
 python examples/verify_dynamic_k_selection.py
 python examples/verify_combination_baselines.py
+python examples/verify_learned_mixture_weights.py
 python examples/verify_top2_dispatch.py
 python examples/verify_router_feature_bank.py
 python examples/verify_router_label_banks.py

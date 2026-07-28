@@ -23,6 +23,12 @@ from anchored_moe.calibration.margins import (
     StabilityMarginRefinementReport,
     refine_stability_margins,
 )
+from anchored_moe.calibration.mixture import (
+    MixtureWeightFittingConfig,
+    MixtureWeightFittingError,
+    MixtureWeightFittingReport,
+    fit_learned_mixture_head,
+)
 from anchored_moe.calibration.oracle import (
     CounterfactualOracleResult,
     CounterfactualRoute,
@@ -58,6 +64,9 @@ __all__ = [
     "HeadStabilityMarginReport",
     "LabelBankSerializationError",
     "LayerGlobalRouterRecalibrationReport",
+    "MixtureWeightFittingConfig",
+    "MixtureWeightFittingError",
+    "MixtureWeightFittingReport",
     "PairSamplingPlan",
     "PairUtilityResult",
     "ROUTER_FEATURE_BANK_FORMAT_VERSION",
@@ -73,6 +82,7 @@ __all__ = [
     "compute_pair_utilities",
     "evaluate_counterfactual_oracle",
     "fit_independent_ridge",
+    "fit_learned_mixture_head",
     "plan_expert_pairs",
     "recalibrate_global_router",
     "refine_stability_margins",

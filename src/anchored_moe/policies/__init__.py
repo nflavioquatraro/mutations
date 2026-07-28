@@ -13,6 +13,12 @@ from anchored_moe.policies.combination import (
     NormalizedPositiveEvidenceCombination,
     ScoreSoftmaxCombination,
 )
+from anchored_moe.policies.learned_combination import (
+    LEARNED_MIXTURE_HEAD_FORMAT_VERSION,
+    LearnedMixtureSerializationError,
+    LearnedMixtureWeightCombination,
+    LearnedMixtureWeightHead,
+)
 from anchored_moe.policies.selection import (
     AdaptiveRouteDecision,
     AdaptiveTop1Top2Selection,
@@ -39,6 +45,10 @@ __all__ = [
     "DynamicKRouteDecision",
     "DynamicKSelection",
     "EqualWeightCombination",
+    "LEARNED_MIXTURE_HEAD_FORMAT_VERSION",
+    "LearnedMixtureSerializationError",
+    "LearnedMixtureWeightCombination",
+    "LearnedMixtureWeightHead",
     "NormalizedPositiveEvidenceCombination",
     "OverflowToAnchorCapacity",
     "RouteDecision",

@@ -16,7 +16,9 @@ improvement-over-best-single targets from aligned precomputed losses. CAL-006
 refines newly calibrated package heads against an immutable incumbent router
 using explicit stability and useful-win margins. RTR-004 uses the same aligned
 feature/utility contracts to recalibrate every installed logical-router column
-jointly against a fixed-zero-anchor route objective.
+jointly against a fixed-zero-anchor route objective. COM-003 consumes explicit
+oracle pair weights aligned to a CAL-003 plan and deterministically fits a
+separate frozen affine mixture head.
 
 NB-004 composes the validated CAL-004/CAL-005 outputs with an immutable
 NB-003 expert-only package. Its registry-owned artifact boundary verifies the
@@ -24,8 +26,8 @@ exact feature space, data identities, expert/head topology, and report before
 publishing a new router-bearing package version.
 
 This subpackage does not extract hidden states through model hooks, execute
-counterfactual model paths, learn pair mixture weights, construct a persistent
-pair-utility bank, mutate an incumbent router in place, persist
+counterfactual model paths, derive oracle weights from mixture sweeps,
+construct a persistent pair-utility bank, mutate an incumbent router in place, persist
 registry-specific routers, or install packages. Those responsibilities remain
 with model backends, routers, PKG-005, and the registry.
 
@@ -40,6 +42,7 @@ with model backends, routers, PKG-005, and the registry.
 | CAL-005 | `calibration: temperature_threshold`, `false_activation_rate: <0..1>` | `temperature.py` | Validated |
 | CAL-006 | `refinement: stability_margin`, explicit stability/win partitions | `margins.py` | Validated |
 | CAL-007 | `CounterfactualRouteLosses`, `evaluate_counterfactual_oracle` | `oracle.py` | Validated |
+| COM-003 | `fit_learned_mixture_head`, `strategy: learned_pair_weight_affine` | `mixture.py` | Validated |
 | RTR-004 | `recalibrate_global_router`, `strategy: router_only_global` | `global_recalibration.py` | Validated |
 | NB-004 | `CalibratedRouterPackageConfig`, `derive_calibrated_router_package` | `registry/export.py` | Validated |
 
@@ -366,6 +369,37 @@ where exact ties use lexicographic registry order. Sampling controls which
 pairs are measured; it never changes the stable order used by losses, targets,
 or tie-breaking.
 
+COM-003 receives an ordered selected-score matrix
+\(S\in\mathbb R^{N\times2}\), oracle target weights
+\(A\in[0,1]^{N\times2}\) with \(A_{t,1}+A_{t,2}=1\), and one CAL-003 plan
+index per row. It fits
+
+\[
+z_t=w^\top S_t+b,
+\qquad
+\widehat A_{t,1}=\sigma(z_t),
+\qquad
+\widehat A_{t,2}=1-\widehat A_{t,1},
+\]
+
+using soft-target binary cross entropy and normalized coefficient decay:
+
+\[
+\mathcal L_{\mathrm{mix}}
+=
+-\frac1N\sum_t
+\left[
+A_{t,1}\log\sigma(z_t)
++(1-A_{t,1})\log(1-\sigma(z_t))
+\right]
++\lambda\frac{\|w\|_2^2}{2}.
+\]
+
+The target weights are explicit measured supervision. A single CAL-003 pair
+loss \(L_{t,i,j}\) at one unknown or fixed interpolation coefficient cannot
+identify the loss-minimizing coefficient and is never silently treated as a
+weight label.
+
 For CAL-007, let \(\mathcal C\) be the explicit candidate sequence containing
 the anchor, every single expert, and a sampled subset of expert pairs. For
 token or example \(t\), the table stores finite counterfactual losses
@@ -550,6 +584,25 @@ Pair planning and utility construction:
 10. concatenate anchor, single, and sampled-pair losses into CAL-007 order
     without recomputing them.
 
+Learned mixture-weight fitting:
+
+1. Require a CAL-003 plan, finite ordered score pairs, finite normalized target
+   weights, and plan-local `torch.long` pair indices with exact row alignment.
+2. Detach and copy all fitting inputs to contiguous CPU `torch.float64`.
+3. Initialize the two affine coefficients and scalar bias at zero, giving
+   neutral one-half deployment weights.
+4. Optimize soft-target binary cross entropy plus normalized coefficient
+   decay with seed-free full-batch Adam for a fixed step count.
+5. Retain the best finite iterate, with the neutral initialization always
+   eligible and accepted output forbidden from worsening its objective.
+6. Cast the selected coefficients to the caller's score dtype, re-evaluate
+   deployed arithmetic, and restore the exactly representable neutral head if
+   reduced precision violates the acceptance gate.
+7. Publish coefficients as storage-independent buffers with no trainable
+   parameters.
+8. Report input digests, per-plan-pair row counts, configuration, initial and
+   final loss, total objective, and mean absolute weight error.
+
 Counterfactual oracle evaluation:
 
 1. Require canonical anchor and complete single-expert candidate columns.
@@ -685,6 +738,23 @@ NB-004 package derivation:
   configured non-negative margin is rejected.
 - CAL-003 does not infer unevaluated pair losses or claim exhaustive optimality
   for a bounded plan.
+- COM-003 fitting rows reference exact CAL-003 plan-local pair indices, but
+  the bounded affine head intentionally uses only the ordered score pair as
+  deployment features.
+- Oracle target weights are finite, non-negative, share score dtype/device,
+  and sum to one per row. Their order matches the selected pair order.
+- COM-003 fitting is seed-free full-batch CPU float64 and does not read or
+  change global pseudorandom state.
+- The zero-coefficient neutral head remains an eligible best state. Published
+  deployed-dtype total loss cannot exceed its initial soft-target cross
+  entropy.
+- The returned head is CPU-resident in the source score dtype, contains
+  immutable buffers only, and owns storage independent from inputs and
+  optimizer state.
+- Input and target digests include dtype, shape, and canonical tensor bytes;
+  reports store no scores, target values, prompts, tokens, or hidden states.
+- One measured pair loss does not determine an oracle mixture coefficient.
+  Model execution and counterfactual weight sweeps are explicit upstream work.
 - CAL-007 candidates use one exact expert registry order. The anchor is first,
   every single expert is present, and only canonical sampled pairs follow.
 - Every candidate column uses the same finite loss definition and token shape.
@@ -731,6 +801,14 @@ each pair output to the configured token loss, and pass only the aligned loss
 tensors to `compute_pair_utilities()`. The plan is small JSON-compatible
 metadata, but persistent pair-loss serialization is not part of this slice.
 
+COM-003 uses the same offline boundary. A deterministic Dataset transform or
+evaluation loop measures oracle pair weights and passes only ordered scores,
+normalized targets, and CAL-003 plan indices to
+`fit_learned_mixture_head()`. The returned buffer-only head uses standalone
+safetensors serialization and can be moved with ordinary PyTorch module
+semantics. Package-manifest and configuration-driven model attachment remain
+separate work.
+
 CAL-004 is an offline CPU fitting transform over those cached tensors. It
 returns the existing RTR-002 router-head type, which can be serialized with
 `save_safetensors()` and installed or uploaded later without carrying the
@@ -772,6 +850,7 @@ from anchored_moe import (
     CalibratedRouterPackageConfig,
     DomainLabelBank,
     IdentityRouterFeatureExtractor,
+    MixtureWeightFittingConfig,
     RouterFeatureBank,
     UtilityLabelBank,
     calibrate_temperature_and_thresholds,
@@ -779,6 +858,7 @@ from anchored_moe import (
     derive_calibrated_router_package,
     evaluate_counterfactual_oracle,
     fit_independent_ridge,
+    fit_learned_mixture_head,
     plan_expert_pairs,
     recalibrate_global_router,
     refine_stability_margins,
@@ -889,6 +969,19 @@ useful_pairs = pair_utility.pair_beats_best_single(
     minimum_margin=0.01,
 )
 
+mixture_head, mixture_report = fit_learned_mixture_head(
+    pair_plan,
+    selected_scores=ordered_pair_scores,
+    target_weights=measured_oracle_weights,
+    pair_indices=plan_local_pair_indices,
+    config=MixtureWeightFittingConfig(
+        learning_rate=5e-2,
+        optimization_steps=256,
+        l2_weight=1e-4,
+    ),
+)
+mixture_head.save_safetensors("learned-mixture-head.safetensors")
+
 route_losses = pair_utility.to_counterfactual_route_losses()
 oracle = evaluate_counterfactual_oracle(
     route_losses,
@@ -914,6 +1007,8 @@ global recalibration followed by PKG-005 persistence and exact explicit
 registry activation.
 See `examples/verify_pair_utilities.py` for bounded SHA-256 pair planning,
 pair utility, strict mixture margins, best-pair targets, and CAL-007 handoff.
+See `examples/verify_learned_mixture_weights.py` for COM-003 oracle-target
+fitting, immutable reports, learned activation combination, and safe reload.
 See `examples/verify_top1_top2_oracle.py` for sparse candidate construction,
 deterministic oracle selection, router regret, and top-1/top-2 comparison.
 See `examples/fit_router.py` and
@@ -929,6 +1024,10 @@ derivation and PKG-007 materialization.
   provenance.
 - [FIPS 180-4, Secure Hash Standard](https://doi.org/10.6028/NIST.FIPS.180-4)
   defines SHA-256 used for metadata and tensor integrity.
+- [PyTorch `binary_cross_entropy_with_logits` documentation](https://docs.pytorch.org/docs/stable/generated/torch.nn.functional.binary_cross_entropy_with_logits.html)
+  defines the stable soft-target objective used for COM-003 oracle weights.
+- [PyTorch `Adam` documentation](https://docs.pytorch.org/docs/stable/generated/torch.optim.Adam.html)
+  defines the optimizer used by COM-003's deterministic full-batch CPU fit.
 - Hoerl and Kennard,
   [Ridge Regression: Biased Estimation for Nonorthogonal Problems](https://doi.org/10.1080/00401706.1970.10488634),
   motivate the positive \(L_2\) penalty used by CAL-004. This implementation
@@ -946,13 +1045,16 @@ derivation and PKG-007 materialization.
   defines frozen router features, shared reference banks, domain labels,
   forced-path individual and pair utility, mixture-improvement margins,
   bounded pair sampling, per-head temperatures and thresholds,
-  false-activation budgets, counterfactual route oracles, router regret, and
-  deterministic calibration.
+  false-activation budgets, separate learned mixture scores, counterfactual
+  route oracles, router regret, and deterministic calibration.
 
 CAL-001 and CAL-002 are framework infrastructure and do not derive an
 optimization algorithm from a paper.
 CAL-003's SHA-256-ranked bounded sampling and loss arithmetic are also
 framework infrastructure rather than a paper-derived algorithm.
+COM-003's affine soft-target fitting objective, deterministic optimizer,
+neutral acceptance gate, and explicit oracle-target boundary are
+project-specific framework choices rather than a paper-derived algorithm.
 CAL-006 implements the blueprint's project-specific hinge equations. Its
 full-batch optimizer, proximal drift term, candidate-only ownership boundary,
 and post-refinement report are documented implementation choices rather than
@@ -989,6 +1091,14 @@ invalid budgets and identities, anchor utility, improvement over best single,
 strict mixture margins, stable best-pair ties, source immutability, defensive
 CPU storage, CAL-007 conversion, COM-001 and EVAL-004 integration, public
 documentation, and executable example behavior.
+
+COM-003 tests cover CAL-003 plan-index alignment, ordered score/target
+validation, normalized oracle weights, deterministic full-batch fitting,
+neutral-initialization acceptance, final loss and weight error, input
+immutability, tensor digests, per-pair counts, strict JSON report round trips,
+frozen storage-independent deployment, score and activation gradients,
+safetensors round trips and malformed payload rejection, INF-002 route
+invariance, public documentation, and executable example behavior.
 
 CAL-004 tests cover the centered closed-form solution, unregularized
 intercepts, positive regularization, rank-deficient features, multiple layers

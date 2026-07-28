@@ -10,10 +10,11 @@ arity, and POL-005 chooses a globally ranked top-2 pair restricted by explicit
 PKG-003 compatibility groups. POL-006 chooses a confidence-qualified
 specialist prefix under an explicit per-token maximum-expert budget. COM-001
 combines an approved specialist pair with score-softmax weights, COM-002
-supplies equal-weight and normalized-positive-evidence baselines, and BAL-001
-rewrites unavailable top-1 experts to the anchor. BAL-002 consumes an approved
-top-2 pair and degrades it deterministically to its available survivor or the
-anchor.
+supplies equal-weight and normalized-positive-evidence baselines, and COM-003
+uses a separately fitted frozen affine head to produce mixture weights without
+changing pair selection. BAL-001 rewrites unavailable top-1 experts to the
+anchor. BAL-002 consumes an approved top-2 pair and degrades it
+deterministically to its available survivor or the anchor.
 
 This subpackage does not extract router features, produce or fit expert scores,
 attach experts, execute MLPs, dispatch tokens, estimate serving capacity,
@@ -33,6 +34,7 @@ evaluation features.
 | COM-001 | `combination.policy: score_softmax` | `combination.py` | Validated |
 | COM-002 | `combination.policy: equal_weight` | `combination.py` | Validated |
 | COM-002 | `combination.policy: normalized_positive_evidence` | `combination.py` | Validated |
+| COM-003 | `combination.policy: learned_mixture_weight` | `learned_combination.py` | Validated |
 | BAL-001 | `capacity.overflow: anchor` | `capacity.py` | Validated |
 | BAL-002 | `capacity.degradation: top2_to_top1` | `capacity.py` | Validated |
 
@@ -64,7 +66,11 @@ specialist pairs and returns `ActivationCombinationResult`, containing the
 weighted activation and exact deployed weights. `EqualWeightCombination` and
 `NormalizedPositiveEvidenceCombination` preserve the same result contract so
 INF-002 can compare weighting strategies without changing selection, sparse
-execution, or output reconstruction.
+execution, or output reconstruction. `LearnedMixtureWeightHead` stores a
+buffer-only affine map from an ordered selected-score pair to separate mixing
+logits. `LearnedMixtureWeightCombination` deploys its normalized weights
+through the same result contract. The head's standalone safetensors artifact
+contains only finite coefficients and strict format metadata.
 
 ## Mathematical formulation
 
@@ -264,6 +270,24 @@ introduce a second policy. POL-002-approved pairs have \(g_i>0\) and \(g_j>0\),
 so the rejection protects standalone callers without affecting valid INF-002
 routes.
 
+COM-003 deliberately separates the score used to select a pair from the logit
+used to interpolate its outputs. For ordered selected scores
+\(s_t=[g_{t,1},g_{t,2}]^\top\),
+
+\[
+z_t=w^\top s_t+b,
+\qquad
+\alpha_t=\operatorname{softmax}([z_t,0]),
+\]
+
+\[
+y_t=\alpha_{t,1}E_1(h_t)+\alpha_{t,2}E_2(h_t).
+\]
+
+The fixed second logit makes the binary affine model identifiable. Pair order
+comes from the selection policy, so \(\alpha_{t,1}\) always applies to the
+first-ranked expert rather than to one global expert identity.
+
 For selected route \(r_t\) and availability
 \(C_{t,k}\in\{\mathrm{false},\mathrm{true}\}\), BAL-001 computes
 
@@ -387,6 +411,14 @@ Normalized-positive-evidence combination:
 4. Divide each evidence value by its pair total.
 5. Broadcast, combine, and return output and exact deployed weights.
 
+Learned mixture-weight combination:
+
+1. Apply the shared combination shape, dtype, device, and finite validation.
+2. Require the selected scores to match the frozen head's dtype and device.
+3. Compute one affine first-expert mixing logit from the ordered score pair.
+4. Append a fixed-zero second logit and apply stable pair softmax.
+5. Broadcast, combine, and return output and exact deployed weights.
+
 Capacity fallback:
 
 1. Treat omitted availability as all experts available.
@@ -455,6 +487,14 @@ Top-2 capacity degradation:
   and preserve gradients through strictly positive scores.
 - A normalized-positive-evidence pair must contain at least one strictly
   positive selected score.
+- COM-003 receives the exact ordered score pair that drove selection, but its
+  learned affine coefficients affect only mixture weights.
+- COM-003 deployment coefficients are immutable buffers with no trainable
+  parameters and no storage alias to fitting state.
+- The learned head requires score dtype/device equality. Callers move the
+  buffer-only head explicitly with ordinary PyTorch `.to(...)` semantics.
+- COM-003 does not infer oracle weights, execute counterfactual routes, or
+  identify an optimal coefficient from one CAL-003 pair-loss observation.
 - All combination strategies preserve the shared activation/score dtype and
   device and return exact deployed weights.
 - Selection and combination do not execute expert modules.
@@ -503,6 +543,7 @@ from anchored_moe import (
     CompatibilityConstrainedTop2Selection,
     DynamicKSelection,
     EqualWeightCombination,
+    LearnedMixtureWeightCombination,
     MixtureCompatibilityIndex,
     NormalizedPositiveEvidenceCombination,
     OverflowToAnchorCapacity,
@@ -571,17 +612,24 @@ evidence_baseline = NormalizedPositiveEvidenceCombination()(
     pair_ordered_expert_outputs,
     selected_scores=approved_scores,
 )
+learned_mixture = LearnedMixtureWeightCombination(fitted_mixture_head)(
+    pair_ordered_expert_outputs,
+    selected_scores=approved_scores,
+)
 ```
 
 The public strategy names are `anchored_top1`, `anchor_veto_top2`,
 `adaptive_top1_top2`, `global_compatibility_top2`, `dynamic_k`,
-`score_softmax`, `equal_weight`, `normalized_positive_evidence`, and
+`score_softmax`, `equal_weight`, `normalized_positive_evidence`,
+`learned_mixture_weight`, and
 `top2_to_top1`. See
 `examples/verify_anchored_top1.py`, `examples/verify_anchor_veto_top2.py`,
 `examples/verify_compatibility_top2.py`,
 `examples/verify_adaptive_selection.py`,
 `examples/verify_dynamic_k_selection.py`, and
 `examples/verify_combination_baselines.py` for deterministic integration.
+See `examples/verify_learned_mixture_weights.py` for COM-003 fitting,
+buffer-only deployment, activation combination, and safe reload.
 
 ## References
 
@@ -595,15 +643,16 @@ The public strategy names are `anchored_top1`, `anchor_veto_top2`,
 - [PyTorch `where` documentation](https://docs.pytorch.org/docs/stable/generated/torch.where.html)
   defines tokenwise replacement while comparing compatible pair candidates.
 - [PyTorch `softmax` documentation](https://docs.pytorch.org/docs/stable/generated/torch.nn.functional.softmax.html)
-  defines normalized exponentiation used for COM-001 mixture weights.
+  defines normalized exponentiation used for COM-001 and COM-003 mixture
+  weights.
 - [PyTorch `clamp` documentation](https://docs.pytorch.org/docs/stable/generated/torch.clamp.html)
   defines the positive-evidence clipping operation used by COM-002.
 - The repository
   [architecture blueprint](../../../anchored-plugin-moe-architecture.md)
   defines fixed-zero anchor evidence, anchored hard top-1, anchor-veto top-2,
   adaptive anchor/top-1/top-2, dynamic-\(k\) allocation, score-softmax
-  activation combination, both COM-002 baselines, and capacity-aware top-2
-  degradation.
+  activation combination, both COM-002 baselines, separate learned COM-003
+  mixing scores, and capacity-aware top-2 degradation.
 - [Harder Tasks Need More Experts: Dynamic Routing in MoE Models](https://arxiv.org/abs/2403.07652)
   motivates varying the number of active experts with routing confidence.
   POL-006 uses an explicit calibrated-score threshold rather than the paper's
@@ -613,11 +662,11 @@ The public strategy names are `anchored_top1`, `anchor_veto_top2`,
   selection metadata and a fixed per-token cap rather than learning token
   importance or a compute-allocation objective.
 
-POL-001, POL-002, POL-003, POL-005, COM-001, COM-002, BAL-001, and BAL-002
-are framework infrastructure and do not derive a training or optimization
-algorithm from a paper. POL-006 is paper-motivated, with its deterministic
-anchored threshold and per-token cap documented as project-specific
-differences.
+POL-001, POL-002, POL-003, POL-005, COM-001, COM-002, COM-003, BAL-001, and
+BAL-002 are framework infrastructure and do not derive a training or
+optimization algorithm from a paper. POL-006 is paper-motivated, with its
+deterministic anchored threshold and per-token cap documented as
+project-specific differences.
 
 ## Tests and known limitations
 
@@ -638,6 +687,16 @@ equal and positive-evidence weights and outputs, negative-score clipping,
 zero-evidence rejection, arbitrary shapes, dtype/device preservation, input
 immutability, expected score-gradient behavior, public docstrings, and
 composition through INF-002.
+
+COM-003 tests cover exact learned weights and activations, score and activation
+gradients, frozen buffer-only deployment, coefficient validation, dtype/device
+agreement, deterministic safetensors bytes, strict metadata and tensor
+schemas, overwrite protection, exact reload, deterministic fitting, report
+round trips, input immutability, CAL-003 plan alignment, malformed oracle
+targets, unchanged top-2 selection, INF-002 execution, public docstrings, and
+executable example behavior. Package-manifest integration, model-level
+configuration, counterfactual weight-grid execution, pair-identity features,
+and accelerator/distributed fitting remain future work.
 
 BAL-002 tests cover both-available retention, first- and second-ranked
 survivors, promotion into effective slot zero, neither-available anchor
