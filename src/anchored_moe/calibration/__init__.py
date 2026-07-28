@@ -11,6 +11,18 @@ from anchored_moe.calibration.labels import (
     LabelBankSerializationError,
     UtilityLabelBank,
 )
+from anchored_moe.calibration.oracle import (
+    CounterfactualOracleResult,
+    CounterfactualRoute,
+    CounterfactualRouteLosses,
+    evaluate_counterfactual_oracle,
+)
+from anchored_moe.calibration.pairs import (
+    PairSamplingPlan,
+    PairUtilityResult,
+    compute_pair_utilities,
+    plan_expert_pairs,
+)
 from anchored_moe.calibration.ridge import (
     RidgeFittingError,
     fit_independent_ridge,
@@ -24,9 +36,14 @@ from anchored_moe.calibration.temperature import (
 
 __all__ = [
     "DomainLabelBank",
+    "CounterfactualOracleResult",
+    "CounterfactualRoute",
+    "CounterfactualRouteLosses",
     "FeatureBankSerializationError",
     "HeadCalibrationReport",
     "LabelBankSerializationError",
+    "PairSamplingPlan",
+    "PairUtilityResult",
     "ROUTER_FEATURE_BANK_FORMAT_VERSION",
     "ROUTER_LABEL_BANK_FORMAT_VERSION",
     "RidgeFittingError",
@@ -35,5 +52,8 @@ __all__ = [
     "TemperatureThresholdCalibrationReport",
     "UtilityLabelBank",
     "calibrate_temperature_and_thresholds",
+    "compute_pair_utilities",
+    "evaluate_counterfactual_oracle",
     "fit_independent_ridge",
+    "plan_expert_pairs",
 ]

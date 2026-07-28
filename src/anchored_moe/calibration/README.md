@@ -9,7 +9,10 @@ individual-expert utility targets aligned to that reference bank. CAL-004
 fits independent affine router heads from aligned features and utility targets
 using deterministic ridge regression. CAL-005 calibrates those heads with
 per-head binary temperature scaling and held-out false-activation-constrained
-threshold selection.
+threshold selection. CAL-007 defines a sparse counterfactual route-loss table
+and evaluates router regret against a deterministic anchor-first oracle.
+CAL-003 supplies deterministic bounded pair plans plus pair utility and
+improvement-over-best-single targets from aligned precomputed losses.
 
 NB-004 composes the validated CAL-004/CAL-005 outputs with an immutable
 NB-003 expert-only package. Its registry-owned artifact boundary verifies the
@@ -17,9 +20,10 @@ exact feature space, data identities, expert/head topology, and report before
 publishing a new router-bearing package version.
 
 This subpackage does not extract hidden states through model hooks, execute
-counterfactual model paths, construct pair utilities, refine stability margins,
-or install packages. Those responsibilities remain with CAL-003, CAL-006,
-CAL-007, model backends, routers, and the registry.
+counterfactual model paths, learn pair mixture weights, construct a persistent
+pair-utility bank, refine stability margins, or install packages. Those
+responsibilities remain with later calibration formats, CAL-006, model
+backends, routers, and the registry.
 
 ## Implemented strategies
 
@@ -27,8 +31,10 @@ CAL-007, model backends, routers, and the registry.
 |---|---|---|---|
 | CAL-001 | `router_feature_bank_format_version: 1` | `features.py` | Validated |
 | CAL-002 | `router_label_bank_format_version: 1` | `labels.py` | Validated |
+| CAL-003 | `plan_expert_pairs`, `compute_pair_utilities` | `pairs.py` | Validated |
 | CAL-004 | `fitting: independent_ridge`, `regularization: <positive float>` | `ridge.py` | Validated |
 | CAL-005 | `calibration: temperature_threshold`, `false_activation_rate: <0..1>` | `temperature.py` | Validated |
+| CAL-007 | `CounterfactualRouteLosses`, `evaluate_counterfactual_oracle` | `oracle.py` | Validated |
 | NB-004 | `CalibratedRouterPackageConfig`, `derive_calibrated_router_package` | `registry/export.py` | Validated |
 
 `RouterFeatureBank` is the immutable in-memory and safetensors-backed format.
@@ -45,6 +51,14 @@ new frozen router plus a JSON-compatible
 `TemperatureThresholdCalibrationReport`. Per-head metrics are represented by
 `HeadCalibrationReport`; `TemperatureThresholdCalibrationError` reports
 numerically unusable calibration results.
+`CounterfactualRouteLosses` owns detached CPU losses for the anchor, every
+single expert, and an explicit sparse set of evaluated pairs.
+`evaluate_counterfactual_oracle` returns the minimum-loss candidate,
+selected-route loss, and regret without executing model paths.
+`PairSamplingPlan` records the exact bounded or exhaustive pair set, seed, and
+registry order. `PairUtilityResult` exposes pair advantage over the anchor,
+improvement over the best single expert, stable best-pair targets, a strict
+mixture-margin mask, and direct construction of `CounterfactualRouteLosses`.
 
 `derive_calibrated_router_package` does not refit either stage. It binds the
 already fitted frozen heads and complete report to immutable feature/utility
@@ -204,6 +218,82 @@ minimizes false-positive count, then selects the higher threshold. With no
 negative rows FAR is defined as zero; with no positive rows the tie rules
 select a conservative no-activation threshold.
 
+For \(K\) experts, CAL-003 considers the registry-ordered pair universe
+
+\[
+\mathcal P
+=
+\{(i,j)\mid 0\le i<j<K\},
+\qquad
+|\mathcal P|=\frac{K(K-1)}{2}.
+\]
+
+Bounded mode maps a deterministic SHA-256 stream derived from the seed to
+unique flat pair positions, keeps at most \(B\) pairs, and restores
+lexicographic registry order for the aligned loss columns. It does not
+materialize \(\mathcal P\) when \(B<|\mathcal P|\). Setting `max_pairs=None`
+explicitly selects all of \(\mathcal P\).
+
+For measured anchor loss \(L_{t,0}\), individual-expert losses \(L_{t,k}\),
+and sampled pair loss \(L_{t,i,j}\), pair utility is
+
+\[
+U^{A}_{t,i,j}=L_{t,0}-L_{t,i,j},
+\]
+
+while improvement over the best single expert is
+
+\[
+U^{S}_{t,i,j}
+=
+\min_k L_{t,k}-L_{t,i,j}.
+\]
+
+A pair passes the strict mixture acceptance gate with margin
+\(\delta_{\mathrm{mix}}\ge0\) when
+
+\[
+U^{S}_{t,i,j}>\delta_{\mathrm{mix}}.
+\]
+
+The sampled best pair is
+
+\[
+p_t^\star
+=
+\underset{(i,j)\in\mathcal S}{\arg\min}\ L_{t,i,j},
+\]
+
+where exact ties use lexicographic registry order. Sampling controls which
+pairs are measured; it never changes the stable order used by losses, targets,
+or tie-breaking.
+
+For CAL-007, let \(\mathcal C\) be the explicit candidate sequence containing
+the anchor, every single expert, and a sampled subset of expert pairs. For
+token or example \(t\), the table stores finite counterfactual losses
+
+\[
+L_{t,c},\qquad c\in\mathcal C.
+\]
+
+The deterministic oracle is
+
+\[
+c_t^\star=\underset{c\in\mathcal C}{\arg\min}\ L_{t,c}.
+\]
+
+Candidate order breaks exact loss ties: anchor first, then single experts in
+registry order, then sampled pairs in lexicographic registry order. If router
+policy \(\pi\) selected a table candidate \(c_t^\pi\), its regret is
+
+\[
+R_t^\pi=L_{t,c_t^\pi}-L_{t,c_t^\star}\ge 0.
+\]
+
+All single routes are required, while pair routes may remain sparse. This
+keeps top-1 regret well-defined without silently performing exhaustive
+\(O(K^2)\) pair evaluation.
+
 For expert-only source package \(P_E\), calibrated router \(R\), fitting-bank
 identity \(d_F\), calibration-bank identity \(d_C\), and report \(Q\), NB-004
 publishes a new package
@@ -310,6 +400,31 @@ Temperature and threshold calibration:
 10. Return canonical row partitions and per-head losses, counts, rates,
     statuses, temperatures, and thresholds in a JSON-compatible report.
 
+Pair planning and utility construction:
+
+1. Require at least two unique experts in stable registry order.
+2. compute \(K(K-1)/2\) without enumerating candidates;
+3. in bounded mode, map SHA-256 `(seed, counter)` values without modulo bias
+   to unique flat pair positions and restore lexicographic registry order;
+4. in explicit exhaustive mode, enumerate every pair;
+5. require finite anchor, single, and pair losses with one token shape, dtype,
+   and device and exact registry/plan column counts;
+6. detach all losses into owned contiguous CPU storage;
+7. compute anchor utility and improvement over the best single expert;
+8. select best-pair columns with stable first-minimum ties;
+9. optionally apply a strict non-negative mixture-improvement margin;
+10. concatenate anchor, single, and sampled-pair losses into CAL-007 order
+    without recomputing them.
+
+Counterfactual oracle evaluation:
+
+1. Require canonical anchor and complete single-expert candidate columns.
+2. validate sparse pair identities in lexicographic registry order;
+3. detach finite losses into owned contiguous CPU storage;
+4. map the evaluated router route to one exact candidate column;
+5. use first-minimum `argmin` over the canonical columns;
+6. gather selected and oracle losses and report their non-negative difference.
+
 NB-004 package derivation:
 
 1. Require a strictly validated router-free NB-003 source package.
@@ -396,6 +511,29 @@ NB-004 package derivation:
   exact copies, global head order is preserved, and output heads are frozen.
 - Reports contain row IDs, calibration bounds, iteration count, losses,
   thresholds, counts, rates, and fallback statuses, but no prompt text.
+- CAL-003 requires at least two experts and defaults to at most 64 evaluated
+  pairs; exhaustive \(O(K^2)\) enumeration requires `max_pairs=None`.
+- Pair sampling depends only on the non-negative seed and exact registry
+  indices. It never reads or changes global pseudorandom state.
+- Sampled pair loss columns are restored to lexicographic registry order, so
+  data alignment and best-pair ties never depend on SHA-256 sampling rank.
+- Anchor, single, and pair losses have one finite floating-point dtype, device,
+  and token shape before their defensive CPU copies are created.
+- Pair utility is positive exactly when a pair reduces anchor loss. Pair
+  improvement is positive exactly when a pair beats every individual expert.
+- The mixture acceptance gate uses a strict comparison; equality with the
+  configured non-negative margin is rejected.
+- CAL-003 does not infer unevaluated pair losses or claim exhaustive optimality
+  for a bounded plan.
+- CAL-007 candidates use one exact expert registry order. The anchor is first,
+  every single expert is present, and only canonical sampled pairs follow.
+- Every candidate column uses the same finite loss definition and token shape.
+- CAL-007 detaches, clones, and moves loss storage to CPU; public accessors are
+  defensive and oracle evaluation never mutates caller tensors.
+- Oracle ties are deterministic and prefer the anchor, then lower-index
+  singles, then lower-index sampled pairs.
+- Regret compares only routes explicitly present in the table. An evaluated
+  router pair absent from the sparse table is an error, not an implicit loss.
 - NB-004 fitting and calibration banks use disjoint global row IDs.
 - Both NB-004 banks exactly match the source package's feature specification,
   converted layers, and expert order.
@@ -421,6 +559,17 @@ Domain strings can originate from a deterministic Dataset column. Utility
 targets can be built after a separate transform produces incumbent and forced
 expert loss tensors. Counterfactual model execution is intentionally not
 embedded in the data contract.
+
+CAL-007 likewise accepts loss tensors produced by an external deterministic
+Dataset transform or evaluation loop. It stores no logits, prompts, hidden
+states, or executable model objects. This keeps model-family execution behind
+the backend while the oracle remains a reusable CPU transform.
+
+CAL-003 operates at the same boundary. A caller may use COM-001 or another
+declared combination policy inside a deterministic Dataset transform, reduce
+each pair output to the configured token loss, and pass only the aligned loss
+tensors to `compute_pair_utilities()`. The plan is small JSON-compatible
+metadata, but persistent pair-loss serialization is not part of this slice.
 
 CAL-004 is an offline CPU fitting transform over those cached tensors. It
 returns the existing RTR-002 router-head type, which can be serialized with
@@ -457,8 +606,11 @@ from anchored_moe import (
     RouterFeatureBank,
     UtilityLabelBank,
     calibrate_temperature_and_thresholds,
+    compute_pair_utilities,
     derive_calibrated_router_package,
+    evaluate_counterfactual_oracle,
     fit_independent_ridge,
+    plan_expert_pairs,
 )
 
 extractor = IdentityRouterFeatureExtractor(feature_size=4096)
@@ -525,6 +677,29 @@ routed_package = derive_calibrated_router_package(
         runtime_versions=runtime_versions,
     ),
 )
+
+pair_plan = plan_expert_pairs(
+    ("code", "math", "bio"),
+    max_pairs=2,
+    seed=13,
+)
+pair_utility = compute_pair_utilities(
+    pair_plan,
+    anchor_losses=anchor_losses,
+    single_losses=single_losses,
+    pair_losses=measured_pair_losses,
+    loss_name="cross_entropy",
+)
+useful_pairs = pair_utility.pair_beats_best_single(
+    minimum_margin=0.01,
+)
+
+route_losses = pair_utility.to_counterfactual_route_losses()
+oracle = evaluate_counterfactual_oracle(
+    route_losses,
+    selected_candidate_indices,
+)
+print(oracle.mean_regret)
 ```
 
 See `examples/verify_router_feature_bank.py` for deterministic collection,
@@ -536,6 +711,10 @@ and anchored top-1 selection without model downloads.
 See `examples/verify_temperature_thresholds.py` for separate fitting and
 held-out calibration banks, explicit row partitions, immutable calibration,
 budgeted threshold selection, and anchored top-1 routes.
+See `examples/verify_pair_utilities.py` for bounded SHA-256 pair planning,
+pair utility, strict mixture margins, best-pair targets, and CAL-007 handoff.
+See `examples/verify_top1_top2_oracle.py` for sparse candidate construction,
+deterministic oracle selection, router regret, and top-1/top-2 comparison.
 See `examples/fit_router.py` and
 `notebooks/03_fit_and_calibrate_router.ipynb` for immutable NB-004 package
 derivation and PKG-007 materialization.
@@ -564,12 +743,17 @@ derivation and PKG-007 materialization.
 - The repository
   [architecture blueprint](../../../anchored-plugin-moe-architecture.md)
   defines frozen router features, shared reference banks, domain labels,
-  forced-path individual utility, per-head temperatures and thresholds,
-  false-activation budgets, reproducibility metadata, and deterministic
-  calibration.
+  forced-path individual and pair utility, mixture-improvement margins,
+  bounded pair sampling, per-head temperatures and thresholds,
+  false-activation budgets, counterfactual route oracles, router regret, and
+  deterministic calibration.
 
 CAL-001 and CAL-002 are framework infrastructure and do not derive an
 optimization algorithm from a paper.
+CAL-003's SHA-256-ranked bounded sampling and loss arithmetic are also
+framework infrastructure rather than a paper-derived algorithm.
+CAL-007 is also framework evaluation infrastructure rather than a
+paper-derived algorithm.
 NB-004 only validates and packages CAL-004/CAL-005 outputs; it introduces no
 additional paper-derived fitting algorithm.
 
@@ -590,6 +774,13 @@ defensive accessors, exact domain and utility round trips, format separation,
 metadata and tensor tampering, router-order integration, and executable
 example behavior.
 
+CAL-003 tests cover deterministic SHA-256 bounded subsets, seed changes,
+explicit exhaustive enumeration, registry-order restoration, pair counts,
+invalid budgets and identities, anchor utility, improvement over best single,
+strict mixture margins, stable best-pair ties, source immutability, defensive
+CPU storage, CAL-007 conversion, COM-001 and EVAL-004 integration, public
+documentation, and executable example behavior.
+
 CAL-004 tests cover the centered closed-form solution, unregularized
 intercepts, positive regularization, rank-deficient features, multiple layers
 and experts, stable ordering, deterministic repeated fits, source
@@ -607,13 +798,20 @@ JSON-compatible reports, calibrated-head serialization, CAL-004 integration
 with a separate held-out bank, anchored top-1 routing, public documentation,
 and executable example behavior.
 
+CAL-007 tests cover canonical anchor/single/sparse-pair ordering, deterministic
+ties, selected-route lookup, non-negative regret, route agreement, defensive
+CPU storage, gradient detachment, malformed candidates, non-finite losses,
+shape and index validation, public documentation, policy integration, and the
+executable oracle example.
+
 NB-004 tests additionally cover immutable source bytes, deterministic derived
 identity, unchanged expert hashes, exact head/binding/report agreement,
 disjoint fit/calibration identities, router payload hashing, anchored
 anchor/expert decisions, strict reload, and PKG-007 materialization.
 
-The current formats have no automatic model hooks, counterfactual execution,
-pair utility, sharding, streaming writer, memory mapping, compression,
+The current formats have no automatic model hooks, counterfactual model
+execution, learned pair weights, serialized pair-utility bank, sharding,
+streaming writer, memory mapping, compression,
 distributed merge, joint multiclass calibration, confidence intervals, or
 stability-margin refinement. Domain-label ridge targets, weighted or
 incremental fitting, automatic data splitting, and model-integrated collection

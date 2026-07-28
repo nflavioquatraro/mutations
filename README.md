@@ -39,6 +39,13 @@ standalone weighted top-2 strategy primitives:
   affine router heads;
 - immutable per-head temperature scaling and held-out threshold selection
   under an explicit false-activation budget;
+- immutable sparse counterfactual route-loss tables with deterministic
+  anchor-first oracle selection and per-token router regret;
+- deterministic bounded or explicitly exhaustive expert-pair plans with
+  anchor utility, improvement-over-best-single targets, stable best-pair
+  selection, and direct counterfactual-table construction;
+- top-1/top-2 counterfactual comparison with best-single and best-pair loss,
+  second-expert gain, and destructive-mixture metrics;
 - opt-in sparse anchored top-1 execution for configured routed MLPs;
 - deterministic overflow-to-anchor fallback with no token dropping;
 - bounded privacy-safe route telemetry and exact route-agreement metrics;
@@ -97,6 +104,8 @@ python examples/verify_router_feature_bank.py
 python examples/verify_router_label_banks.py
 python examples/verify_independent_ridge.py
 python examples/verify_temperature_thresholds.py
+python examples/verify_pair_utilities.py
+python examples/verify_top1_top2_oracle.py
 python examples/verify_routed_top1.py
 python examples/verify_registry_lifecycle.py
 python examples/verify_package_runtime.py
