@@ -105,9 +105,12 @@ from anchored_moe.routers import (
     AffineRouterHead,
     AppendOnlyRouterHeads,
     IdentityRouterFeatureExtractor,
+    LogicalAppendOnlyRouter,
     RouterFeatureExtractor,
     RouterHead,
+    RouterScoreBank,
     RouterSerializationError,
+    compile_logical_router,
 )
 from anchored_moe.training import (
     ExpertObjectiveConfig,
@@ -241,6 +244,9 @@ def test_current_public_symbols_have_docstrings() -> None:
         RouterHead,
         AffineRouterHead,
         AppendOnlyRouterHeads,
+        LogicalAppendOnlyRouter,
+        RouterScoreBank,
+        compile_logical_router,
         RouterSerializationError,
         ForcedExpertBinding,
         ForcedPathExpertTrainer,

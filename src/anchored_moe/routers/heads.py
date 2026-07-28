@@ -14,7 +14,7 @@ from safetensors import safe_open
 from safetensors.torch import load_file, save_file
 from torch import Tensor, nn
 
-from anchored_moe.routers.base import RouterHead
+from anchored_moe.routers.base import RouterHead, RouterScoreBank
 
 
 _SERIALIZATION_FORMAT: Final = "anchored_moe.independent_affine_heads.v1"
@@ -126,7 +126,7 @@ class AffineRouterHead(RouterHead):
         )
 
 
-class AppendOnlyRouterHeads(nn.Module):
+class AppendOnlyRouterHeads(RouterScoreBank):
     """Own affine heads in stable append order without replacement or removal.
 
     Heads are keyed by ``(layer_index, expert_id)`` and stored in global append

@@ -24,8 +24,7 @@ from anchored_moe.registry.registry import (
     ExpertRegistry,
     RegistryChange,
 )
-from anchored_moe.routers.base import RouterFeatureExtractor
-from anchored_moe.routers.heads import AppendOnlyRouterHeads
+from anchored_moe.routers.base import RouterFeatureExtractor, RouterScoreBank
 from anchored_moe.utils.hashing import sha256_json
 
 if TYPE_CHECKING:
@@ -39,8 +38,8 @@ class RoutedMLP(nn.Module):
     foundation behavior is therefore exactly one call to the same anchor
     module; it performs no arithmetic, routing, or tensor reshaping around the
     call. :meth:`configure_anchored_top1` can attach independently constructed
-    router features, affine heads, and experts for one routed layer. Until that
-    explicit call, forced-anchor behavior remains exact.
+    router features, an ordered router score bank, and experts for one routed
+    layer. Until that explicit call, forced-anchor behavior remains exact.
 
     Args:
         anchor_mlp: Original dense MLP module owned by the converted layer.
@@ -67,7 +66,7 @@ class RoutedMLP(nn.Module):
         self.layer_index: int | None = None
         self.expert_ids: tuple[str, ...] = ()
         self.router_feature_extractor: RouterFeatureExtractor | None = None
-        self.router_heads: AppendOnlyRouterHeads | None = None
+        self.router_heads: RouterScoreBank | None = None
         self.experts = nn.ModuleList()
         self._dispatcher: AnchoredTop1Dispatcher | None = None
         self._route_telemetry: RouteTelemetry | None = None
@@ -83,7 +82,7 @@ class RoutedMLP(nn.Module):
         *,
         layer_index: int,
         router_feature_extractor: RouterFeatureExtractor,
-        router_heads: AppendOnlyRouterHeads,
+        router_heads: RouterScoreBank,
         experts: Mapping[str, Expert],
         capacity_policy: OverflowToAnchorCapacity | None = None,
         route_telemetry: RouteTelemetry | None = None,
@@ -96,8 +95,8 @@ class RoutedMLP(nn.Module):
             router_feature_extractor:
                 Frozen transformation from pre-MLP states to router features.
             router_heads:
-                Affine head bank containing exactly one head at this layer for
-                each attached expert.
+                Score bank containing exactly one ordered score column at this
+                layer for each attached expert.
             experts:
                 Mapping from stable expert ID to independent expert module.
                 Execution order follows router append order, not mapping order.
@@ -189,7 +188,7 @@ class RoutedMLP(nn.Module):
         *,
         layer_index: int,
         router_feature_extractor: RouterFeatureExtractor,
-        router_heads: AppendOnlyRouterHeads,
+        router_heads: RouterScoreBank,
         experts: Mapping[str, Expert],
         capacity_policy: OverflowToAnchorCapacity | None = None,
         route_telemetry: RouteTelemetry | None = None,
@@ -204,7 +203,7 @@ class RoutedMLP(nn.Module):
         Args:
             layer_index: Zero-based decoder layer represented by this wrapper.
             router_feature_extractor: Frozen pre-MLP feature transformation.
-            router_heads: Complete affine-head bank for the new active registry.
+            router_heads: Complete ordered score bank for the active registry.
             experts: Complete expert mapping for the new active registry.
             capacity_policy: Optional overflow-to-anchor capacity policy.
             route_telemetry: Optional recorder owned by this layer.
@@ -236,7 +235,7 @@ class RoutedMLP(nn.Module):
         *,
         layer_index: int,
         router_feature_extractor: RouterFeatureExtractor,
-        router_heads: AppendOnlyRouterHeads,
+        router_heads: RouterScoreBank,
         experts: Mapping[str, Expert],
         capacity_policy: OverflowToAnchorCapacity | None,
         route_telemetry: RouteTelemetry | None,
@@ -253,11 +252,11 @@ class RoutedMLP(nn.Module):
             raise TypeError(
                 "router_feature_extractor must be a RouterFeatureExtractor."
             )
-        if not isinstance(router_heads, AppendOnlyRouterHeads):
-            raise TypeError("router_heads must be AppendOnlyRouterHeads.")
+        if not isinstance(router_heads, RouterScoreBank):
+            raise TypeError("router_heads must implement RouterScoreBank.")
         if router_feature_extractor.output_size != router_heads.feature_size:
             raise ValueError(
-                "Router feature output size must match affine heads: "
+                "Router feature output size must match the score bank: "
                 f"{router_feature_extractor.output_size} != "
                 f"{router_heads.feature_size}."
             )
@@ -272,7 +271,7 @@ class RoutedMLP(nn.Module):
         expert_ids = router_heads.expert_ids_for_layer(layer_index)
         if set(experts) != set(expert_ids) or len(experts) != len(expert_ids):
             raise ValueError(
-                "Attached expert IDs must exactly match router heads at layer "
+                "Attached expert IDs must exactly match router scores at layer "
                 f"{layer_index}: {tuple(experts)} != {expert_ids}."
             )
         if route_telemetry is not None:

@@ -12,7 +12,9 @@ activation combination through a standalone model-family-neutral dispatcher.
 POL-002 supplies ordinary anchor-veto selection and POL-005 supplies
 compatibility-constrained selection. COM-001 score-softmax remains the
 default, while COM-002 supplies two baselines. PKG-007 safely materializes
-top-1 runtime objects from active local packages.
+top-1 runtime objects from active local packages. During that materialization,
+RTR-003 compiles package-owned independent affine heads into one frozen
+logical score bank per routed layer.
 
 It does not install packages implicitly, estimate serving capacity, attach
 top-2 dispatch to `RoutedMLP`, construct compatibility metadata, or manage
@@ -163,9 +165,11 @@ Registry synchronization:
 5. Parse the explicit payload bindings; never derive ownership from filenames.
 6. Load and validate every router bank and require exact router/binding keys.
 7. Materialize every expert against its layer's immutable anchor structure.
-8. Build all layer runtimes and validate dtype, device, ordering, and model
+8. Compile each complete layer's package-owned affine heads into a frozen
+   RTR-003 logical router with copied, non-aliased buffers.
+9. Build all layer runtimes and validate dtype, device, ordering, and model
    layer coverage before replacing any existing routed runtime.
-9. Return a `RegistryCompositionReport` containing registry identity and
+10. Return a `RegistryCompositionReport` containing registry identity and
    applied expert order.
 
 ## Assumptions and invariants
@@ -186,7 +190,8 @@ Registry synchronization:
   non-negative sum-to-one weights for approved tokens.
 - INF-002 does not check capacity. Pair compatibility is enforced only by a
   configured compatibility-constrained policy; the dispatcher never infers it.
-- The feature extractor and router heads are frozen at inference attachment.
+- The feature extractor and `RouterScoreBank` are frozen at inference
+  attachment.
 - Existing expert gradient flags are preserved.
 - Anchor and expert outputs must share trailing shape, dtype, and device.
 - Input token order is restored deterministically.
@@ -202,6 +207,8 @@ Registry synchronization:
   a distinct, explicit API call.
 - Active package order and serialized router-head order determine runtime
   append order.
+- Package payloads retain RTR-002 independent-head serialization; the active
+  registry uses an RTR-003 compiled copy with no source-storage aliases.
 - Binding keys and router keys must match exactly.
 - Missing bindings, duplicate expert IDs, unsupported strategies, layer
   mismatches, or incompatible tensor schemas fail before wrapper mutation.

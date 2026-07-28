@@ -22,6 +22,8 @@ standalone weighted top-2 strategy primitives:
 - frozen identity router features over pre-MLP hidden states;
 - independent append-only affine router heads with calibrated scores and
   strict, deterministic safetensors serialization;
+- a frozen registry-level logical router that compiles independent heads into
+  layer-local append-only matrices while preserving incumbent scores exactly;
 - anchored hard top-1 selection with fixed-zero anchor evidence and stable
   anchor-first tie-breaking;
 - deterministic anchor-veto top-2 selection with temperature-scaled
@@ -104,6 +106,7 @@ python examples/verify_dense_equivalence.py
 python examples/inspect_expert_package.py
 python examples/verify_full_mlp_expert.py
 python examples/verify_affine_router.py
+python examples/verify_logical_router.py
 python examples/verify_anchored_top1.py
 python examples/verify_anchor_veto_top2.py
 python examples/verify_compatibility_top2.py

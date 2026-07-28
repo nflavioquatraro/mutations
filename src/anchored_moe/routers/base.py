@@ -46,3 +46,28 @@ class RouterHead(nn.Module, ABC):
     @abstractmethod
     def forward(self, features: Tensor) -> Tensor:
         """Return one scalar score per feature vector."""
+
+
+class RouterScoreBank(nn.Module, ABC):
+    """Score an ordered set of experts from frozen router features.
+
+    Implementations accept features ``[..., feature_size]`` for one decoder
+    layer and return calibrated specialist scores ``[..., K_l]`` in the same
+    order reported by :meth:`expert_ids_for_layer`. The interface owns neither
+    fixed-zero anchor evidence, route selection, expert execution, nor output
+    combination.
+
+    A score bank may retain independently owned heads or compile them into one
+    logical matrix. Runtime callers depend on this behavioral contract rather
+    than either storage representation.
+    """
+
+    feature_size: int
+
+    @abstractmethod
+    def expert_ids_for_layer(self, layer_index: int) -> tuple[str, ...]:
+        """Return layer-local expert identifiers in deterministic score order."""
+
+    @abstractmethod
+    def forward(self, features: Tensor, *, layer_index: int) -> Tensor:
+        """Return calibrated scores with shape ``features.shape[:-1] + (K_l,)``."""

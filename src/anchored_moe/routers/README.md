@@ -2,9 +2,11 @@
 
 ## Scope
 
-The routers subpackage owns frozen feature transformations and independently
-owned score heads. RTR-001 defines the initial pre-MLP feature space. RTR-002
-maps those features to calibrated scalar evidence for an expert at one layer.
+The routers subpackage owns frozen feature transformations, independently
+owned score heads, and registry-level logical score banks. RTR-001 defines the
+initial pre-MLP feature space. RTR-002 maps those features to calibrated scalar
+evidence for an expert at one layer. RTR-003 compiles those package-owned heads
+into frozen layer-local matrices without changing the package wire format.
 
 This subpackage does not choose between the anchor and experts, execute an MLP,
 combine expert outputs, fit calibration parameters, cache features, enforce
@@ -18,10 +20,13 @@ features.
 |---|---|---|---|
 | RTR-001 | `feature_type: identity`, `input: pre_mlp_hidden_state` | `base.py`, `features.py` | Validated |
 | RTR-002 | `router_architecture: independent_affine_heads` | `base.py`, `heads.py` | Validated |
+| RTR-003 | `router_architecture: logical_append_only_columns` | `base.py`, `logical.py` | Validated |
 
-`RouterFeatureExtractor` and `RouterHead` are model-family-neutral extension
-interfaces. `IdentityRouterFeatureExtractor`, `AffineRouterHead`, and
-`AppendOnlyRouterHeads` provide the first concrete implementations.
+`RouterFeatureExtractor`, `RouterHead`, and `RouterScoreBank` are
+model-family-neutral extension interfaces. `IdentityRouterFeatureExtractor`,
+`AffineRouterHead`, `AppendOnlyRouterHeads`, and `LogicalAppendOnlyRouter`
+provide the concrete implementations. `compile_logical_router()` makes the
+package-head-to-registry-runtime boundary explicit.
 
 ## Mathematical formulation
 
@@ -70,6 +75,32 @@ G_\ell(h)
 \in\mathbb{R}^{B\times S\times K_\ell}.
 \]
 
+RTR-003 stores the same layer-local coefficients as
+
+\[
+W_\ell =
+\begin{bmatrix}
+w_{\ell,1}^{\top}\\
+\vdots\\
+w_{\ell,K_\ell}^{\top}
+\end{bmatrix}
+\in\mathbb{R}^{K_\ell\times d},
+\]
+
+\[
+b_\ell,T_\ell,\tau_\ell\in\mathbb{R}^{K_\ell},
+\qquad
+G_\ell(h)
+=
+\frac{\phi_\ell(h)W_\ell^\top+b_\ell}{T_\ell}-\tau_\ell.
+\]
+
+The division and subtraction are elementwise along the final expert
+dimension. The logical router registers these tensors as frozen buffers rather
+than trainable parameters. Its result has the same
+\(B\times S\times K_\ell\) shape, expert IDs, and calibrated values as the
+independent source heads.
+
 The anchor score remains defined by the architecture as
 \(g_{\ell,0}(h)=0\), but this subpackage does not yet compare expert scores
 against it.
@@ -115,6 +146,26 @@ Safetensors loading:
 4. validate tensor keys, shapes, dtypes, and finite values;
 5. load tensors strictly and apply the requested trainability.
 
+Logical compilation:
+
+1. Require an RTR-002 `AppendOnlyRouterHeads` source.
+2. Visit heads in global append order and validate feature width, ownership,
+   dtype, device, and finite tensor values.
+3. Clone each affine row and calibration scalar so compiled buffers never
+   alias package-owned parameters.
+4. Group copied rows by decoder layer while retaining globally filtered expert
+   order.
+5. Evaluate every row with a stable `[1, d]` affine reduction and stack the
+   results. This deliberately prevents a wider GEMM selected after append from
+   changing incumbent floating-point results.
+
+Logical append:
+
+1. Validate the complete candidate before changing registered state.
+2. Concatenate its copied row and calibration scalars to the target layer.
+3. Append its ownership key only after tensor registration succeeds.
+4. Leave every incumbent value, source head, and source storage unchanged.
+
 ## Assumptions and invariants
 
 - Router input is the pre-MLP hidden state.
@@ -132,21 +183,32 @@ Safetensors loading:
 - Appending cannot replace or remove an existing head and does not mutate its
   parameters.
 - Layer-local score columns follow stable global append order.
+- Both RTR-002 and RTR-003 implement `RouterScoreBank`; routed inference does
+  not depend on their storage representation.
+- Logical-router buffers never alias their source heads and contain no
+  trainable parameters.
+- Gradients through logical-router input features are preserved.
+- Appending a logical column preserves incumbent scores bit-for-bit for
+  identical inputs, dtype, device, and backend.
+- Logical compilation rejects non-finite state even before serialization.
 - Router payloads contain no executable Python content.
 - Router tensor payloads are finite, floating-point, and schema-validated.
 - Existing payloads are not overwritten unless `overwrite=True`.
 
-The append-only guarantee covers the act of appending. A caller that retains a
-mutable head reference can still train that head explicitly. Package
-installation will later freeze old heads mechanically.
+The RTR-002 append-only guarantee covers the act of appending. A caller that
+retains a mutable head reference can still train that head explicitly. RTR-003
+instead copies and freezes all compiled state, so later source-head training
+does not change deployed scores.
 
 ## Hugging Face integration
 
 The implementations are ordinary `torch.nn.Module` objects and accept hidden
-states produced by Transformers decoder layers. They do not patch a model
-family or alter generation behavior. `RoutedMLP` integration is intentionally
-deferred until a selection policy exists, so the current forced-anchor path
-remains exact.
+states produced by Transformers decoder layers. `RoutedMLP` depends on the
+shared `RouterScoreBank` contract and therefore accepts either RTR-002 heads or
+an RTR-003 logical router without changing selection or dispatch behavior.
+Explicit registry synchronization validates package-owned RTR-002 payloads,
+then compiles each complete layer into RTR-003 before replacing routed runtime
+references. The forced-anchor path remains exact.
 
 Router safetensors files can be listed under `router_files` in an
 `ExpertPackageManifest`. The matching manifest values are:
@@ -160,6 +222,10 @@ router_feature_specification:
   version: 1
 ```
 
+`logical_append_only_columns` describes the in-memory registry runtime, not a
+package manifest or new payload format. Registry-specific router persistence
+is deferred to PKG-005.
+
 ## Configuration and examples
 
 ```python
@@ -167,6 +233,7 @@ from anchored_moe import (
     AffineRouterHead,
     AppendOnlyRouterHeads,
     IdentityRouterFeatureExtractor,
+    compile_logical_router,
 )
 
 features = IdentityRouterFeatureExtractor(feature_size=4096)(hidden_states)
@@ -181,11 +248,15 @@ heads.append(
         threshold=0.0,
     )
 )
-scores = heads(features, layer_index=18)
+logical_router = compile_logical_router(heads)
+scores = logical_router(features, layer_index=18)
 ```
 
-See `examples/verify_affine_router.py` for deterministic scoring, append
-invariance, and safe serialization without model downloads.
+See `examples/verify_affine_router.py` for RTR-002 deterministic scoring,
+append invariance, and safe serialization. See
+`examples/verify_logical_router.py` for RTR-003 compilation, exact incumbent
+score preservation, frozen state, and routed execution. Neither example
+downloads model weights.
 
 `AnchoredMoEConfig` continues to reject non-anchor selection policies. INF-001
 allows router objects to be attached explicitly to one `RoutedMLP`; package
@@ -205,7 +276,7 @@ declarative model configuration can be executable.
   defines frozen router features, independent affine heads, calibrated scores,
   fixed-zero anchor evidence, and append-only installation.
 
-RTR-001 and RTR-002 are framework infrastructure and do not derive an
+RTR-001, RTR-002, and RTR-003 are framework infrastructure and do not derive an
 optimization algorithm from a paper.
 
 ## Tests and known limitations
@@ -214,10 +285,17 @@ Acceptance tests cover identity and gradient preservation, feature metadata,
 the calibrated score equation, tensor shapes, neutral initialization,
 trainability, append invariance, ownership uniqueness, deterministic layer
 ordering, exact safetensors round trips, overwrite protection, malformed
-metadata and tensor rejection, finite-value checks, and expert-package
-manifest compatibility.
+metadata and tensor rejection, finite-value checks, expert-package manifest
+compatibility, logical matrix shapes, source-storage independence, frozen
+compiled state, dtype migration, exact RTR-002 score parity, exact incumbent
+score preservation, and `RoutedMLP` plus package-synchronization integration.
 
 The current router implementation has no learned projection or head removal.
+RTR-003 uses shape-stable per-column affine evaluation to guarantee exact
+append invariance; it does not yet fuse all rows into one GEMM. It has no
+independent on-disk format and cannot be trained. RTR-004 will introduce
+explicit global recalibration semantics, while PKG-005 will own
+registry-specific router persistence.
 CAL-001 provides feature caches and
 CAL-004 fits utility-target affine heads in the calibration subpackage.
 CAL-005 calibrates their temperatures and thresholds without mutating affine

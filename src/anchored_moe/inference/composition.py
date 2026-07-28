@@ -22,6 +22,7 @@ from anchored_moe.routers.heads import (
     AppendOnlyRouterHeads,
     RouterSerializationError,
 )
+from anchored_moe.routers.logical import LogicalAppendOnlyRouter
 
 
 class PackageMaterializationError(ValueError):
@@ -87,7 +88,7 @@ class _LayerRuntime:
     layer_index: int
     wrapper: RoutedMLP
     feature_extractor: IdentityRouterFeatureExtractor
-    router_heads: AppendOnlyRouterHeads
+    router_heads: LogicalAppendOnlyRouter
     experts: dict[str, FullMLPExpert]
 
 
@@ -352,7 +353,12 @@ def _materialize_registry(
                 layer_index=layer_index,
                 wrapper=wrappers[layer_index],
                 feature_extractor=IdentityRouterFeatureExtractor(feature_size),
-                router_heads=heads,
+                # RTR-002 remains the validated package representation. The
+                # active registry compiles it explicitly into the frozen
+                # registry-level RTR-003 scoring runtime.
+                router_heads=LogicalAppendOnlyRouter.from_independent_heads(
+                    heads
+                ),
                 experts=experts,
             )
         )

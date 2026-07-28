@@ -20,6 +20,7 @@ from anchored_moe import (
     ExpertPackageManifest,
     ExpertRegistry,
     FullMLPExpert,
+    LogicalAppendOnlyRouter,
     PackageMaterializationError,
     RoutedMLP,
     synchronize_anchored_top1_registry,
@@ -172,6 +173,13 @@ def test_package_install_sync_unload_and_reinsert_restore_model_routes(
     assert installed_report.expert_ids_by_layer == (
         (2, ("code:0",)),
         (3, ("code:0",)),
+    )
+    assert all(
+        isinstance(
+            tiny_qwen3_model.model.layers[layer_index].mlp.router_heads,
+            LogicalAppendOnlyRouter,
+        )
+        for layer_index in (2, 3)
     )
     assert not torch.equal(installed_logits, dense_logits)
 
