@@ -22,6 +22,8 @@ persists the exact active registry identity without serializing anchor weights.
 PKG-005 stores an RTR-004 result as a standalone safetensors artifact bound to
 the complete active `RegistrySnapshot`, feature specification, and
 recalibration report. Loading or activation never changes registry state.
+PKG-006 adds manifest-first Hugging Face Hub download and explicit upload while
+retaining strict local validation as the only package trust boundary.
 
 ## Implemented strategies
 
@@ -32,6 +34,7 @@ recalibration report. Loading or activation never changes registry state.
 | PKG-003 | `mixture_compatibility_group`, `MixtureCompatibilityIndex` | `compatibility.py`, `registry.py` | Validated |
 | PKG-004 | `ExpertRegistry.upgrade`, `ExpertRegistry.rollback`, `RegistryUpgradeChange` | `registry.py` | Validated |
 | PKG-005 | `RegistryRouterVersion`, `registry_router_version_format_version: 1` | `router_versions.py` | Validated |
+| PKG-006 | `ExpertPackage.from_pretrained`, `ExpertPackage.push_to_hub` | `package.py`, `hub.py` | Validated |
 | PKG-007 | `payload_binding_format_version: 1`, `ExpertPayloadBinding` | `bindings.py` | Validated |
 | CORE-006 | `AnchoredMoEForCausalLM.save_pretrained`, local composition `from_pretrained` | `composition.py`, `modeling.py` | Validated |
 | NB-003 | `ExpertPackageExportConfig`, `ExpertPackageExportBinding`, `export_full_mlp_expert_package` | `export.py` | Validated |
@@ -65,6 +68,25 @@ A package identity is the portable tuple
 \[
 p=(\text{specialization},\text{version},d_{\mathrm{manifest}}).
 \]
+
+For Hub repository \(R\), caller revision \(q\), resolved immutable commit
+\(c\), and manifest-declared transfer closure \(F(M)\), PKG-006 materializes
+
+\[
+P_{\mathrm{local}}
+=
+\operatorname{StrictValidate}
+\left(
+\operatorname{CopyRegularFiles}
+\left(
+\operatorname{HubSnapshot}(R,c,F(M))
+\right)
+\right).
+\]
+
+The transport provenance \((R,c)\) is recorded on the local descriptor but is
+excluded from \(p\): copying identical package bytes from another cache or
+repository does not change the package's portable content identity.
 
 For ordered active package identities \(P=[p_1,\ldots,p_n]\), registry format
 version \(v\), and no local filesystem paths, the active registry identity is
@@ -201,6 +223,37 @@ Package descriptor construction:
 4. Verify tracked payload hashes and safe formats.
 5. In strict mode, reject every untracked file and symbolic link.
 6. Store the resolved local path, immutable manifest, and validation report.
+
+Hub package download:
+
+1. Resolve an existing local directory without network access, rejecting
+   silently ignored Hub-only options.
+2. For a repository ID, use `snapshot_download()` to fetch only
+   `manifest.json` at the caller's revision.
+3. Require the documented snapshot cache layout and extract its immutable
+   40-character commit hash.
+4. Parse and validate the manifest, then issue a second request pinned to that
+   commit with an allow-list containing only the manifest and every
+   `package_hashes` path.
+5. Follow Hub-managed file symlinks only when they resolve inside that
+   repository's cache; copy bytes into a content-addressed regular-file asset
+   directory.
+6. Strictly validate the staged directory and publish it without overwriting an
+   existing cache entry. A racing existing entry is reused only after strict
+   validation.
+7. Return a normal `ExpertPackage` with non-identity repository and resolved
+   commit provenance.
+
+Hub package upload:
+
+1. Require a descriptor originally created with strict validation and
+   revalidate its live directory.
+2. Copy only `manifest.json` and manifest-tracked payloads into a private
+   staging directory.
+3. Strictly validate the copy and require the exact original package identity.
+4. Create or explicitly reuse a Hub model repository.
+5. Call `upload_folder()` with an exact allow-list and return its
+   `CommitInfo`; never install, synchronize, or mutate registry state.
 
 Installation:
 
@@ -406,6 +459,17 @@ Registry-specific router versions:
   install, unload, upgrade, and rollback operations remain registry-only.
 - Symbolic links, untracked files, unsafe package paths, modified
   configurations, and modified package payloads are rejected.
+- A Hub branch or tag is resolved once; payload transfer is pinned to the
+  resulting immutable commit.
+- Hub cache symlinks are transport-only and are never retained in an
+  `ExpertPackage` directory.
+- Remote files outside the manifest-declared closure are not downloaded or
+  uploaded by PKG-006.
+- Hub downloads require strict validation and use content-addressed package
+  asset directories that are never silently overwritten.
+- Upload revalidates a private regular-file snapshot before the first remote
+  mutation; authentication and authorization remain `huggingface_hub`
+  responsibilities.
 
 The registry validates compatibility between packages. CORE-006 also checks
 the live anchor configuration digest; exact anchor-weight and runtime-version
@@ -422,8 +486,20 @@ Registry router versions are standalone safetensors artifacts rather than
 ordinary Hub files, but PKG-005 performs no network access and requires the
 caller to validate and activate the exact local registry snapshot explicitly.
 
-`ExpertPackage.from_directory()` currently supports local directories only.
-`from_pretrained()` and Hub download behavior are deferred to PKG-006.
+`ExpertPackage.from_pretrained()` follows the familiar Hugging Face local-or-
+repository convention. Local directories delegate to `from_directory()`.
+Repository IDs use two `snapshot_download()` calls: manifest discovery at the
+requested revision followed by manifest-declared payload transfer at the
+resolved commit. `cache_dir`, `force_download`, `token`,
+`local_files_only`, and custom `endpoint` values are forwarded explicitly.
+The returned descriptor records `hub_repository` and the resolved
+`hub_revision` without changing its portable `PackageIdentity`.
+
+`ExpertPackage.push_to_hub()` uses `HfApi.create_repo()` and
+`HfApi.upload_folder()` only after staging and strictly revalidating an exact
+package-only copy. It supports explicit visibility, branch, pull-request, and
+existing-repository choices. It does not own login state, tokens, repository
+cards, composition checkpoints, or registry synchronization.
 `ExpertPackage.payload_bindings` exposes the validated materialization
 contract. The inference subpackage consumes it only during an explicit
 registry-to-model synchronization operation.
@@ -454,7 +530,8 @@ it does not write the anchor state dict. A matching
 validates it, loads the recorded anchor through `AutoModelForCausalLM`, rebuilds
 the registry, and restores the saved anchored-top-1 runtime. The optional
 `anchor_model_name_or_path` argument relocates an equivalent local anchor;
-configuration hashes still have to match. Hub transfer remains PKG-006.
+configuration hashes still have to match. Remote composition-checkpoint
+transfer remains outside PKG-006.
 
 `ExpertRegistry.mixture_compatibility(layer_index=...)` exposes PKG-003 without
 loading expert or router tensors. The resulting index is consumed by POL-005
@@ -462,6 +539,27 @@ and can be passed through INF-002 for standalone compatibility-aware sparse
 execution; model-level top-2 attachment remains a separate inference feature.
 
 ## Configuration and examples
+
+Hub transfer is explicit and revision-aware:
+
+```python
+from anchored_moe import ExpertPackage
+
+package = ExpertPackage.from_pretrained(
+    "organization/code-experts",
+    revision="0123456789abcdef0123456789abcdef01234567",
+)
+assert package.hub_revision == "0123456789abcdef0123456789abcdef01234567"
+
+commit = package.push_to_hub(
+    "organization/code-experts-1.0.0",
+    private=True,
+    commit_message="Publish immutable code expert package 1.0.0",
+)
+print(commit.commit_url)
+```
+
+Local lifecycle operations retain the same API:
 
 ```python
 from anchored_moe import ExpertPackage, ExpertRegistry
@@ -626,7 +724,9 @@ synchronization, slot-preserving upgrade, and exact rollback.
 `notebooks/02_train_expert_package.ipynb` exercise the NB-003 training/export
 boundary. `examples/fit_router.py` and
 `notebooks/03_fit_and_calibrate_router.ipynb` exercise NB-004 derivation and
-materialization.
+materialization. `examples/verify_package_hub.py` exercises PKG-006
+manifest-first pinned download and exact staged upload with offline fake
+transports, so validation never requires credentials or network access.
 
 ## References
 
@@ -639,6 +739,11 @@ materialization.
   motivates non-executable tensor payloads.
 - [Hugging Face Hub repository revisions](https://huggingface.co/docs/huggingface_hub/guides/download#download-files-from-the-hub)
   defines repository revision semantics.
+- [Hugging Face Hub download API](https://huggingface.co/docs/huggingface_hub/package_reference/file_download)
+  defines `snapshot_download`, allow-lists, offline cache resolution, and the
+  returned snapshot directory.
+- [Hugging Face Hub API client](https://huggingface.co/docs/huggingface_hub/package_reference/hf_api)
+  defines repository creation and folder upload behavior.
 - [FIPS PUB 180-4](https://csrc.nist.gov/pubs/fips/180-4/upd1/final)
   defines SHA-256.
 - [RFC 8785: JSON Canonicalization Scheme](https://www.rfc-editor.org/rfc/rfc8785)
@@ -647,7 +752,7 @@ materialization.
 - [Python `threading.RLock` documentation](https://docs.python.org/3/library/threading.html#rlock-objects)
   defines the synchronization primitive protecting registry state.
 
-PKG-001, PKG-002, PKG-003, PKG-004, PKG-005, PKG-007, CORE-006, NB-003 export,
+PKG-001, PKG-002, PKG-003, PKG-004, PKG-005, PKG-006, PKG-007, CORE-006, NB-003 export,
 NB-004 derivation, and the NB-007 lifecycle workflow are framework
 infrastructure and do not derive a training or optimization algorithm from a
 paper. NB-004
@@ -682,6 +787,14 @@ feature-size rejection, source-storage independence, fresh frozen activation,
 stale removal rejection, exact reinsertion restoration, public documentation,
 and the executable offline example.
 
+PKG-006 tests additionally cover network-free local resolution, manifest-first
+allow-lists, immutable revision pinning, regular-file package caching, exclusion
+of unrelated repository files, payload tampering, malformed snapshot layouts,
+escaping transport symlinks, exact staged upload bytes, strict-descriptor
+requirements, pre-mutation argument failures, source provenance, documentation,
+and the executable offline example. Tests mock only Hub transport and never use
+credentials or perform remote writes.
+
 PKG-007 materializes the supported binding contract in the inference
 subpackage. NB-003 does not fit or serialize a router, save optimizer state, or
 generate replay teacher labels. NB-004 supports one package-local independent
@@ -690,8 +803,9 @@ are not yet embedded in CORE-006 composition checkpoints. Persistent registry
 files, cross-process locking, exact
 live-model checkpoint hashing, runtime-version enforcement, rollback across an
 intervening registry change, historical inactive-slot persistence, standalone
-registry lifecycle persistence, optional anchor bundling, Hub transfer, and
-distributed lifecycle operations remain unsupported. CORE-006 restores only the active
+registry lifecycle persistence, optional anchor bundling, Hub transfer for
+composition checkpoints and registry-router artifacts, and distributed
+lifecycle operations remain unsupported. CORE-006 restores only the active
 registry snapshot; it does not retain inactive package content or rollback
 records. Consequently, NB-007 supplies the prior immutable package explicitly
 when rolling back after reload instead of implying that the composition

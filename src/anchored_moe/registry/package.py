@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from anchored_moe.registry.manifest import (
     DEFAULT_MANIFEST_FILENAME,
@@ -17,8 +18,12 @@ from anchored_moe.registry.bindings import (
     parse_expert_payload_bindings,
 )
 
+if TYPE_CHECKING:
+    from huggingface_hub import CommitInfo
+
 
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+_HUB_COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 
 
 @dataclass(frozen=True, order=True)
@@ -85,20 +90,25 @@ class ExpertPackage:
         package_directory: Absolute resolved package root.
         validation_report: Result of strict payload validation.
         strict_validation: Whether untracked files were rejected.
+        hub_repository: Optional source Hub repository for a downloaded package.
+        hub_revision: Resolved immutable Hub commit for a downloaded package.
 
     Construct descriptors with :meth:`from_directory`; direct construction is
     validated but cannot prove that the report came from the supplied path.
     :class:`~anchored_moe.registry.ExpertRegistry` therefore revalidates the
     live directory immediately before every installation.
 
-    The descriptor does not load tensors, execute package code, attach experts
-    to a model, or fetch Hub content.
+    The descriptor does not load tensors, execute package code, or attach
+    experts to a model. Hub transport occurs only through the explicit class
+    and instance methods documented below.
     """
 
     manifest: ExpertPackageManifest
     package_directory: Path
     validation_report: PackageValidationReport
     strict_validation: bool
+    hub_repository: str | None = None
+    hub_revision: str | None = None
 
     def __post_init__(self) -> None:
         """Validate descriptor types, paths, and manifest/report identity."""
@@ -121,6 +131,26 @@ class ExpertPackage:
             )
         if not isinstance(self.strict_validation, bool):
             raise TypeError("strict_validation must be a boolean.")
+        if (self.hub_repository is None) != (self.hub_revision is None):
+            raise ValueError(
+                "hub_repository and hub_revision must be set together."
+            )
+        if self.hub_repository is not None and (
+            not isinstance(self.hub_repository, str)
+            or not self.hub_repository
+            or self.hub_repository != self.hub_repository.strip()
+        ):
+            raise ValueError(
+                "hub_repository must be a non-empty string without "
+                "surrounding whitespace."
+            )
+        if self.hub_revision is not None and (
+            not isinstance(self.hub_revision, str)
+            or _HUB_COMMIT_PATTERN.fullmatch(self.hub_revision) is None
+        ):
+            raise ValueError(
+                "hub_revision must be a lowercase 40-character commit hash."
+            )
         if (
             self.validation_report.manifest_sha256
             != self.manifest.manifest_sha256
@@ -183,6 +213,133 @@ class ExpertPackage:
             package_directory=package_root,
             validation_report=report,
             strict_validation=strict,
+        )
+
+    @classmethod
+    def from_pretrained(
+        cls,
+        pretrained_model_name_or_path: str | Path,
+        *,
+        revision: str | None = None,
+        cache_dir: str | Path | None = None,
+        force_download: bool = False,
+        token: str | bool | None = None,
+        local_files_only: bool = False,
+        strict: bool = True,
+        endpoint: str | None = None,
+    ) -> ExpertPackage:
+        """Resolve a strict local or Hugging Face Hub expert package.
+
+        Local directories delegate to :meth:`from_directory` without network
+        access. Hub repositories are resolved to one immutable commit, copied
+        from the Hub's symlink-based transport cache into a package-only asset
+        directory, and strictly revalidated before this method returns.
+
+        Args:
+            pretrained_model_name_or_path:
+                Existing local package directory or Hub model repository ID.
+            revision:
+                Optional Hub branch, tag, pull-request ref, or commit hash.
+            cache_dir:
+                Optional Hugging Face cache root.
+            force_download:
+                Whether Hub transport should refresh cached files.
+            token:
+                Hugging Face authentication token or token-selection flag.
+            local_files_only:
+                Whether Hub resolution must use already cached files.
+            strict:
+                Whether local directory closure is required. Remote packages
+                always require ``True``.
+            endpoint:
+                Optional Hugging Face-compatible Hub endpoint.
+
+        Returns:
+            A validated package whose ``hub_revision`` records the resolved
+            immutable commit for remote sources.
+
+        Raises:
+            PackageValidationError:
+                If local or downloaded package content is unsafe or invalid.
+            PackageHubError:
+                If Hub arguments or transport snapshot semantics are invalid.
+            huggingface_hub.errors.HfHubError:
+                If the Hub request or cache lookup fails.
+        """
+
+        # Import lazily so package validation remains usable in minimal local
+        # environments and to avoid a module cycle with the Hub helper.
+        from anchored_moe.registry.hub import resolve_pretrained_package
+
+        return resolve_pretrained_package(
+            cls,
+            pretrained_model_name_or_path,
+            revision=revision,
+            cache_dir=cache_dir,
+            force_download=force_download,
+            token=token,
+            local_files_only=local_files_only,
+            strict=strict,
+            endpoint=endpoint,
+        )
+
+    def push_to_hub(
+        self,
+        repo_id: str,
+        *,
+        token: str | bool | None = None,
+        private: bool | None = None,
+        commit_message: str | None = None,
+        revision: str | None = None,
+        create_pr: bool = False,
+        exist_ok: bool = False,
+        endpoint: str | None = None,
+    ) -> CommitInfo:
+        """Upload exactly this package's validated files to a Hub model repo.
+
+        The live package is revalidated, copied into a private package-only
+        staging directory, and revalidated again before any remote mutation.
+        Only ``manifest.json`` and manifest-tracked payloads are offered to the
+        Hub client. Authentication remains owned by ``huggingface_hub``.
+
+        Args:
+            repo_id: Destination model repository, such as ``"org/code-moe"``.
+            token: Hugging Face authentication token or token-selection flag.
+            private: Optional visibility used when creating the repository.
+            commit_message: Optional non-empty Hub commit title.
+            revision: Optional destination branch.
+            create_pr: Whether to upload through a new Hub pull request.
+            exist_ok: Whether an already existing repository may be used.
+            endpoint: Optional Hugging Face-compatible Hub endpoint.
+
+        Returns:
+            The ``huggingface_hub.CommitInfo`` returned by ``upload_folder``.
+
+        Raises:
+            PackageValidationError:
+                If package content changed or no longer validates strictly.
+            PackageHubError:
+                If upload arguments or descriptor provenance are unsafe.
+            huggingface_hub.errors.HfHubError:
+                If repository creation or upload fails.
+
+        Remote repository creation and upload are explicit external side
+        effects. A failed upload may leave a newly created empty repository;
+        package and registry state remain unchanged.
+        """
+
+        from anchored_moe.registry.hub import upload_pretrained_package
+
+        return upload_pretrained_package(
+            self,
+            repo_id,
+            token=token,
+            private=private,
+            commit_message=commit_message,
+            revision=revision,
+            create_pr=create_pr,
+            exist_ok=exist_ok,
+            endpoint=endpoint,
         )
 
     @property

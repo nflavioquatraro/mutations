@@ -30,6 +30,7 @@ from anchored_moe.registry.manifest import (
     PackageValidationError,
     PackageValidationReport,
 )
+from anchored_moe.registry.hub import PackageHubError
 from anchored_moe.registry.package import ExpertPackage, PackageIdentity
 from anchored_moe.registry.registry import (
     REGISTRY_FORMAT_VERSION,
@@ -66,6 +67,7 @@ __all__ = [
     "MixtureCompatibilityError",
     "MixtureCompatibilityIndex",
     "PackageIdentity",
+    "PackageHubError",
     "PackageValidationError",
     "PackageValidationReport",
     "RegistryChange",

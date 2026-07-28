@@ -85,6 +85,9 @@ standalone weighted top-2 strategy primitives:
 - bounded privacy-safe route telemetry and exact route-agreement metrics;
 - strictly validated local expert-package descriptors with atomic in-memory
   install, unload, stable ordering, compatibility binding, and registry hashes;
+- strict Hugging Face Hub expert-package download with manifest-first immutable
+  revision pinning, content-addressed regular-file caching, and explicit staged
+  upload of only manifest-tracked package files;
 - slot-preserving immutable package upgrades with exact, stale-safe rollback
   and no implicit model synchronization;
 - explicit versioned `(layer, expert_id)` payload bindings and safe local
@@ -122,8 +125,9 @@ Automatic model mutation during installation, capacity estimation, fallback
 beyond a selected pair, online replay-teacher execution,
 local mixtures larger than two experts, post-hoc mixture-aware refinement,
 model-integrated and
-package-driven top-2 execution, persistent registry storage, Hub transfer, and
-anchor-weight bundling are intentionally not implemented yet. Learned
+package-driven top-2 execution, persistent registry storage, remote composition
+checkpoint transfer, and anchor-weight bundling are intentionally not
+implemented yet. Learned
 mixture-head package binding and model-integrated oracle weight sweeps also
 remain explicit future work. Composition
 checkpoints retain the active registry snapshot but not inactive historical
@@ -174,6 +178,7 @@ python examples/verify_top1_top2_oracle.py
 python examples/evaluate_registry_strategies.py
 python examples/verify_routed_top1.py
 python examples/verify_registry_lifecycle.py
+python examples/verify_package_hub.py
 python examples/verify_package_runtime.py
 python examples/export_reload_lifecycle.py
 python examples/verify_forced_path_training.py

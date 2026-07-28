@@ -548,7 +548,8 @@ class AnchoredMoEForCausalLM(PreTrainedModel, GenerationMixin):
     CORE-006 saves a local composition checkpoint rather than a duplicate full
     model. The checkpoint references the exact external anchor, bundles active
     package directories, and restores the synchronized anchored-top-1 runtime.
-    Hub transfer and optional anchor bundling remain separate features.
+    Composition-checkpoint Hub transfer and optional anchor bundling remain
+    separate features; PKG-006 transfers individual expert packages only.
     """
 
     config_class = AnchoredMoEConfig
@@ -985,7 +986,8 @@ class AnchoredMoEForCausalLM(PreTrainedModel, GenerationMixin):
             )
         if push_to_hub:
             raise AnchoredModelError(
-                "Composition Hub publication is deferred to PKG-006."
+                "Composition Hub publication is outside PKG-006, which "
+                "transfers individual expert packages only."
             )
         if kwargs:
             names = ", ".join(sorted(kwargs))
