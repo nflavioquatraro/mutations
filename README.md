@@ -62,6 +62,8 @@ standalone weighted top-2 strategy primitives:
 - bounded privacy-safe route telemetry and exact route-agreement metrics;
 - strictly validated local expert-package descriptors with atomic in-memory
   install, unload, stable ordering, compatibility binding, and registry hashes;
+- slot-preserving immutable package upgrades with exact, stale-safe rollback
+  and no implicit model synchronization;
 - explicit versioned `(layer, expert_id)` payload bindings and safe local
   package materialization into converted anchored top-1 layers;
 - explicit registry-to-model synchronization with exact anchor restoration on
@@ -80,7 +82,7 @@ standalone weighted top-2 strategy primitives:
   provenance, exact expert-byte preservation, and strict runtime attachment;
 - a Hugging Face `AnchoredMoEForCausalLM` facade with base-checkpoint loading,
   exact native forward and generation delegation, backend-driven conversion,
-  and an explicit install/synchronize/unload lifecycle;
+  and an explicit install/upgrade/rollback/synchronize/unload lifecycle;
 - executable offline notebooks for base-model inspection, exact
   dense-equivalence verification, forced-path expert training/export, and
   custom package composition and top-1/top-2 quality/efficiency evaluation.

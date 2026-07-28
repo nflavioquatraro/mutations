@@ -15,6 +15,7 @@ from anchored_moe import (
     EXPERT_PAYLOAD_BINDING_FORMAT_VERSION,
     AffineRouterHead,
     AnchoredMoEConfig,
+    AnchoredMoEForCausalLM,
     AppendOnlyRouterHeads,
     ExpertPackage,
     ExpertPackageManifest,
@@ -36,6 +37,8 @@ def _runtime_package(
     model: Qwen3ForCausalLM,
     *,
     specialization: str = "code",
+    specialization_version: str = "1.0.0",
+    expert_parameter_value: float = 0.0,
     router_expert_id: str | None = None,
 ) -> ExpertPackage:
     """Create one deterministic two-layer full-MLP package fixture."""
@@ -55,7 +58,7 @@ def _runtime_package(
         )
         with torch.no_grad():
             for parameter in expert.parameters():
-                parameter.zero_()
+                parameter.fill_(expert_parameter_value)
         relative_path = (
             f"experts/layer-{layer_index}-{specialization}-0.safetensors"
         )
@@ -92,7 +95,7 @@ def _runtime_package(
     manifest = ExpertPackageManifest(
         package_format_version=PACKAGE_FORMAT_VERSION,
         specialization_name=specialization,
-        specialization_version="1.0.0",
+        specialization_version=specialization_version,
         package_structure="single_expert",
         base_model_repository="local-random-qwen3",
         base_model_revision="synthetic-seed-13",
@@ -219,6 +222,78 @@ def test_package_install_sync_unload_and_reinsert_restore_model_routes(
         reinserted_logits,
         installed_logits,
         name="reinserted routed logits",
+        atol=0.0,
+        rtol=0.0,
+    )
+
+
+def test_model_upgrade_and_rollback_require_explicit_synchronization(
+    tiny_qwen3_model: Qwen3ForCausalLM,
+    tmp_path: Path,
+) -> None:
+    """PKG-004 registry transactions must never mutate live routes implicitly."""
+
+    input_ids = torch.tensor([[1, 7, 11, 3]])
+    model = AnchoredMoEForCausalLM.from_anchor_model(
+        tiny_qwen3_model,
+        converted_layers=[2, 3],
+    ).eval()
+    code_v1 = _runtime_package(
+        tmp_path / "code-v1",
+        model.anchor_model,
+        specialization_version="1.0.0",
+        expert_parameter_value=0.0,
+    )
+    code_v2 = _runtime_package(
+        tmp_path / "code-v2",
+        model.anchor_model,
+        specialization_version="2.0.0",
+        expert_parameter_value=0.05,
+    )
+    model.install(code_v1)
+    model.synchronize_registry()
+    with torch.no_grad():
+        v1_logits = model(input_ids=input_ids).logits
+
+    upgrade = model.upgrade(code_v1.identity, code_v2)
+    with torch.no_grad():
+        unsynchronized_upgrade_logits = model(input_ids=input_ids).logits
+
+    assert model.registry.active_identities == (code_v2.identity,)
+    assert_tensors_equivalent(
+        unsynchronized_upgrade_logits,
+        v1_logits,
+        name="unsynchronized upgrade logits",
+        atol=0.0,
+        rtol=0.0,
+    )
+
+    model.synchronize_registry()
+    with torch.no_grad():
+        v2_logits = model(input_ids=input_ids).logits
+    assert not torch.equal(v2_logits, v1_logits)
+
+    rollback = model.rollback(upgrade, code_v1)
+    with torch.no_grad():
+        unsynchronized_rollback_logits = model(input_ids=input_ids).logits
+
+    assert rollback.after == upgrade.before
+    assert model.registry.active_identities == (code_v1.identity,)
+    assert_tensors_equivalent(
+        unsynchronized_rollback_logits,
+        v2_logits,
+        name="unsynchronized rollback logits",
+        atol=0.0,
+        rtol=0.0,
+    )
+
+    model.synchronize_registry()
+    with torch.no_grad():
+        restored_logits = model(input_ids=input_ids).logits
+    assert_tensors_equivalent(
+        restored_logits,
+        v1_logits,
+        name="rolled-back routed logits",
         atol=0.0,
         rtol=0.0,
     )

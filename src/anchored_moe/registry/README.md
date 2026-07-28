@@ -9,13 +9,14 @@ binding, and deterministic registry identity.
 PKG-001 defines the versioned manifest and safe payload contract. PKG-002 adds
 strict local `ExpertPackage` descriptors and an atomic in-memory
 `ExpertRegistry`. PKG-003 derives immutable expert-to-mixture-group metadata
-from active package manifests. PKG-007 defines explicit full-MLP payload
+from active package manifests. PKG-004 adds atomic same-specialization version
+replacement and stale-safe rollback. PKG-007 defines explicit full-MLP payload
 ownership metadata used by the inference composition boundary. NB-003 adds
 staged expert-only package export from independently owned `FullMLPExpert`
-objects. NB-004 derives a new immutable router-bearing version from a
-calibrated frozen router while preserving source expert bytes. The registry
-never infers layer/expert ownership from filenames and installation never
-attaches modules or recalibrates routing.
+objects. NB-004 derives a new immutable router-bearing version from a calibrated
+frozen router while preserving source expert bytes. The registry never infers
+layer/expert ownership from filenames, and lifecycle operations never attach
+modules or recalibrate routing.
 
 ## Implemented strategies
 
@@ -24,6 +25,7 @@ attaches modules or recalibrates routing.
 | PKG-001 | `package_format_version: 1` | `manifest.py` | Validated |
 | PKG-002 | `ExpertPackage.from_directory`, `ExpertRegistry` | `package.py`, `registry.py` | Validated |
 | PKG-003 | `mixture_compatibility_group`, `MixtureCompatibilityIndex` | `compatibility.py`, `registry.py` | Validated |
+| PKG-004 | `ExpertRegistry.upgrade`, `ExpertRegistry.rollback`, `RegistryUpgradeChange` | `registry.py` | Validated |
 | PKG-007 | `payload_binding_format_version: 1`, `ExpertPayloadBinding` | `bindings.py` | Validated |
 | NB-003 | `ExpertPackageExportConfig`, `ExpertPackageExportBinding`, `export_full_mlp_expert_package` | `export.py` | Validated |
 | NB-004 | `CalibratedRouterPackageConfig`, `derive_calibrated_router_package` | `export.py` | Validated |
@@ -67,6 +69,20 @@ d_{\mathrm{registry}}
 \right)
 \right).
 \]
+
+For an upgrade from version \(p_i\) to \(p_i'\), the active registry changes
+only one ordered position:
+
+\[
+P'=[p_1,\ldots,p_{i-1},p_i',p_{i+1},\ldots,p_n],
+\qquad |P'|=|P|.
+\]
+
+The two identities share a specialization name and differ in immutable
+specialization version. All other identities, slot index \(i\), and the
+registry compatibility digest remain unchanged. Rollback is the inverse
+replacement and is accepted only when the live registry snapshot still equals
+the recorded upgraded snapshot.
 
 The first successful installation permanently binds a registry instance to a
 compatibility digest over:
@@ -158,6 +174,22 @@ Unload and reinsertion:
 
 Every failure condition is checked before active state changes.
 
+Atomic upgrade and rollback:
+
+1. Require an exact active identity and a strict replacement package from the
+   same specialization under a different version.
+2. Revalidate every replacement payload before acquiring the registry lock.
+3. Under the lock, reject a stale current identity, another active version of
+   the specialization, an already slotted replacement, changed immutable
+   content, or incompatible anchor/router features.
+4. Construct and validate the complete before/after audit record.
+5. Replace the active descriptor and its slot key as one lock-protected
+   transition without changing any unrelated slot.
+6. For rollback, require the original upgrade record, exact old package, and
+   exact upgraded registry snapshot; revalidate the old package before
+   reversing the replacement.
+7. Keep model synchronization separate and explicit.
+
 Payload-binding validation:
 
 1. Legacy package-format-v1 manifests may omit bindings and remain usable for
@@ -228,6 +260,12 @@ Calibrated router-package derivation:
 - Active package order uses stable historical slots.
 - Unload releases the active descriptor and its local path from registry state.
 - Reinsertion restores the original slot.
+- Upgrade preserves active count and transfers the superseded package's slot
+  to a different immutable version of the same specialization.
+- Rollback requires the exact old package and refuses to overwrite any
+  intervening registry change.
+- Inactive package paths are not retained secretly; callers keep rollback
+  artifacts available and immutable.
 - Registry hashes exclude local paths and include active order.
 - The compatibility binding persists across an empty active registry.
 - Registry transitions are in-memory, lock-protected, and atomic with respect
@@ -293,11 +331,11 @@ router/report pair, then publishes an installable anchored-top-1 package. Bank
 tensors remain separate reproducibility artifacts; the manifest records their
 content identities and dataset provenance.
 
-`AnchoredMoEForCausalLM.install()` and `.unload()` are thin public delegates to
-the owned `ExpertRegistry`; neither method changes model routes. Calling
-`.synchronize_registry()` separately applies the active registry through
-PKG-007. This preserves the same lifecycle semantics behind the higher-level
-Hugging Face facade.
+`AnchoredMoEForCausalLM.install()`, `.unload()`, `.upgrade()`, and `.rollback()`
+are thin public delegates to the owned `ExpertRegistry`; none changes model
+routes. Calling `.synchronize_registry()` separately applies the active
+registry through PKG-007. This preserves the same lifecycle semantics behind
+the higher-level Hugging Face facade.
 
 `ExpertRegistry.mixture_compatibility(layer_index=...)` exposes PKG-003 without
 loading expert or router tensors. The resulting index is consumed by POL-005
@@ -318,6 +356,13 @@ print(installed.after.registry_sha256)
 registry.unload(package.identity)
 registry.install(ExpertPackage.from_directory("./code-experts"))
 assert registry.active_registry_sha256 == installed.after.registry_sha256
+
+replacement = ExpertPackage.from_directory("./code-experts-2")
+upgrade = registry.upgrade(package.identity, replacement)
+assert upgrade.after.active_packages[0] == replacement.identity
+
+rollback = registry.rollback(upgrade, package)
+assert rollback.after == upgrade.before
 ```
 
 Compatibility metadata is explicit and layer-specific:
@@ -428,7 +473,8 @@ materialization.
 - The repository
   [architecture blueprint](../../../anchored-plugin-moe-architecture.md)
   defines exact package compatibility, stable ordering, auditable
-  installation, pure unloading, and immutable upgrade semantics.
+  installation, pure unloading, immutable upgrades, and explicit rollback
+  semantics.
 - [Safetensors documentation](https://huggingface.co/docs/safetensors/)
   motivates non-executable tensor payloads.
 - [Hugging Face Hub repository revisions](https://huggingface.co/docs/huggingface_hub/guides/download#download-files-from-the-hub)
@@ -441,10 +487,11 @@ materialization.
 - [Python `threading.RLock` documentation](https://docs.python.org/3/library/threading.html#rlock-objects)
   defines the synchronization primitive protecting registry state.
 
-PKG-001, PKG-002, PKG-003, PKG-007, NB-003 export, and NB-004 derivation are
-framework infrastructure and do not derive a training or optimization
-algorithm from a paper. NB-004 packages the already documented CAL-004 ridge
-and CAL-005 temperature/threshold results without changing their algorithms.
+PKG-001, PKG-002, PKG-003, PKG-004, PKG-007, NB-003 export, and NB-004
+derivation are framework infrastructure and do not derive a training or
+optimization algorithm from a paper. NB-004 packages the already documented
+CAL-004 ridge and CAL-005 temperature/threshold results without changing their
+algorithms.
 
 ## Tests and known limitations
 
@@ -453,20 +500,21 @@ strict directory closure, malformed formats, portable identities, deterministic
 empty and active registry hashes, stable installation order, live-file
 revalidation, duplicate activation, exact unloading, reinsertion restoration,
 compatibility rejection, immutable-version conflicts, non-strict descriptor
-rejection, atomic failure behavior, legacy binding-free manifests, explicit
-binding coverage and uniqueness, missing and shared mixture groups, candidate
-realignment, stale candidate sets, duplicate cross-package expert IDs,
-layer-coverage failures, deterministic staged export, expert-only payload
-closure, dtype derivation, topology and alias rejection, staging cleanup,
-immutable routed derivation, exact expert-copy digests, data/head/report
-compatibility, router hashing, documentation, examples, notebooks, and wheel
-content.
+rejection, atomic failure behavior, slot-preserving upgrades, exact rollback,
+stale rollback rejection, upgrade and rollback payload revalidation, explicit
+synchronization, legacy binding-free manifests, explicit binding coverage and
+uniqueness, missing and shared mixture groups, candidate realignment, stale
+candidate sets, duplicate cross-package expert IDs, layer-coverage failures,
+deterministic staged export, expert-only payload closure, dtype derivation,
+topology and alias rejection, staging cleanup, immutable routed derivation,
+exact expert-copy digests, data/head/report compatibility, router hashing,
+documentation, examples, notebooks, and wheel content.
 
 PKG-007 materializes the supported binding contract in the inference
 subpackage. NB-003 does not fit or serialize a router, save optimizer state, or
 generate replay teacher labels. NB-004 supports one package-local independent
 affine router and anchored top-1 policy; standalone registry-specific routers
 remain PKG-005. Persistent registry files, cross-process locking, exact
-live-model checkpoint hashing, runtime-version enforcement, atomic upgrades,
-rollback, Hub transfer, and distributed lifecycle operations remain
-unsupported.
+live-model checkpoint hashing, runtime-version enforcement, rollback across an
+intervening registry change, automatic model synchronization, Hub transfer,
+and distributed lifecycle operations remain unsupported.

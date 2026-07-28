@@ -19,10 +19,16 @@ from anchored_moe.registry import PACKAGE_FORMAT_VERSION
 from anchored_moe.utils import sha256_file, sha256_json
 
 
-def _create_package(root: Path, specialization: str, offset: float) -> ExpertPackage:
+def _create_package(
+    root: Path,
+    specialization: str,
+    offset: float,
+    *,
+    version: str = "1.0.0",
+) -> ExpertPackage:
     """Create one deterministic package with complete local provenance."""
 
-    package_root = root / specialization
+    package_root = root / f"{specialization}-{version}"
     weight_relative = "experts/model.safetensors"
     weight_path = package_root / weight_relative
     weight_path.parent.mkdir(parents=True)
@@ -37,7 +43,7 @@ def _create_package(root: Path, specialization: str, offset: float) -> ExpertPac
     manifest = ExpertPackageManifest(
         package_format_version=PACKAGE_FORMAT_VERSION,
         specialization_name=specialization,
-        specialization_version="1.0.0",
+        specialization_version=version,
         package_structure="single_expert",
         base_model_repository="Qwen/Qwen3-4B",
         base_model_revision="example-base-revision",
@@ -90,11 +96,17 @@ def _package_set_fingerprint(registry: ExpertRegistry) -> str:
 
 
 def main() -> None:
-    """Exercise lifecycle restoration plus every two-package composition."""
+    """Exercise lifecycle, atomic upgrades, and two-package compositions."""
 
     with TemporaryDirectory(prefix="anchored-moe-registry-") as temporary:
         root = Path(temporary)
         code = _create_package(root, "code", 0.0)
+        code_v2 = _create_package(
+            root,
+            "code",
+            1.0,
+            version="2.0.0",
+        )
         math = _create_package(root, "math", 10.0)
         registry = ExpertRegistry()
         registry.install(code)
@@ -114,6 +126,11 @@ def main() -> None:
         assert evaluation.exact
         assert reinserted.active_packages == (code.identity, math.identity)
 
+        upgrade = registry.upgrade(code.identity, code_v2)
+        assert upgrade.after.active_packages == (code_v2.identity, math.identity)
+        rollback = registry.rollback(upgrade, code)
+        assert rollback.after == upgrade.before == reinserted
+
         compositions = evaluate_registry_compositions(
             (math, code),
             behavior_fingerprint=_package_set_fingerprint,
@@ -128,6 +145,7 @@ def main() -> None:
             f"active={reinserted.active_package_count}, "
             f"registry_sha256={reinserted.registry_sha256}, "
             f"order={[item.specialization_name for item in reinserted.active_packages]}, "
+            f"upgrade_rolled_back={rollback.after == upgrade.before}, "
             f"subsets={compositions.subset_count}, "
             f"orders={compositions.trial_count}"
         )

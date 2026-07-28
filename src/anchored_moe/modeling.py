@@ -23,6 +23,7 @@ from anchored_moe.registry.package import ExpertPackage, PackageIdentity
 from anchored_moe.registry.registry import (
     ExpertRegistry,
     RegistryChange,
+    RegistryUpgradeChange,
 )
 from anchored_moe.routers.base import RouterFeatureExtractor, RouterScoreBank
 from anchored_moe.utils.hashing import sha256_json
@@ -369,8 +370,9 @@ class AnchoredMoEForCausalLM(PreTrainedModel, GenerationMixin):
     of duplicating model-family logic. The wrapped ``anchor_model`` retains its
     native forward and generation implementations; a configured
     :class:`~anchored_moe.backends.base.ModelBackend` only replaces selected
-    MLP objects with :class:`RoutedMLP` wrappers. Package installation and
-    unloading mutate the in-memory registry but never the model. Call
+    MLP objects with :class:`RoutedMLP` wrappers. Package installation,
+    unloading, upgrades, and rollbacks mutate the in-memory registry but never
+    the model. Call
     :meth:`synchronize_registry` explicitly to materialize the active anchored
     top-1 runtime.
 
@@ -609,6 +611,24 @@ class AnchoredMoEForCausalLM(PreTrainedModel, GenerationMixin):
         """Unload a package descriptor without changing the model runtime."""
 
         return self._registry.unload(package)
+
+    def upgrade(
+        self,
+        current: PackageIdentity,
+        replacement: ExpertPackage,
+    ) -> RegistryUpgradeChange:
+        """Atomically upgrade registry state without changing model routes."""
+
+        return self._registry.upgrade(current, replacement)
+
+    def rollback(
+        self,
+        upgrade: RegistryUpgradeChange,
+        previous_package: ExpertPackage,
+    ) -> RegistryUpgradeChange:
+        """Rollback one exact registry upgrade without changing model routes."""
+
+        return self._registry.rollback(upgrade, previous_package)
 
     def synchronize_registry(self) -> RegistryCompositionReport:
         """Explicitly apply the active anchored top-1 registry to the model.

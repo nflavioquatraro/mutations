@@ -30,6 +30,7 @@ from anchored_moe.registry.registry import (
     RegistryChange,
     RegistryLifecycleError,
     RegistrySnapshot,
+    RegistryUpgradeChange,
 )
 
 __all__ = [
@@ -52,6 +53,7 @@ __all__ = [
     "RegistryChange",
     "RegistryLifecycleError",
     "RegistrySnapshot",
+    "RegistryUpgradeChange",
     "derive_calibrated_router_package",
     "export_full_mlp_expert_package",
     "parse_expert_payload_bindings",

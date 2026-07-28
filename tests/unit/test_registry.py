@@ -12,6 +12,7 @@ from anchored_moe import (
     PackageIdentity,
     PackageValidationError,
     RegistryLifecycleError,
+    RegistryUpgradeChange,
 )
 
 
@@ -147,6 +148,188 @@ def test_empty_registry_hash_is_deterministic() -> None:
     assert first.registry_sha256 == second.registry_sha256
     assert first.active_packages == second.active_packages == ()
     assert first.compatibility_sha256 is second.compatibility_sha256 is None
+
+
+def test_upgrade_and_rollback_replace_one_version_in_the_same_slot(
+    expert_package_factory: Callable[..., ExpertPackage],
+) -> None:
+    """An upgrade must preserve order and an exact rollback must restore hash."""
+
+    code_v1 = expert_package_factory(
+        "code",
+        specialization_version="1.0.0",
+        tensor_offset=0.0,
+    )
+    code_v2 = expert_package_factory(
+        "code",
+        specialization_version="2.0.0",
+        tensor_offset=1.0,
+    )
+    math = expert_package_factory("math")
+    registry = ExpertRegistry()
+    registry.install(code_v1)
+    registry.install(math)
+    before = registry.snapshot()
+
+    upgrade = registry.upgrade(code_v1.identity, code_v2)
+
+    assert isinstance(upgrade, RegistryUpgradeChange)
+    assert upgrade.operation == "upgrade"
+    assert upgrade.removed_package == code_v1.identity
+    assert upgrade.activated_package == code_v2.identity
+    assert upgrade.before == before
+    assert upgrade.after == registry.snapshot()
+    assert upgrade.after.active_packages == (code_v2.identity, math.identity)
+    assert registry.active_packages == (code_v2, math)
+
+    rollback = registry.rollback(upgrade, code_v1)
+
+    assert rollback.operation == "rollback"
+    assert rollback.removed_package == code_v2.identity
+    assert rollback.activated_package == code_v1.identity
+    assert rollback.before == upgrade.after
+    assert rollback.after == before
+    assert registry.active_packages == (code_v1, math)
+    assert registry.active_registry_sha256 == before.registry_sha256
+
+    # A rolled-back replacement remains immutable and can be activated again
+    # through a new explicit upgrade without receiving a second slot.
+    repeated = registry.upgrade(code_v1.identity, code_v2)
+    assert repeated.after.active_packages == (code_v2.identity, math.identity)
+
+
+@pytest.mark.parametrize(
+    ("replacement_kwargs", "error_match"),
+    [
+        (
+            {
+                "specialization_name": "math",
+                "specialization_version": "2.0.0",
+            },
+            "same specialization_name",
+        ),
+        (
+            {
+                "specialization_name": "code",
+                "specialization_version": "1.0.0",
+                "tensor_offset": 1.0,
+            },
+            "different specialization_version",
+        ),
+        (
+            {
+                "specialization_name": "code",
+                "specialization_version": "2.0.0",
+                "router_output_size": 8,
+            },
+            "incompatible",
+        ),
+        (
+            {
+                "specialization_name": "code",
+                "specialization_version": "2.0.0",
+                "strict": False,
+                "add_untracked_file": True,
+            },
+            "strict",
+        ),
+    ],
+)
+def test_invalid_upgrade_is_rejected_without_mutation(
+    expert_package_factory: Callable[..., ExpertPackage],
+    replacement_kwargs: dict[str, object],
+    error_match: str,
+) -> None:
+    """All upgrade compatibility failures must precede registry mutation."""
+
+    current = expert_package_factory("code")
+    replacement = expert_package_factory(**replacement_kwargs)
+    registry = ExpertRegistry()
+    registry.install(current)
+    before = registry.snapshot()
+
+    with pytest.raises(RegistryLifecycleError, match=error_match):
+        registry.upgrade(current.identity, replacement)
+
+    assert registry.snapshot() == before
+    assert registry.active_packages == (current,)
+
+
+def test_upgrade_revalidates_live_files_before_mutation(
+    expert_package_factory: Callable[..., ExpertPackage],
+) -> None:
+    """A replacement tampered after loading must never enter active state."""
+
+    current = expert_package_factory("code")
+    replacement = expert_package_factory(
+        "code",
+        specialization_version="2.0.0",
+    )
+    payload = (
+        replacement.package_directory
+        / replacement.manifest.expert_weight_files[0]
+    )
+    payload.write_bytes(payload.read_bytes() + b"tampered")
+    registry = ExpertRegistry()
+    registry.install(current)
+    before = registry.snapshot()
+
+    with pytest.raises(PackageValidationError, match="SHA-256 mismatch"):
+        registry.upgrade(current.identity, replacement)
+
+    assert registry.snapshot() == before
+    assert registry.active_packages == (current,)
+
+
+def test_rollback_rejects_stale_registry_state_without_mutation(
+    expert_package_factory: Callable[..., ExpertPackage],
+) -> None:
+    """Rollback must not erase an intervening successful registry change."""
+
+    code_v1 = expert_package_factory("code")
+    code_v2 = expert_package_factory(
+        "code",
+        specialization_version="2.0.0",
+    )
+    math = expert_package_factory("math")
+    registry = ExpertRegistry()
+    registry.install(code_v1)
+    upgrade = registry.upgrade(code_v1.identity, code_v2)
+    registry.install(math)
+    intervening = registry.snapshot()
+
+    with pytest.raises(RegistryLifecycleError, match="stale"):
+        registry.rollback(upgrade, code_v1)
+
+    assert registry.snapshot() == intervening
+    assert registry.active_packages == (code_v2, math)
+
+
+def test_rollback_revalidates_previous_package_without_mutation(
+    expert_package_factory: Callable[..., ExpertPackage],
+) -> None:
+    """Rollback must fail atomically when the retained old package changed."""
+
+    code_v1 = expert_package_factory("code")
+    code_v2 = expert_package_factory(
+        "code",
+        specialization_version="2.0.0",
+    )
+    registry = ExpertRegistry()
+    registry.install(code_v1)
+    upgrade = registry.upgrade(code_v1.identity, code_v2)
+    payload = (
+        code_v1.package_directory
+        / code_v1.manifest.expert_weight_files[0]
+    )
+    payload.write_bytes(payload.read_bytes() + b"tampered")
+    upgraded = registry.snapshot()
+
+    with pytest.raises(PackageValidationError, match="SHA-256 mismatch"):
+        registry.rollback(upgrade, code_v1)
+
+    assert registry.snapshot() == upgraded
+    assert registry.active_packages == (code_v2,)
 
 
 def test_package_and_registry_identity_exclude_local_paths(
