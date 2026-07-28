@@ -15,15 +15,27 @@ from anchored_moe.routers.logical import (
     LogicalAppendOnlyRouter,
     compile_logical_router,
 )
+from anchored_moe.routers.stabilized import (
+    HardRouteDistillationConfig,
+    LayerRouterDistillationReport,
+    RouterDistillationError,
+    RouterDistillationReport,
+    distill_frozen_router,
+)
 
 __all__ = [
     "AffineRouterHead",
     "AppendOnlyRouterHeads",
+    "HardRouteDistillationConfig",
     "IdentityRouterFeatureExtractor",
+    "LayerRouterDistillationReport",
     "LogicalAppendOnlyRouter",
+    "RouterDistillationError",
+    "RouterDistillationReport",
     "RouterFeatureExtractor",
     "RouterHead",
     "RouterScoreBank",
     "RouterSerializationError",
     "compile_logical_router",
+    "distill_frozen_router",
 ]

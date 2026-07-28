@@ -27,6 +27,9 @@ standalone weighted top-2 strategy primitives:
 - deterministic router-only global recalibration that jointly optimizes every
   installed affine score column against anchor-relative utility replay while
   leaving the source router, anchor, and experts unchanged;
+- deterministic anchored hard-route distillation from an immutable teacher
+  score bank into a storage-independent frozen logical deployment router, with
+  hashed assignments and exact replay-agreement reports;
 - standalone safetensors registry-router versions with exact snapshot,
   feature-space, report, expert-order, and tensor-digest validation plus
   explicit stale-safe activation;
@@ -112,6 +115,9 @@ checkpoints retain the active registry snapshot but not inactive historical
 slots or rollback records. Pair-aware top-2 global recalibration, embedding
 registry-router histories in composition checkpoints, and automatic router
 activation during registry changes remain separate tracked features.
+Teacher-score distribution distillation, top-2/adaptive distillation,
+cross-layer route hysteresis, and frozen-route expert training also remain
+separate work.
 
 ## Development setup
 
@@ -133,6 +139,7 @@ python examples/inspect_expert_package.py
 python examples/verify_full_mlp_expert.py
 python examples/verify_affine_router.py
 python examples/verify_logical_router.py
+python examples/verify_router_distillation.py
 python examples/verify_anchored_top1.py
 python examples/verify_anchor_veto_top2.py
 python examples/verify_compatibility_top2.py

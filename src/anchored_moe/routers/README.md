@@ -9,6 +9,8 @@ evidence for an expert at one layer. RTR-003 compiles those package-owned heads
 into frozen layer-local matrices without changing the package wire format.
 RTR-004 creates a new frozen logical router by jointly recalibrating all
 installed affine columns against aligned anchor-relative utility replay data.
+RTR-007 distills the anchored hard assignments of any immutable teacher score
+bank into a deterministic affine student and freezes it for deployment.
 
 This subpackage does not choose between the anchor and experts, execute an MLP,
 combine expert outputs, fit calibration parameters, cache features, enforce
@@ -24,6 +26,7 @@ features.
 | RTR-002 | `router_architecture: independent_affine_heads` | `base.py`, `heads.py` | Validated |
 | RTR-003 | `router_architecture: logical_append_only_columns` | `base.py`, `logical.py` | Validated |
 | RTR-004 | `recalibration: router_only_global` | `calibration/global_recalibration.py` | Validated |
+| RTR-007 | `strategy: hard_route_distillation` | `stabilized.py` | Validated |
 
 `RouterFeatureExtractor`, `RouterHead`, and `RouterScoreBank` are
 model-family-neutral extension interfaces. `IdentityRouterFeatureExtractor`,
@@ -115,6 +118,51 @@ matrix \(A_\ell\), it selects the anchor-first best-route class from
 This changes all specialist score functions for the bound registry and
 therefore deliberately does not preserve RTR-003 append invariance.
 
+RTR-007 treats an evaluation-mode `RouterScoreBank` as a teacher. For
+specialist scores
+
+\[
+G_\ell^{\mathrm{teacher}}\in\mathbb{R}^{N\times K_\ell},
+\]
+
+the fixed-zero anchor is prepended and hard assignments are
+
+\[
+z_\ell
+=
+\operatorname*{argmax}
+\left[
+\mathbf{0},
+G_\ell^{\mathrm{teacher}}
+\right].
+\]
+
+The anchor is class zero, so exact ties choose the anchor before experts; ties
+between experts follow stable layer-local expert order. The affine student
+uses cached features \(X_\ell\in\mathbb{R}^{N\times d}\):
+
+\[
+G_\ell^{\mathrm{student}}=X_\ell W_\ell^\top+b_\ell,
+\]
+
+\[
+\mathcal{L}_{\mathrm{distill}}
+=
+\operatorname{CE}
+\left(
+\left[\mathbf{0},G_\ell^{\mathrm{student}}\right],
+z_\ell
+\right)
++
+\lambda
+\frac{\lVert W_\ell\rVert_2^2+\lVert b_\ell\rVert_2^2}
+{K_\ell d+K_\ell}.
+\]
+
+This initial strategy distills assignments, not teacher score magnitudes.
+Its acceptance metric is hard-route agreement on the exact reference bank
+rather than score equality.
+
 ## Algorithms
 
 Identity feature extraction:
@@ -187,6 +235,22 @@ Global recalibration:
 6. Bind the report to one registry and compatibility hash without activating
    it.
 
+Hard-route distillation:
+
+1. Require a frozen evaluation-mode teacher and an immutable CAL-001 feature
+   bank with the same feature width.
+2. Evaluate finite CPU teacher scores in each declared layer and prepend the
+   permanent zero anchor before `argmax`.
+3. Fit zero-initialized affine student columns independently by layer using
+   seed-free full-batch CPU float64 Adam.
+4. Retain the best finite regularized objective, then re-evaluate it in the
+   feature bank's deployed dtype.
+5. Fall back to the zero student if dtype conversion worsens the initial total
+   objective.
+6. Compile copied affine columns into a buffer-only RTR-003 router and record
+   score, assignment, feature-bank, configuration, loss, and agreement
+   metadata in an immutable report.
+
 ## Assumptions and invariants
 
 - Router input is the pre-MLP hidden state.
@@ -215,6 +279,17 @@ Global recalibration:
   returns no trainable parameters.
 - A recalibrated router is meaningful only for the registry hash and exact
   expert order recorded by its report.
+- Hard-route distillation never changes the teacher, feature bank, anchor,
+  experts, or model.
+- The teacher must be frozen, in evaluation mode, on CPU, and produce finite
+  scores with the feature bank's dtype and exact row/expert shape.
+- The feature bank defines the distilled layers; every declared layer exposes
+  at least one uniquely identified teacher expert.
+- Student initialization and optimization consume no random state.
+- The distilled router has no trainable parameters or teacher-storage aliases
+  and preserves teacher expert order within every layer.
+- The report binds the result to exact feature-bank metadata and hashed teacher
+  scores and assignments, but not to raw prompts.
 - Logical compilation rejects non-finite state even before serialization.
 - Router payloads contain no executable Python content.
 - Router tensor payloads are finite, floating-point, and schema-validated.
@@ -250,6 +325,9 @@ router_feature_specification:
 `logical_append_only_columns` describes the in-memory registry runtime, not a
 package manifest. PKG-005 serializes a recalibrated logical router as a
 standalone registry-specific version; it does not change the package format.
+RTR-007 returns the same `LogicalAppendOnlyRouter` runtime contract, so
+`RoutedMLP` needs no distillation-specific dispatch path. This initial slice
+does not add a report-bearing persistence format or automatic activation.
 
 ## Configuration and examples
 
@@ -257,8 +335,10 @@ standalone registry-specific version; it does not change the package format.
 from anchored_moe import (
     AffineRouterHead,
     AppendOnlyRouterHeads,
+    HardRouteDistillationConfig,
     IdentityRouterFeatureExtractor,
     compile_logical_router,
+    distill_frozen_router,
     recalibrate_global_router,
 )
 
@@ -284,6 +364,16 @@ recalibrated, report = recalibrate_global_router(
     registry_sha256=registry.snapshot().registry_sha256,
     compatibility_sha256=registry.snapshot().compatibility_sha256,
 )
+
+distilled, distillation_report = distill_frozen_router(
+    logical_router.eval(),
+    replay_features,
+    config=HardRouteDistillationConfig(
+        learning_rate=0.05,
+        optimization_steps=256,
+        l2_weight=1e-4,
+    ),
+)
 ```
 
 See `examples/verify_affine_router.py` for RTR-002 deterministic scoring,
@@ -293,6 +383,8 @@ score preservation, frozen state, and routed execution. Neither example
 downloads model weights.
 See `examples/verify_registry_router_versions.py` for RTR-004 fitting and
 PKG-005 persistence without model downloads.
+See `examples/verify_router_distillation.py` for RTR-007 deterministic hard
+assignment fitting, exact replay agreement, and frozen deployment state.
 
 `AnchoredMoEConfig` continues to reject non-anchor selection policies. INF-001
 allows router objects to be attached explicitly to one `RoutedMLP`; package
@@ -311,11 +403,19 @@ declarative model configuration can be executable.
   [architecture blueprint](../../../anchored-plugin-moe-architecture.md)
   defines frozen router features, independent affine heads, calibrated scores,
   fixed-zero anchor evidence, and append-only installation.
+- [Dai et al., “StableMoE: Stable Routing Strategy for Mixture of
+  Experts”](https://aclanthology.org/2022.acl-long.489/) motivates separating
+  route discovery from a lightweight frozen deployment router.
 
 RTR-001, RTR-002, RTR-003, and RTR-004 are framework infrastructure and do not
 derive an optimization algorithm from a paper. RTR-004 implements the
 blueprint's explicit router-only mode using a documented project-specific
 anchored classification objective.
+RTR-007 adopts StableMoE's two-stage distill-then-freeze principle. It differs
+by distilling fixed-zero-anchor assignments from an arbitrary immutable
+composed teacher over offline CAL-001 features. It does not reproduce the
+paper's jointly learned balanced routing objective or its later expert-training
+stage.
 
 ## Tests and known limitations
 
@@ -326,7 +426,10 @@ ordering, exact safetensors round trips, overwrite protection, malformed
 metadata and tensor rejection, finite-value checks, expert-package manifest
 compatibility, logical matrix shapes, source-storage independence, frozen
 compiled state, dtype migration, exact RTR-002 score parity, exact incumbent
-score preservation, and `RoutedMLP` plus package-synchronization integration.
+score preservation, hard-route teacher labeling, anchor-first ties,
+deterministic student state, report schema round trips, teacher immutability,
+student storage independence, exact replay agreement, invalid teacher
+rejection, and `RoutedMLP` plus package-synchronization integration.
 
 The current router implementation has no learned projection or head removal.
 RTR-003 uses shape-stable per-column affine evaluation to guarantee exact
@@ -340,6 +443,10 @@ CAL-005 calibrates their temperatures and thresholds without mutating affine
 parameters. CAL-006 independently refines newly calibrated affine parameters
 against scores from an immutable incumbent `RouterScoreBank`; it returns
 package-owned RTR-002 heads and does not mutate the RTR-003 logical router.
+RTR-007 currently supports anchored hard top-1 assignments only. Teacher-score
+distribution distillation, top-2/adaptive targets, cross-layer hysteresis,
+frozen-route expert training, production-scale streaming, accelerator fitting,
+and report-bearing registry persistence remain separate work.
 Standalone anchor comparison and top-1 selection are implemented by POL-001;
 INF-001 explicitly attaches them for routed-layer dispatch,
 PKG-007 validates serialized router ownership against expert payload bindings,
