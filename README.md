@@ -104,6 +104,9 @@ standalone weighted top-2 strategy primitives:
   router heads, score-softmax activation mixing, exact optimizer isolation,
   optional token-masked auxiliary load balancing, auditable objective reports,
   and success/failure-safe anchor-route restoration;
+- provenance-validated mixture-aware refinement that links a completed
+  two-expert independent-training report to joint expert-and-router updates
+  through the same local mini-MoE runtime;
 - optional token-masked replay KL against precomputed immutable-anchor logits
   and normalized expert-initialization weight-drift regularization;
 - staged expert-only package export with deterministic payload bindings,
@@ -123,7 +126,7 @@ standalone weighted top-2 strategy primitives:
 
 Automatic model mutation during installation, capacity estimation, fallback
 beyond a selected pair, online replay-teacher execution,
-local mixtures larger than two experts, post-hoc mixture-aware refinement,
+local mixtures larger than two experts, router-only mixture refinement,
 model-integrated and
 package-driven top-2 execution, persistent registry storage, remote composition
 checkpoint transfer, and anchor-weight bundling are intentionally not
@@ -184,6 +187,7 @@ python examples/export_reload_lifecycle.py
 python examples/verify_forced_path_training.py
 python examples/verify_independent_expert_set.py
 python examples/verify_local_mini_moe.py
+python examples/verify_mixture_aware_refinement.py
 python examples/train_expert_package.py
 python examples/fit_router.py
 ```

@@ -13,15 +13,17 @@ an independently trained latent expert set: two or more complete expert paths
 receive their own Trainer inputs and execute sequentially against the same
 immutable anchor. TRN-003 jointly trains exactly two package-local experts and
 their affine router heads through a differentiable score-softmax mixture.
+TRN-004 validates a completed two-expert TRN-002 topology and refines those
+caller-owned experts plus fresh local heads through the existing TRN-003
+runtime, retaining an immutable report that connects both stages.
 BAL-003 optionally regularizes those package-local router probabilities with
 a token-masked auxiliary load-balancing loss while both experts continue to
 execute.
 TRN-005 adds independently weighted replay KL against
 precomputed immutable-anchor logits and parameter drift from
 expert-initialization snapshots. Training does not own data partitioning,
-package export, global router fitting, replay-logit generation, post-hoc
-mixture refinement, inference-time capacity balancing, or process-level
-parallel expert dispatch.
+package export, global router fitting, replay-logit generation, inference-time
+capacity balancing, or process-level parallel expert dispatch.
 
 ## Implemented strategies
 
@@ -30,6 +32,7 @@ parallel expert dispatch.
 | TRN-001 | `ForcedExpertBinding`, `prepare_forced_path_training`, `ForcedPathExpertTrainer` | `expert_trainer.py` | Validated |
 | TRN-002 | `IndependentExpertTrainingRun`, `train_independent_expert_set`, immutable run/set reports | `independent.py` | Validated |
 | TRN-003 | `LocalMiniMoETrainingConfig`, `LocalMiniMoEExpertBinding`, `LocalMiniMoETrainer`, immutable topology/run reports | `mini_moe.py` | Validated |
+| TRN-004 | `refine_independent_expert_set`, `MixtureAwareRefinementReport`, `MixtureAwareRefinementError` | `refinement.py` | Validated |
 | BAL-003 | `load_balancing_weight`, `AuxiliaryLoadBalancingLoss`, `LocalMiniMoEObjectiveReport` | `balancing.py`, `mini_moe.py` | Validated |
 | TRN-005 | `ExpertObjectiveConfig`, `ReplayKLPreservation`, `ExpertWeightDrift`, `ExpertObjectiveReport` | `objectives.py`, `expert_trainer.py` | Validated |
 
@@ -160,6 +163,29 @@ Zero affine weights receive deterministic biases
 \((+\epsilon,-\epsilon)\) in stable expert order. This breaks identical
 anchor-copy expert symmetry without randomness; both softmax weights remain
 strictly positive, so both experts receive gradients.
+
+TRN-004 starts from the independently optimized parameters
+\(\theta_1^\star,\theta_2^\star\) produced by TRN-002 and performs a second,
+joint problem over a caller-supplied mixture-refinement dataset
+\(D_{\mathrm{mix}}\):
+
+\[
+(\theta_1^{\mathrm{ref}},\theta_2^{\mathrm{ref}},\psi^{\mathrm{ref}})
+=
+\arg\min_{\theta_1,\theta_2,\psi}
+\mathcal L_{\mathrm{local}}
+\left(
+D_{\mathrm{mix}};
+\theta_1,\theta_2,\psi,\theta_A
+\right),
+\]
+
+where \(\psi=\{w_{\ell,k},b_{\ell,k}\}\) denotes fresh package-local affine
+heads and \(\theta_A\) remains immutable. The local loss and execution equation
+are exactly TRN-003's COM-001 mixture above. The source report proves completed
+training topology and optimizer progress; stable IDs and layer indices bind
+that provenance to external expert objects without retaining mutable modules
+inside the report.
 
 For BAL-003, let \(m_t\ge0\) be an optional token weight, usually the attention
 mask, and let \(N=2\) package-local experts. The mean router probability and
@@ -334,6 +360,20 @@ Local mini-MoE execution:
     any retained observations, and restore every wrapper to exact
     `forced_anchor` execution.
 
+Mixture-aware refinement:
+
+1. Require one completed `IndependentExpertSetTrainingReport` containing
+   exactly two experts.
+2. Validate the caller-owned local bindings against the source report's exact
+   expert order and complete layer-by-expert rectangle before model mutation.
+3. Validate all forwarded Trainer keywords and reject coordinator-owned or
+   unknown arguments before route attachment.
+4. Delegate parameter/storage isolation, fresh-head validation, joint
+   optimization, objective reporting, and failure cleanup to TRN-003.
+5. Require a completed local report and return an immutable TRN-004 report
+   linking both stages.
+6. Never retain datasets, models, optimizers, or expert objects in the report.
+
 TRN-005 objective execution:
 
 1. Validate finite non-negative objective weights and a positive replay
@@ -369,6 +409,15 @@ TRN-005 objective execution:
 - TRN-003 supports exactly two experts with identical complete layer coverage.
 - TRN-003 requires fresh zero affine heads; calibrated or previously trained
   heads are rejected rather than silently overwritten.
+- TRN-004 requires a completed TRN-002 report with exactly two experts.
+- The source report's expert order and converted layers must exactly equal the
+  TRN-003 refinement topology. Binding input order is normalized and cannot
+  change router-head alignment or deterministic symmetry breaking.
+- TRN-004 provenance is topological. The framework cannot prove that an
+  external expert object is the historical object optimized during TRN-002;
+  artifact identity and weight hashes remain package-export concerns.
+- TRN-004 uses fresh local heads and jointly updates both expert-declared
+  optimizer subsets plus those heads. Router-only refinement is unsupported.
 - Only the affine heads and expert-declared optimizer subsets train. The router
   feature transformation remains frozen.
 - Both local experts execute for every specialization token. Anchor abstention,
@@ -445,6 +494,11 @@ unchanged. Its `compute_loss()` override adds BAL-003 only when configured and
 records detached loss components without adding model state. Cleanup happens
 in `train()`'s `finally` block, so data-loading and optimizer failures cannot
 leave a routed model active.
+
+`refine_independent_expert_set()` validates the completed TRN-002 report and
+ordinary Trainer keyword mapping before constructing `LocalMiniMoETrainer`.
+It introduces no new model route, optimizer, checkpoint, Accelerate, or
+dataset behavior; TRN-003 remains the single joint-training boundary.
 
 When replay KL is enabled, the trainer extends Hugging Face's resolved dataset
 signature columns with only the configured teacher and mask keys. Standard
@@ -557,6 +611,27 @@ trainer.train()
 print(trainer.training_report.final_objectives)
 ```
 
+An independently trained pair can then be refined jointly without rebuilding
+its training engine:
+
+```python
+refinement = refine_independent_expert_set(
+    model,
+    backend=Qwen3Backend(),
+    source_training=independent_report,
+    expert_bindings=local_bindings_for_the_same_two_experts,
+    router_feature_extractor=IdentityRouterFeatureExtractor(hidden_size),
+    router_heads=fresh_two_expert_heads,
+    config=LocalMiniMoETrainingConfig(load_balancing_weight=0.01),
+    args=TrainingArguments(
+        output_dir="./mixture-refinement-run",
+        save_strategy="no",
+    ),
+    trainer_kwargs={"train_dataset": mixture_refinement_dataset},
+)
+print(refinement.expert_ids, refinement.total_global_steps)
+```
+
 See `examples/verify_forced_path_training.py` for a deterministic offline
 training run using a randomly initialized tiny Qwen3 model, precomputed anchor
 logits, token masks, and both TRN-005 terms.
@@ -567,7 +642,11 @@ partitions with distinct seeds and verifies expert updates, exact anchor
 restoration, route cleanup, and final freezing.
 `examples/verify_local_mini_moe.py` jointly trains two local experts and their
 router with BAL-003 enabled, then verifies finite objective composition, exact
-optimizer ownership, exact anchor restoration, and final freezing. See
+optimizer ownership, exact anchor restoration, and final freezing.
+`examples/verify_mixture_aware_refinement.py` trains two paths independently,
+refines the same pair jointly, and verifies provenance linkage, second-stage
+expert updates, trained local heads, exact anchor restoration, and final
+freezing. See
 `examples/train_expert_package.py` and
 `notebooks/02_train_expert_package.ipynb` for the NB-003 export boundary.
 
@@ -599,9 +678,10 @@ optimizer ownership, exact anchor restoration, and final freezing. See
   mixture, supports token masks, and averages layers; hard assignments measure
   load but do not control execution.
 
-TRN-001 through TRN-003 are framework infrastructure and introduce no
+TRN-001 through TRN-004 are framework infrastructure and introduce no
 paper-derived training algorithm. TRN-003 implements the package-local
-score-softmax strategy specified by the repository architecture blueprint.
+score-softmax strategy specified by the repository architecture blueprint;
+TRN-004 composes its public runtime after completed TRN-002 training.
 TRN-005 adapts the referenced distillation and L2-SP objectives with the
 differences stated above. BAL-003 adapts the Switch auxiliary objective with
 the dense-execution, masking, and layer-averaging differences stated above.
@@ -639,6 +719,13 @@ ownership, real two-step causal-language-model optimization, immutable
 reports, byte-exact anchor restoration, complete gradient clearing and
 freezing, and failure-safe cleanup after data loading raises.
 
+TRN-004 tests cover exact source/report topology, stable expert order,
+two-expert enforcement, complete binding rectangles, pre-mutation rejection
+of malformed Trainer inputs, real TRN-002 independent optimization followed by
+real joint refinement, updates to both already-trained experts and fresh local
+heads, immutable linked reports, byte-exact anchor preservation, exact
+forced-anchor cleanup, complete gradient clearing, and final freezing.
+
 BAL-003 tests cover analytical balanced and collapsed cases, token masking,
 zero-token differentiable fallback, invalid probability rejection, router
 gradient flow, weighted Trainer loss composition, unchanged optimizer
@@ -651,9 +738,10 @@ full-vocabulary logits can also be storage-intensive; compact teacher targets
 are not implemented. Online teacher execution, dataset streaming,
 automatic data partitioning, concurrent in-process expert training,
 cross-expert diversity objectives, local expert counts other than two, local
-capacity, inference-time balancing, TRN-005 objectives inside TRN-003, post-hoc
-mixture-aware refinement, transactional expert-weight rollback, expert-only
-optimizer checkpoint resume, gradient-checkpointing acceptance for captured
-router probabilities, mixed-precision, multi-device, and distributed
-acceptance tests remain future work. BAL-003 measures preferred load but does
-not save computation because TRN-003 always executes both local experts.
+capacity, inference-time balancing, TRN-005 objectives inside TRN-003,
+router-only refinement, refinement with previously trained router heads,
+transactional expert-weight rollback, expert-only optimizer checkpoint
+resume, gradient-checkpointing acceptance for captured router probabilities,
+mixed-precision, multi-device, and distributed acceptance tests remain future
+work. BAL-003 measures preferred load but does not save computation because
+TRN-003 always executes both local experts.

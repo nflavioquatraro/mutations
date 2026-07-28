@@ -33,6 +33,11 @@ from anchored_moe.training.objectives import (
     ExpertWeightDrift,
     ReplayKLPreservation,
 )
+from anchored_moe.training.refinement import (
+    MixtureAwareRefinementError,
+    MixtureAwareRefinementReport,
+    refine_independent_expert_set,
+)
 
 __all__ = [
     "AuxiliaryLoadBalancingError",
@@ -50,6 +55,8 @@ __all__ = [
     "LocalMiniMoETrainingConfig",
     "LocalMiniMoETrainingReport",
     "LocalMiniMoETrainingTopology",
+    "MixtureAwareRefinementError",
+    "MixtureAwareRefinementReport",
     "ExpertObjectiveConfig",
     "ExpertObjectiveError",
     "ExpertObjectiveReport",
@@ -57,5 +64,6 @@ __all__ = [
     "ReplayKLPreservation",
     "prepare_forced_path_training",
     "prepare_local_mini_moe_training",
+    "refine_independent_expert_set",
     "train_independent_expert_set",
 ]
