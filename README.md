@@ -19,6 +19,9 @@ standalone weighted top-2 strategy primitives:
   validation;
 - full copied-MLP experts with independent trainable storage and strict,
   deterministic safetensors serialization;
+- standalone PEFT/LoRA experts with private frozen anchor copies, exact
+  zero-update behavior, adapter-only training, and deterministic adapter-only
+  safetensors serialization;
 - frozen identity router features over pre-MLP hidden states;
 - independent append-only affine router heads with calibrated scores and
   strict, deterministic safetensors serialization;
@@ -144,6 +147,7 @@ downloading model weights:
 python examples/verify_dense_equivalence.py
 python examples/inspect_expert_package.py
 python examples/verify_full_mlp_expert.py
+python examples/verify_lora_expert.py
 python examples/verify_affine_router.py
 python examples/verify_logical_router.py
 python examples/verify_router_distillation.py

@@ -463,7 +463,7 @@ def _restore_anchor_only_state(
     model.requires_grad_(False)
     for run in runs:
         for binding in run.expert_bindings:
-            binding.expert.requires_grad_(False)
+            binding.expert.set_trainable(False)
             for parameter in binding.expert.parameters():
                 parameter.grad = None
 

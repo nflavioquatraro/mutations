@@ -12,6 +12,7 @@ license = { file = "LICENSE" }
 authors = [{ name = "Mutations contributors" }]
 dependencies = [
     "accelerate>=1.1",
+    "peft>=0.18.1,<1",
     "safetensors>=0.4",
     "torch>=2.2",
     "transformers>=4.51,<6",

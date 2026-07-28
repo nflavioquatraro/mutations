@@ -36,7 +36,13 @@ from anchored_moe.calibration import (
     refine_stability_margins,
 )
 from anchored_moe.configuration import AnchoredMoEConfig, ResolvedStrategyConfig
-from anchored_moe.experts import Expert, ExpertSerializationError, FullMLPExpert
+from anchored_moe.experts import (
+    Expert,
+    ExpertSerializationError,
+    FullMLPExpert,
+    LoRAExpertConfig,
+    PEFTLoRAExpert,
+)
 from anchored_moe.evaluation import (
     ActiveMLPMetrics,
     EfficiencyBenchmarkConfig,
@@ -221,12 +227,14 @@ __all__ = [
     "IndependentExpertTrainingReport",
     "IndependentExpertTrainingRun",
     "FullMLPExpert",
+    "LoRAExpertConfig",
     "HeadCalibrationReport",
     "HeadStabilityMarginReport",
     "HardRouteDistillationConfig",
     "IdentityRouterFeatureExtractor",
     "PackageValidationError",
     "PackageValidationReport",
+    "PEFTLoRAExpert",
     "PairSamplingPlan",
     "PairUtilityResult",
     "LabelBankSerializationError",

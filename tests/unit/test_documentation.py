@@ -65,7 +65,13 @@ from anchored_moe.evaluation import (
     measure_active_mlp_metrics,
     measure_module_state_footprint,
 )
-from anchored_moe.experts import Expert, ExpertSerializationError, FullMLPExpert
+from anchored_moe.experts import (
+    Expert,
+    ExpertSerializationError,
+    FullMLPExpert,
+    LoRAExpertConfig,
+    PEFTLoRAExpert,
+)
 from anchored_moe.inference import (
     AnchoredTop1Dispatcher,
     AnchoredTop2Dispatcher,
@@ -215,6 +221,8 @@ def test_current_public_symbols_have_docstrings() -> None:
         Expert,
         ExpertSerializationError,
         FullMLPExpert,
+        LoRAExpertConfig,
+        PEFTLoRAExpert,
         CounterfactualOracleResult,
         CounterfactualRoute,
         CounterfactualRouteLosses,

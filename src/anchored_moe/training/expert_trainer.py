@@ -178,8 +178,8 @@ def prepare_forced_path_training(
     model_storage_keys = {
         _parameter_storage_key(parameter) for parameter in model.parameters()
     }
-    expert_parameter_ids: set[int] = set()
-    expert_storage_keys: set[tuple[str, int | None, int]] = set()
+    owned_parameter_ids: set[int] = set()
+    owned_storage_keys: set[tuple[str, int | None, int]] = set()
     for binding in bindings:
         parameters = tuple(binding.expert.parameters())
         if not parameters:
@@ -206,23 +206,37 @@ def prepare_forced_path_training(
             raise ForcedPathTrainingError(
                 f"Expert at layer {binding.layer_index} shares model storage."
             )
-        if parameter_ids & expert_parameter_ids:
+        if parameter_ids & owned_parameter_ids:
             raise ForcedPathTrainingError(
                 "Experts at different layers must not share parameters."
             )
-        if storage_keys & expert_storage_keys:
+        if storage_keys & owned_storage_keys:
             raise ForcedPathTrainingError(
                 "Experts at different layers must not share parameter storage."
             )
-        expert_parameter_ids.update(parameter_ids)
-        expert_storage_keys.update(storage_keys)
+        owned_parameter_ids.update(parameter_ids)
+        owned_storage_keys.update(storage_keys)
 
     # Freezing is mechanical and precedes explicit expert re-enablement. The
     # shared backbone, anchor MLPs, routers, and any incumbent modules cannot
     # enter the optimizer through stale gradient flags.
     model.requires_grad_(False)
+    expected_trainable_parameter_ids: set[int] = set()
     for binding in bindings:
-        binding.expert.requires_grad_(True)
+        binding.expert.set_trainable(True)
+        optimizable = tuple(
+            parameter
+            for parameter in binding.expert.parameters()
+            if parameter.requires_grad
+        )
+        if not optimizable:
+            raise ForcedPathTrainingError(
+                f"Expert at layer {binding.layer_index} exposes no trainable "
+                "parameters after set_trainable(True)."
+            )
+        expected_trainable_parameter_ids.update(
+            id(parameter) for parameter in optimizable
+        )
         wrappers[binding.layer_index].configure_forced_expert(
             layer_index=binding.layer_index,
             expert_id=binding.expert_id,
@@ -235,9 +249,10 @@ def prepare_forced_path_training(
         if parameter.requires_grad
     )
     actual_parameter_ids = {id(parameter) for _, parameter in trainable}
-    if actual_parameter_ids != expert_parameter_ids:
+    if actual_parameter_ids != expected_trainable_parameter_ids:
         raise ForcedPathTrainingError(
-            "Prepared model trainable parameters do not exactly match experts."
+            "Prepared model trainable parameters do not exactly match the "
+            "expert-declared optimizer subsets."
         )
 
     return ForcedPathTrainingReport(
@@ -359,6 +374,7 @@ class ForcedPathExpertTrainer(Trainer):
                 )
                 for binding in bindings
                 for name, parameter in binding.expert.named_parameters()
+                if parameter.requires_grad
             )
             self._weight_drift = ExpertWeightDrift(drift_parameters)
         try:
@@ -383,6 +399,7 @@ class ForcedPathExpertTrainer(Trainer):
             id(parameter)
             for binding in bindings
             for parameter in binding.expert.parameters()
+            if parameter.requires_grad
         )
         self.assert_forced_path_invariants()
 

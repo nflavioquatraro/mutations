@@ -13,16 +13,12 @@ from safetensors import safe_open
 from safetensors.torch import load_file, save_file
 from torch import Tensor, nn
 
-from anchored_moe.experts.base import Expert
+from anchored_moe.experts.base import Expert, ExpertSerializationError
 
 
 _SERIALIZATION_FORMAT: Final = "anchored_moe.full_mlp.v1"
 _SAFETENSORS_SUFFIX: Final = ".safetensors"
 _METADATA_KEY: Final = "anchored_moe"
-
-
-class ExpertSerializationError(ValueError):
-    """Raised when a full-MLP tensor payload is unsafe or incompatible."""
 
 
 class FullMLPExpert(Expert):

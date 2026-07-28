@@ -52,11 +52,11 @@ ordinary model loss:
 =-\sum_t \log p_\theta(x_{t+1}\mid x_{\le t}).
 \]
 
-Only expert parameters participate in optimization:
+Only each expert-declared optimizer subset participates in optimization:
 
 \[
 \mathcal P_{\mathrm{train}}
-=\bigcup_{\ell\in C}\mathcal P(E_{\ell,k}),
+=\bigcup_{\ell\in C}\mathcal P_{\mathrm{optimizer}}(E_{\ell,k}),
 \]
 
 \[
@@ -178,10 +178,11 @@ Preparation:
 6. Reject parameterless experts, expert/model parameter sharing, and
    cross-layer expert parameter sharing.
 7. Freeze every model parameter mechanically with `requires_grad_(False)`.
-8. Re-enable gradients only for the supplied expert objects.
+8. Call each expert's `set_trainable(True)` extension point and require a
+   non-empty optimizer subset.
 9. Attach each expert in `forced_expert` mode without constructing a router.
-10. Compare the resulting trainable parameter identity set with the exact
-    expert parameter identity set.
+10. Compare the resulting trainable parameter identity set with the union of
+    exact expert-declared optimizer subsets.
 11. Return the resolved topology and parameter-count report.
 
 Trainer execution:
@@ -222,8 +223,9 @@ TRN-005 objective execution:
 
 1. Validate finite non-negative objective weights and a positive replay
    temperature.
-2. If drift is enabled, snapshot every bound expert parameter before Trainer
-   or Accelerate can perform an optimizer step.
+2. If drift is enabled, snapshot every trainable parameter in the
+   expert-declared optimizer subsets before Trainer or Accelerate can perform
+   an optimizer step.
 3. Keep configured teacher-logit and replay-mask columns during ordinary
    Trainer dataset-column pruning.
 4. Remove auxiliary fields before invoking the causal LM.
@@ -260,6 +262,9 @@ TRN-005 objective execution:
 - Every token executes the new expert at every converted layer.
 - Trainer construction and every `train()` call assert the exact trainable
   parameter identity set.
+- Full copied experts declare every owned parameter. EXP-002
+  `PEFTLoRAExpert` declares only LoRA tensors; its reconstructed private base
+  remains frozen throughout forced-path preparation and training.
 - `model_init` is rejected because bindings own concrete expert objects.
 - Full-model Trainer checkpoint saving is rejected. Expert safetensors and the
   complete expert-only package manifest are exported explicitly through the
@@ -300,6 +305,11 @@ signature columns with only the configured teacher and mask keys. Standard
 unused-column removal therefore remains active. Teacher logits are batch data,
 not a registered teacher model, so anchor parameters and optimizer ownership
 remain unchanged.
+
+The Trainer does not special-case PEFT parameter names. It calls the public
+`Expert.set_trainable()` contract and derives the resulting identities, so
+adapter ownership remains in the experts subpackage while TRN-001 retains
+mechanical optimizer validation.
 
 The subclass deliberately constrains standard Trainer capabilities:
 
@@ -380,6 +390,8 @@ print(report.expert_ids, report.total_global_steps)
 See `examples/verify_forced_path_training.py` for a deterministic offline
 training run using a randomly initialized tiny Qwen3 model, precomputed anchor
 logits, token masks, and both TRN-005 terms.
+`examples/verify_lora_expert.py` exercises the EXP-002 adapter-only parameter
+boundary consumed by the same Trainer.
 `examples/verify_independent_expert_set.py` trains two independent data
 partitions with distinct seeds and verifies expert updates, exact anchor
 restoration, route cleanup, and final freezing. See
@@ -399,6 +411,8 @@ restoration, route cleanup, and final freezing. See
   defines device placement, accumulation, and distributed execution behavior.
 - [PyTorch `requires_grad` documentation](https://pytorch.org/docs/stable/generated/torch.Tensor.requires_grad.html)
   defines parameter gradient eligibility.
+- [Hugging Face PEFT LoRA documentation](https://huggingface.co/docs/peft/main/conceptual_guides/lora)
+  defines the adapter-only trainable state exposed by EXP-002 experts.
 - [Distilling the Knowledge in a Neural Network](https://arxiv.org/abs/1503.02531)
   motivates temperature-scaled KL preservation. This implementation uses
   precomputed immutable-anchor logits, token-level masks, and a separate causal
@@ -425,6 +439,10 @@ zero-replay batches, invalid tensors and masks, exact drift normalization,
 snapshot immutability, gradient flow, weighted loss composition, Trainer
 column retention, real two-step optimization, exact optimizer ownership, and
 byte-exact incumbent preservation.
+
+EXP-002 integration tests additionally prove that a real Trainer optimizer
+contains exactly the LoRA adapter tensors, updates at least one adapter, and
+leaves both the live anchor and reconstructed private base byte-exact.
 
 TRN-002 tests cover immutable run configuration, deterministic binding and
 report order, unique expert IDs, exact rectangular layer coverage, global
