@@ -36,6 +36,9 @@ standalone weighted top-2 strategy primitives:
 - standalone sparse anchor-veto or compatibility-constrained top-2 dispatch
   with ranked specialist execution, weighted activation reconstruction, and
   auditable mixture weights;
+- capacity-aware top-2 degradation that retains both available specialists,
+  promotes one selected survivor with coefficient one, or returns overflow to
+  the immutable anchor without searching beyond the selected pair;
 - versioned router feature caches with deterministic row alignment, provenance,
   strict safetensors validation, and embedded tensor integrity digests;
 - feature-bank-bound domain and individual-utility label datasets with
@@ -87,7 +90,8 @@ standalone weighted top-2 strategy primitives:
   dense-equivalence verification, forced-path expert training/export, and
   custom package composition and top-1/top-2 quality/efficiency evaluation.
 
-Automatic model mutation during installation, online replay-teacher execution,
+Automatic model mutation during installation, capacity estimation, fallback
+beyond a selected pair, online replay-teacher execution,
 local mini-MoE and mixture-aware joint training, model-integrated and
 package-driven top-2 execution, persistent registry storage, Hub transfer, and
 full-model serialization are intentionally not implemented yet.

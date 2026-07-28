@@ -10,7 +10,8 @@ arity, and POL-005 chooses a globally ranked top-2 pair restricted by explicit
 PKG-003 compatibility groups. COM-001 combines an approved specialist pair
 with score-softmax weights, COM-002 supplies equal-weight and
 normalized-positive-evidence baselines, and BAL-001 rewrites unavailable
-top-1 experts to the anchor.
+top-1 experts to the anchor. BAL-002 consumes an approved top-2 pair and
+degrades it deterministically to its available survivor or the anchor.
 
 This subpackage does not extract router features, produce or fit expert scores,
 attach experts, execute MLPs, dispatch tokens, estimate serving capacity,
@@ -30,6 +31,7 @@ evaluation features.
 | COM-002 | `combination.policy: equal_weight` | `combination.py` | Validated |
 | COM-002 | `combination.policy: normalized_positive_evidence` | `combination.py` | Validated |
 | BAL-001 | `capacity.overflow: anchor` | `capacity.py` | Validated |
+| BAL-002 | `capacity.degradation: top2_to_top1` | `capacity.py` | Validated |
 
 `SelectionPolicy` is the broad selection strategy interface.
 `Top2SelectionPolicy` narrows it to policies that always return
@@ -46,6 +48,9 @@ the narrow interface. Adaptive sparse execution remains separate.
 `OverflowToAnchorCapacity` consumes a `RouteDecision` and optional per-token
 expert availability. `CapacityDecision` exposes the effective routes and the
 tokens that overflowed.
+`Top2ToTop1Capacity` consumes a `Top2RouteDecision`.
+`Top2CapacityDecision` exposes packed effective execution slots, route arity,
+and pair-shaped overflow metadata without changing the original decision.
 
 `CombinationPolicy` is the activation-combination interface.
 `ScoreSoftmaxCombination` consumes only already approved, already ordered
@@ -242,6 +247,21 @@ Availability has shape \(D_1\times\cdots\times D_n\times K\), while the
 effective route and overflow mask have token shape
 \(D_1\times\cdots\times D_n\).
 
+For a POL-002 or POL-005 approved pair \((c_{t,1},c_{t,2})\), BAL-002
+intersects the pair with explicit expert availability. Let \(q_{t,s}\) state
+whether ranked slot \(s\) is available. The effective arity is
+
+\[
+a'_t = q_{t,1} + q_{t,2}.
+\]
+
+When \(a'_t=2\), both specialists retain their selected order. When
+\(a'_t=1\), the survivor is packed into execution slot zero and receives
+coefficient one. When \(a'_t=0\), the anchor executes. An anchor-vetoed pair
+always remains arity zero and cannot report overflow because it never
+requested specialist execution. BAL-002 never searches beyond the selected
+pair.
+
 ## Algorithms
 
 For one tensor of calibrated expert scores:
@@ -328,6 +348,16 @@ Capacity fallback:
 5. Replace their candidate index and selected score with anchor values of zero.
 6. Return every token in a `CapacityDecision`; none are dropped.
 
+Top-2 capacity degradation:
+
+1. Treat omitted availability as all experts available.
+2. Leave every anchor-containing selection at effective arity zero.
+3. Gather availability only for approved specialist-pair slots.
+4. Retain both available specialists in ranked order.
+5. Promote a lone second-ranked survivor into effective slot zero.
+6. Return the anchor when neither selected specialist is available.
+7. Record unavailable approved occurrences in a pair-shaped overflow mask.
+
 ## Assumptions and invariants
 
 - Expert scores are already calibrated against the anchor's fixed-zero
@@ -379,7 +409,11 @@ Capacity fallback:
   or other sensitive content.
 - Selection does not claim that the selected expert has capacity.
 - BAL-001 consumes explicit availability but does not estimate capacity.
-- Overflow never selects another expert and never drops a token.
+- BAL-002 only considers the approved pair and never searches the registry for
+  another expert.
+- BAL-002 effective arity is always zero, one, or two; inactive slots use
+  candidate-zero and score-zero padding.
+- Overflow never drops a token, and the anchor cannot reject overflow.
 
 ## Hugging Face integration
 
@@ -395,8 +429,11 @@ because runtime strategy construction is not yet configuration-driven. Expert
 package manifests may declare `anchored_top1`; top-2 and adaptive package
 attachment remain unsupported. Standalone experiments can use all selection
 strategies explicitly. INF-002 composes either POL-002 or POL-005 with any
-`CombinationPolicy` in a standalone sparse dispatcher. This does not silently
-enable an incomplete model-level configuration.
+`CombinationPolicy` and BAL-002 in a standalone sparse dispatcher.
+`capacity.degradation: top2_to_top1` documents that direct API strategy;
+`AnchoredMoEConfig` does not accept it until top-2 model attachment and
+configuration-driven policy construction exist. This does not silently enable
+an incomplete model-level configuration.
 
 ## Configuration and examples
 
@@ -411,6 +448,7 @@ from anchored_moe import (
     NormalizedPositiveEvidenceCombination,
     OverflowToAnchorCapacity,
     ScoreSoftmaxCombination,
+    Top2ToTop1Capacity,
 )
 
 expert_ids = router.expert_ids_for_layer(layer_index)
@@ -432,6 +470,10 @@ effective = OverflowToAnchorCapacity()(
 top2 = AnchorVetoTop2Selection()(
     expert_scores,
     expert_ids=expert_ids,
+)
+capacity_adjusted = Top2ToTop1Capacity()(
+    top2,
+    expert_availability=availability,
 )
 compatibility = MixtureCompatibilityIndex(
     expert_ids=("code:0", "code:1", "math:0"),
@@ -465,7 +507,7 @@ evidence_baseline = NormalizedPositiveEvidenceCombination()(
 
 The public strategy names are `anchored_top1`, `anchor_veto_top2`,
 `adaptive_top1_top2`, `global_compatibility_top2`, `score_softmax`,
-`equal_weight`, and `normalized_positive_evidence`. See
+`equal_weight`, `normalized_positive_evidence`, and `top2_to_top1`. See
 `examples/verify_anchored_top1.py`, `examples/verify_anchor_veto_top2.py`,
 `examples/verify_compatibility_top2.py`,
 `examples/verify_adaptive_selection.py`, and
@@ -489,10 +531,10 @@ The public strategy names are `anchored_top1`, `anchor_veto_top2`,
 - The repository
   [architecture blueprint](../../../anchored-plugin-moe-architecture.md)
   defines fixed-zero anchor evidence, anchored hard top-1, anchor-veto top-2,
-  adaptive anchor/top-1/top-2, score-softmax activation combination, and both
-  COM-002 baselines.
+  adaptive anchor/top-1/top-2, score-softmax activation combination, both
+  COM-002 baselines, and capacity-aware top-2 degradation.
 
-POL-001, POL-002, POL-003, POL-005, COM-001, COM-002, and BAL-001 are
+POL-001, POL-002, POL-003, POL-005, COM-001, COM-002, BAL-001, and BAL-002 are
 framework infrastructure and do not derive a training or optimization
 algorithm from a paper.
 
@@ -516,6 +558,12 @@ zero-evidence rejection, arbitrary shapes, dtype/device preservation, input
 immutability, expected score-gradient behavior, public docstrings, and
 composition through INF-002.
 
+BAL-002 tests cover both-available retention, first- and second-ranked
+survivors, promotion into effective slot zero, neither-available anchor
+fallback, anchor-veto preservation, pair-shaped overflow metadata, omitted
+availability, validation before execution, sparse dispatcher call counts,
+mixture-weight semantics, and public result invariants.
+
 POL-003 tests cover all three route arities, exact anchor and mixture-threshold
 ties, append-order ranking ties, active per-expert masks, empty and
 single-expert padding, arbitrary leading dimensions, dtype/device preservation,
@@ -531,10 +579,9 @@ requirements, duplicate expert IDs, converted-layer coverage, sparse INF-002
 execution, exact anchor fallback, gradient preservation, and validation before
 candidate execution.
 
-INF-001 executes effective top-1 routes, INF-002 executes standalone
-anchor-veto or compatibility-constrained specialist pairs, and EVAL-002
-records top-1 routes. Capacity
-estimation, second-choice fallback, top-2 degradation, adaptive sparse
-execution, top-2 telemetry, decision serialization, package attachment,
+INF-001 executes effective top-1 routes, INF-002 executes capacity-adjusted
+standalone anchor-veto or compatibility-constrained routes, and EVAL-002
+records top-1 routes. Capacity estimation, fallback beyond the selected pair,
+adaptive sparse execution, top-2 telemetry, decision serialization, package attachment,
 `RoutedMLP` top-2 integration, and model-level top-1/top-2 configuration
 remain future work.

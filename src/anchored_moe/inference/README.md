@@ -9,6 +9,8 @@ top-1 selection, BAL-001 capacity fallback, the immutable anchor, and expert
 module objects for one routed layer. INF-002 connects any pair-shaped
 `Top2SelectionPolicy`, sparse specialist execution, and configurable
 activation combination through a standalone model-family-neutral dispatcher.
+BAL-002 adds explicit per-token availability and deterministic top-2 to top-1
+or anchor degradation to that dispatcher.
 POL-002 supplies ordinary anchor-veto selection and POL-005 supplies
 compatibility-constrained selection. COM-001 score-softmax remains the
 default, while COM-002 supplies two baselines. PKG-007 safely materializes
@@ -28,7 +30,7 @@ for materialization rather than model loading or package lifecycle.
 | Feature ID | Public API | Module | Status |
 |---|---|---|---|
 | INF-001 | `AnchoredTop1Dispatcher`, `RoutedMLP.configure_anchored_top1` | `dispatch.py`, `modeling.py` | Validated |
-| INF-002 | `AnchoredTop2Dispatcher`, `Top2DispatchResult` | `dispatch.py` | Validated |
+| INF-002, BAL-002 | `AnchoredTop2Dispatcher`, `Top2DispatchResult` | `dispatch.py` | Validated |
 | EVAL-002 | `RouteTelemetry`, `RouteRecord`, `RouteSummary` | `telemetry.py` | Validated |
 | PKG-007 | `synchronize_anchored_top1_registry` | `composition.py`, `modeling.py` | Validated |
 | TRN-001 | `RoutedMLP.configure_forced_expert` | `modeling.py` | Validated |
@@ -61,14 +63,16 @@ For INF-002, the configured POL-002 or POL-005 policy returns ranked candidates
 m_t=\mathbb{1}[c_{t,1}\ne0\land c_{t,2}\ne0].
 \]
 
-Dispatch computes
+BAL-002 intersects an approved pair with explicit availability and produces
+effective arity \(a'_t\in\{0,1,2\}\). Dispatch computes
 
 \[
 y_t =
 \begin{cases}
-A(h_t), & m_t=0,\\
+A(h_t), & a'_t=0,\\
+E_{c'_{t,1}}(h_t), & a'_t=1,\\
 \alpha_{t,1}E_{c_{t,1}}(h_t)
-+\alpha_{t,2}E_{c_{t,2}}(h_t), & m_t=1,
++\alpha_{t,2}E_{c_{t,2}}(h_t), & a'_t=2.
 \end{cases}
 \]
 
@@ -78,12 +82,13 @@ while COM-002 can use fixed equal weights or normalized positive evidence.
 All policies return non-negative, sum-to-one weights in the shared activation
 dtype and device.
 
-Every vetoed token executes the anchor once. Every approved token executes two
-distinct specialists, each gathered into one sparse batch regardless of its
-first or second rank. `Top2DispatchResult.mixture_weights` has shape
-\(D_1\times\cdots\times D_n\times2\): approved tokens contain \(\alpha_t\),
-while vetoed tokens contain \([0,0]\) because their anchor coefficient is one
-outside the specialist mixture.
+Every effective anchor token executes the anchor once. An arity-one token
+executes its available survivor directly, and an arity-two token executes two
+distinct specialists. Each specialist is gathered into one sparse batch
+regardless of its original rank. `Top2DispatchResult.mixture_weights` has
+shape \(D_1\times\cdots\times D_n\times2\): arity-two tokens contain
+\(\alpha_t\), arity-one tokens contain \([1,0]\), and anchor tokens contain
+\([0,0]\).
 
 Telemetry records selected candidate indices, effective candidate indices,
 selected scores, and overflow flags:
@@ -132,17 +137,19 @@ Pair-shaped top-2 dispatch:
    forwarding containers, and policy types before executing any candidate.
 2. Apply the configured `Top2SelectionPolicy`; require pair-shaped metadata
    with unchanged candidate IDs, token shape, score dtype, and device.
-3. Gather all vetoed tokens and execute the anchor in one sparse call.
-4. For each specialist in stable append order, find approved occurrences in
-   either ranked slot, gather their hidden states, and execute one sparse call.
-5. Map original token positions to a compact approved-pair batch.
-6. Reconstruct specialist outputs in exact first/second ranked order with
+3. Apply BAL-002 to explicit availability. Retain both available specialists,
+   promote a lone survivor to slot zero, or fall back to the anchor.
+4. Gather all effective anchor tokens and execute the anchor in one sparse
+   call.
+5. For each specialist in stable append order, find effective occurrences,
+   gather their hidden states, and execute one sparse call.
+6. Reconstruct specialist outputs in exact effective slot order with
    differentiable `torch.index_copy`.
-7. Apply the configured COM-001 or COM-002 policy to approved scores and
+7. Copy arity-one specialist outputs directly with weights \([1,0]\).
+8. Apply the configured COM-001 or COM-002 policy only to arity-two scores and
    pair-ordered activations.
-8. Reconstruct anchor and combined outputs in original token order.
-9. Return selected routes and full-shape weights, using zeros for vetoed
-   tokens.
+9. Reconstruct anchor, top-1, and combined outputs in original token order.
+10. Return original routes, capacity metadata, and full-shape weights.
 
 `RoutedMLP` remains in exact `forced_anchor` mode until
 `configure_anchored_top1()` is called explicitly. An empty configured expert
@@ -175,21 +182,24 @@ Registry synchronization:
 ## Assumptions and invariants
 
 - INF-001 executes exactly one effective candidate per token.
-- INF-002 executes either the anchor or exactly two distinct specialists per
-  token; it never executes all three.
+- INF-002 executes the anchor, one available selected specialist, or two
+  available distinct selected specialists per token.
 - Neither dispatcher drops a token.
 - Anchor candidate zero is permanent.
 - Experts execute in affine-router append order.
 - Inactive experts are not executed.
-- Overflow executes the anchor, not another specialist.
+- Pair overflow degrades to the selected survivor, then to the anchor; it
+  never searches beyond the selected pair.
 - INF-002 vetoes specialist execution whenever the anchor appears in the
   ranked pair.
 - INF-002 preserves first/second ranked order when assigning configured
   combination weights.
-- INF-002 emits zero specialist weights for anchor-vetoed tokens and
-  non-negative sum-to-one weights for approved tokens.
-- INF-002 does not check capacity. Pair compatibility is enforced only by a
-  configured compatibility-constrained policy; the dispatcher never infers it.
+- INF-002 emits zero specialist weights for effective anchor tokens,
+  \([1,0]\) for effective top-1 tokens, and non-negative sum-to-one weights for
+  effective top-2 tokens.
+- INF-002 checks explicit availability but does not estimate capacity. Pair
+  compatibility is enforced only by a configured compatibility-constrained
+  policy; the dispatcher never infers it.
 - The feature extractor and `RouterScoreBank` are frozen at inference
   attachment.
 - Existing expert gradient flags are preserved.
@@ -200,7 +210,7 @@ Registry synchronization:
 - Additional MLP arguments are forwarded unchanged. Token-aligned auxiliary
   tensors requiring sparse indexing are not supported by INF-001 or INF-002.
 - PKG-007 implements local explicit top-1 attachment. Top-2 package
-  attachment, `RoutedMLP` integration, capacity handling, telemetry,
+  attachment, `RoutedMLP` integration, capacity estimation, telemetry,
   compatibility-index construction, and distributed dispatch remain separate
   features.
 - Registry installation and unloading never mutate a model. Synchronization is
@@ -218,9 +228,9 @@ Registry synchronization:
   or selection decision.
 
 For \(N=\prod_i D_i\), router selection and initial mask-scan grouping are
-\(O(NK)\). INF-001 executes one MLP per token. INF-002 executes one MLP for a
-vetoed token or two MLPs for an approved token; combination is linear in the
-selected activation size.
+\(O(NK)\). INF-001 executes one MLP per token. INF-002 executes one MLP for an
+anchor or effective top-1 token and two MLPs for an effective top-2 token;
+combination is linear in the selected activation size.
 
 ## Hugging Face integration
 
@@ -234,7 +244,8 @@ forward and generation paths require no changes.
 INF-002 operates on ordinary PyTorch modules and tensors, so affine router
 heads and `FullMLPExpert` objects can be exercised without a model-family
 adapter. Its dispatcher accepts model-family-neutral `Top2SelectionPolicy`
-and `CombinationPolicy` interfaces, defaulting to POL-002 and COM-001.
+and `CombinationPolicy` interfaces plus BAL-002 explicit availability,
+defaulting to POL-002, COM-001, and `Top2ToTop1Capacity`.
 POL-005 can instead consume a PKG-003 compatibility index supplied explicitly
 by the caller. The dispatcher is deliberately not exposed through `RoutedMLP`,
 `AnchoredMoEForCausalLM`, registry synchronization, or declarative
@@ -278,12 +289,14 @@ result = AnchoredTop2Dispatcher(
     expert_ids=("code:0", "math:0"),
     anchor_mlp=anchor,
     experts=(code_expert, math_expert),
+    expert_availability=availability,
 )
 
 output = result.output
-approved_weights = result.mixture_weights[
-    result.selected_routes.expert_pair_mask
+mixed_weights = result.mixture_weights[
+    result.capacity.top2_mask
 ]
+degraded_tokens = result.capacity.top1_mask
 
 # Use EqualWeightCombination() or
 # NormalizedPositiveEvidenceCombination() for COM-002 comparisons.
@@ -346,8 +359,8 @@ lifecycle.
   defines the normalized score weights applied after ranked pair
   reconstruction.
 
-INF-001, INF-002, and EVAL-002 are framework infrastructure and do not derive
-a training or optimization algorithm from a paper.
+INF-001, INF-002, BAL-002, and EVAL-002 are framework infrastructure and do
+not derive a training or optimization algorithm from a paper.
 
 ## Tests and known limitations
 
@@ -366,12 +379,14 @@ temperature and combination policy, COM-001/COM-002 weights,
 score/hidden/expert gradients, structural validation before execution,
 candidate output contracts, affine-router and full-MLP integration, public
 result invariants, compatibility-constrained sparse execution, registry-index
-integration, policy-result validation before execution, and preservation of
-all INF-001 tests.
+integration, policy-result validation before execution, both/one/neither
+availability, second-ranked survivor promotion, effective route arity,
+pair-shaped overflow metadata, and preservation of all INF-001 tests.
 
 The initial implementation groups each candidate with a separate mask scan.
 Optimized batched dispatch, token-aligned auxiliary MLP arguments, capacity
-estimation, live-model checkpoint hash verification, route serialization,
+estimation, fallback beyond the selected pair, live-model checkpoint hash
+verification, route serialization,
 automatic install hooks, model-level configuration, multi-device
-materialization, top-2 telemetry, top-2 capacity degradation, `RoutedMLP`
+materialization, top-2 telemetry, `RoutedMLP`
 top-2 integration, and package-driven top-2 attachment remain unsupported.

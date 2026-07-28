@@ -1,4 +1,4 @@
-"""Verify standalone sparse anchor-veto top-2 execution."""
+"""Verify standalone capacity-aware sparse anchor-veto top-2 execution."""
 
 from __future__ import annotations
 
@@ -61,20 +61,34 @@ def main() -> None:
         expert_ids=router.expert_ids_for_layer(1),
         anchor_mlp=anchor,
         experts=(code, math),
+        expert_availability=torch.tensor(
+            [[[True, True], [True, False], [False, False]]]
+        ),
     )
 
     assert torch.equal(
         result.selected_routes.expert_pair_mask,
         torch.tensor([[True, True, False]]),
     )
+    assert torch.equal(
+        result.capacity.route_arity,
+        torch.tensor([[2, 1, 0]]),
+    )
+    assert torch.equal(
+        result.capacity.effective_indices,
+        torch.tensor([[[1, 2], [1, 0], [0, 0]]]),
+    )
+    assert torch.equal(result.output[0, 1], hidden_states[0, 1] * 2.0)
     assert torch.equal(result.output[0, 2], hidden_states[0, 2])
     assert torch.allclose(
-        result.mixture_weights[result.selected_routes.expert_pair_mask].sum(-1),
-        torch.ones(2),
+        result.mixture_weights[result.capacity.top2_mask].sum(-1),
+        torch.ones(1),
     )
+    assert torch.equal(result.mixture_weights[0, 1], torch.tensor([1.0, 0.0]))
     print(
-        "Top-2 dispatch validation passed: "
+        "Capacity-aware top-2 dispatch validation passed: "
         f"selected_pairs={result.selected_routes.selected_indices.tolist()}, "
+        f"effective_arity={result.capacity.route_arity.tolist()}, "
         f"weights={result.mixture_weights.tolist()}, "
         f"output={result.output.tolist()}"
     )

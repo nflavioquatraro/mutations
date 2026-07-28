@@ -73,8 +73,10 @@ from anchored_moe.policies import (
     RouteDecision,
     ScoreSoftmaxCombination,
     SelectionPolicy,
+    Top2CapacityDecision,
     Top2SelectionPolicy,
     Top2RouteDecision,
+    Top2ToTop1Capacity,
 )
 from anchored_moe.registry import (
     EXPERT_PAYLOAD_BINDING_FORMAT_VERSION,
@@ -221,8 +223,10 @@ __all__ = [
     "Top1DispatchResult",
     "Top1Top2OracleComparison",
     "Top2DispatchResult",
+    "Top2CapacityDecision",
     "Top2RouteDecision",
     "Top2SelectionPolicy",
+    "Top2ToTop1Capacity",
     "UtilityLabelBank",
     "calibrate_temperature_and_thresholds",
     "benchmark_operation",

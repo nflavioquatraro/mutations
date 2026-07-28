@@ -16,9 +16,11 @@ from anchored_moe import (
     MixtureCompatibilityIndex,
     NormalizedPositiveEvidenceCombination,
     ScoreSoftmaxCombination,
+    Top2CapacityDecision,
     Top2DispatchResult,
     Top2RouteDecision,
     Top2SelectionPolicy,
+    Top2ToTop1Capacity,
 )
 
 
@@ -86,6 +88,70 @@ def test_top2_dispatch_executes_sparse_pairs_and_restores_order() -> None:
         torch.stack((first_weights, second_weights)),
     )
     assert result.output.shape == hidden.shape
+
+
+def test_top2_dispatch_degrades_capacity_without_executing_unavailable_experts() -> None:
+    anchor = _CountingLinear(1.0)
+    code = _CountingLinear(2.0)
+    math = _CountingLinear(-1.0)
+    hidden = torch.tensor(
+        [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0]],
+        requires_grad=True,
+    )
+    scores = torch.tensor(
+        [[2.0, 1.0], [2.0, 1.0], [2.0, 1.0], [2.0, 1.0]],
+        requires_grad=True,
+    )
+    availability = torch.tensor(
+        [[True, True], [True, False], [False, True], [False, False]]
+    )
+
+    result = AnchoredTop2Dispatcher().dispatch(
+        hidden,
+        expert_scores=scores,
+        expert_ids=("code", "math"),
+        anchor_mlp=anchor,
+        experts=(code, math),
+        expert_availability=availability,
+    )
+
+    pair_weights = torch.softmax(torch.tensor([2.0, 1.0]), dim=0)
+    expected = torch.stack(
+        (
+            pair_weights[0] * hidden[0] * 2.0
+            + pair_weights[1] * hidden[0] * -1.0,
+            hidden[1] * 2.0,
+            hidden[2] * -1.0,
+            hidden[3],
+        )
+    )
+    assert torch.allclose(result.output, expected)
+    assert anchor.calls == [1]
+    assert code.calls == [2]
+    assert math.calls == [2]
+    assert torch.equal(
+        result.capacity.effective_indices,
+        torch.tensor([[1, 2], [1, 0], [2, 0], [0, 0]]),
+    )
+    assert torch.equal(result.capacity.route_arity, torch.tensor([2, 1, 1, 0]))
+    assert torch.equal(
+        result.capacity.overflow_mask,
+        torch.tensor(
+            [[False, False], [False, True], [True, False], [True, True]]
+        ),
+    )
+    assert torch.allclose(result.mixture_weights[0], pair_weights)
+    assert torch.equal(
+        result.mixture_weights[1:],
+        torch.tensor([[1.0, 0.0], [1.0, 0.0], [0.0, 0.0]]),
+    )
+    result.output.square().sum().backward()
+    assert hidden.grad is not None and torch.isfinite(hidden.grad).all()
+    assert scores.grad is not None and torch.isfinite(scores.grad).all()
+    assert torch.equal(scores.grad[1:], torch.zeros_like(scores.grad[1:]))
+    assert anchor.weight.grad is not None
+    assert code.weight.grad is not None
+    assert math.weight.grad is not None
 
 
 def test_top2_dispatch_executes_only_compatible_pairs() -> None:
@@ -298,6 +364,15 @@ def test_top2_dispatch_validates_inputs_before_module_execution() -> None:
             anchor_mlp=anchor,
             experts=(code, math),
         )
+    with pytest.raises(ValueError, match="token shape"):
+        dispatcher.dispatch(
+            torch.randn(2, 2),
+            expert_scores=torch.ones(2, 2),
+            expert_ids=("code", "math"),
+            anchor_mlp=anchor,
+            experts=(code, math),
+            expert_availability=torch.ones(2, 3, dtype=torch.bool),
+        )
 
     assert anchor.calls == []
     assert code.calls == []
@@ -312,6 +387,10 @@ def test_top2_dispatch_rejects_incompatible_policy_types() -> None:
     with pytest.raises(TypeError, match="combination_policy"):
         AnchoredTop2Dispatcher(
             combination_policy=object(),  # type: ignore[arg-type]
+        )
+    with pytest.raises(TypeError, match="capacity_policy"):
+        AnchoredTop2Dispatcher(
+            capacity_policy=object(),  # type: ignore[arg-type]
         )
 
 
@@ -353,6 +432,48 @@ def test_top2_dispatch_validates_policy_result_before_execution() -> None:
     assert math.calls == []
 
 
+class _WrongTop2Capacity(Top2ToTop1Capacity):
+    """Test double introducing a route inconsistent with its overflow mask."""
+
+    def __call__(
+        self,
+        routes: Top2RouteDecision,
+        *,
+        expert_availability: torch.Tensor | None = None,
+    ) -> Top2CapacityDecision:
+        del expert_availability
+        return Top2CapacityDecision(
+            effective_indices=torch.tensor([[3, 0]]),
+            effective_scores=torch.tensor([[1.0, 0.0]]),
+            route_arity=torch.tensor([1]),
+            expert_ids=routes.expert_ids,
+            overflow_mask=torch.tensor([[False, True]]),
+        )
+
+
+def test_top2_dispatch_validates_capacity_result_before_execution() -> None:
+    anchor = _CountingLinear(1.0)
+    code = _CountingLinear(2.0)
+    math = _CountingLinear(-1.0)
+    inactive = _CountingLinear(4.0)
+
+    with pytest.raises(ValueError, match="exactly retain, degrade, or reject"):
+        AnchoredTop2Dispatcher(
+            capacity_policy=_WrongTop2Capacity(),
+        ).dispatch(
+            torch.randn(1, 2),
+            expert_scores=torch.tensor([[2.0, 1.0, -1.0]]),
+            expert_ids=("code", "math", "inactive"),
+            anchor_mlp=anchor,
+            experts=(code, math, inactive),
+        )
+
+    assert anchor.calls == []
+    assert code.calls == []
+    assert math.calls == []
+    assert inactive.calls == []
+
+
 class _WrongWidth(nn.Module):
     """Return an incompatible trailing output shape."""
 
@@ -376,22 +497,26 @@ def test_top2_dispatch_result_rejects_invalid_public_construction() -> None:
         torch.tensor([[-0.2, -0.1], [0.8, 0.7]]),
         expert_ids=("code", "math"),
     )
+    capacity = Top2ToTop1Capacity()(routes)
 
     with pytest.raises(ValueError, match="pair shape"):
         Top2DispatchResult(
             output=torch.ones(2, 2),
             selected_routes=routes,
+            capacity=capacity,
             mixture_weights=torch.ones(2, 3),
         )
     with pytest.raises(ValueError, match="zero specialist"):
         Top2DispatchResult(
             output=torch.ones(2, 2),
             selected_routes=routes,
+            capacity=capacity,
             mixture_weights=torch.full((2, 2), 0.5),
         )
     with pytest.raises(ValueError, match="sum to one"):
         Top2DispatchResult(
             output=torch.ones(2, 2),
             selected_routes=routes,
+            capacity=capacity,
             mixture_weights=torch.tensor([[0.0, 0.0], [0.25, 0.25]]),
         )

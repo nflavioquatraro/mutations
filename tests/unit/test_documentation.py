@@ -81,8 +81,10 @@ from anchored_moe.policies import (
     RouteDecision,
     ScoreSoftmaxCombination,
     SelectionPolicy,
+    Top2CapacityDecision,
     Top2SelectionPolicy,
     Top2RouteDecision,
+    Top2ToTop1Capacity,
 )
 from anchored_moe.registry import (
     EXPERT_PAYLOAD_BINDING_FORMAT_VERSION,
@@ -219,6 +221,8 @@ def test_current_public_symbols_have_docstrings() -> None:
         ScoreSoftmaxCombination,
         ActivationCombinationResult,
         OverflowToAnchorCapacity,
+        Top2CapacityDecision,
+        Top2ToTop1Capacity,
         RouteDecision,
         Top2RouteDecision,
         AnchoredTop1Dispatcher,

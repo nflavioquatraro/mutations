@@ -12,6 +12,8 @@ from torch import Tensor, nn
 from anchored_moe.policies.capacity import (
     CapacityDecision,
     OverflowToAnchorCapacity,
+    Top2CapacityDecision,
+    Top2ToTop1Capacity,
 )
 from anchored_moe.policies.combination import (
     CombinationPolicy,
@@ -69,23 +71,25 @@ class Top1DispatchResult:
 
 @dataclass(frozen=True)
 class Top2DispatchResult:
-    """Output and auditable metadata from pair-shaped top-2 dispatch.
+    """Output and auditable metadata from capacity-aware top-2 dispatch.
 
     Attributes:
         output:
             Reconstructed MLP output with the same token-leading shape as the
             input hidden states.
         selected_routes:
-            Ranked pair and anchor-veto decision produced by POL-002.
+            Ranked pair and anchor-veto decision produced before capacity.
+        capacity:
+            BAL-002 effective anchor/top-1/top-2 routes and overflow metadata.
         mixture_weights:
-            Tensor with the selected-pair shape. Approved specialist tokens
-            contain COM-001 weights; anchor-vetoed tokens contain two zeros
-            because the anchor executes with coefficient one outside the
-            specialist mixture.
+            Tensor with the selected-pair shape. Effective top-2 tokens contain
+            configured combination weights, degraded top-1 tokens contain
+            ``[1, 0]``, and anchor tokens contain ``[0, 0]``.
     """
 
     output: Tensor
     selected_routes: Top2RouteDecision
+    capacity: Top2CapacityDecision
     mixture_weights: Tensor
 
     def __post_init__(self) -> None:
@@ -97,6 +101,7 @@ class Top2DispatchResult:
             raise TypeError("output must use a floating-point dtype.")
         if not isinstance(self.selected_routes, Top2RouteDecision):
             raise TypeError("selected_routes must be a Top2RouteDecision.")
+        _validate_top2_capacity_result(self.capacity, self.selected_routes)
         if not isinstance(self.mixture_weights, Tensor):
             raise TypeError("mixture_weights must be a torch.Tensor.")
         if not self.mixture_weights.is_floating_point():
@@ -128,13 +133,28 @@ class Top2DispatchResult:
                 "output must preserve the selected route token-leading shape."
             )
         flat_weights = self.mixture_weights.reshape(-1, 2)
-        flat_pair_mask = self.selected_routes.expert_pair_mask.reshape(-1)
-        if torch.any(flat_weights[~flat_pair_mask] != 0).item():
+        flat_anchor_mask = self.capacity.anchor_mask.reshape(-1)
+        flat_top1_mask = self.capacity.top1_mask.reshape(-1)
+        flat_top2_mask = self.capacity.top2_mask.reshape(-1)
+        if torch.any(flat_weights[flat_anchor_mask] != 0).item():
             raise ValueError(
-                "anchor-vetoed tokens must have zero specialist weights."
+                "effective anchor tokens must have zero specialist weights."
             )
-        if flat_pair_mask.any().item():
-            pair_sums = flat_weights[flat_pair_mask].sum(dim=-1)
+        if flat_top1_mask.any().item():
+            expected_top1_weights = torch.tensor(
+                [1.0, 0.0],
+                dtype=flat_weights.dtype,
+                device=flat_weights.device,
+            ).expand(int(flat_top1_mask.sum().item()), 2)
+            if not torch.equal(
+                flat_weights[flat_top1_mask],
+                expected_top1_weights,
+            ):
+                raise ValueError(
+                    "effective top-1 tokens must have weights [1, 0]."
+                )
+        if flat_top2_mask.any().item():
+            pair_sums = flat_weights[flat_top2_mask].sum(dim=-1)
             tolerance = max(
                 1e-6,
                 8 * torch.finfo(self.mixture_weights.dtype).eps,
@@ -343,22 +363,22 @@ class AnchoredTop1Dispatcher:
 
 
 class AnchoredTop2Dispatcher:
-    """Execute pair-shaped top-2 routes and reconstruct weighted activations.
+    """Execute capacity-aware pair routes and reconstruct sparse activations.
 
     Given hidden states ``h[..., H]`` and calibrated specialist scores
     ``G[..., K]``, INF-002 performs:
 
     1. one configured :class:`Top2SelectionPolicy`;
-    2. one sparse anchor call for all vetoed tokens;
-    3. one sparse call per specialist selected by any approved pair;
-    4. ranked pair reconstruction;
-    5. configured activation combination;
+    2. BAL-002 top-2 to top-1 or anchor degradation;
+    3. one sparse anchor call for all effective anchor tokens;
+    4. one sparse call per capacity-approved specialist;
+    5. direct top-1 output or configured top-2 activation combination;
     6. differentiable reconstruction in original token order.
 
     The anchor is candidate zero and ``experts[i]`` is candidate ``i + 1``.
-    No token is dropped. Inactive specialists are not executed, and a selected
-    specialist is called once for all of its tokens regardless of whether it
-    ranked first or second.
+    No token is dropped. Inactive or unavailable specialists are not executed,
+    and an active specialist is called once for all of its tokens regardless
+    of whether it was originally ranked first or second.
 
     Additional positional and keyword arguments are forwarded unchanged to
     each invoked module. Callers must therefore use only global or
@@ -366,9 +386,10 @@ class AnchoredTop2Dispatcher:
     would also require sparse indexing.
 
     This dispatcher is framework infrastructure and is not derived from a
-    paper. Pair compatibility is enforced only when the configured policy
-    declares it; capacity handling, telemetry, package attachment, and
-    distributed execution are deliberately excluded.
+    paper. Pair compatibility is enforced only when the configured selection
+    policy declares it. Availability is supplied explicitly; capacity
+    estimation, telemetry, package attachment, and distributed execution are
+    deliberately excluded.
     """
 
     def __init__(
@@ -376,6 +397,7 @@ class AnchoredTop2Dispatcher:
         *,
         selection_policy: Top2SelectionPolicy | None = None,
         combination_policy: CombinationPolicy | None = None,
+        capacity_policy: Top2ToTop1Capacity | None = None,
     ) -> None:
         """Create a dispatcher from independently configurable policies."""
 
@@ -389,6 +411,11 @@ class AnchoredTop2Dispatcher:
             if combination_policy is None
             else combination_policy
         )
+        self.capacity_policy = (
+            Top2ToTop1Capacity()
+            if capacity_policy is None
+            else capacity_policy
+        )
         if not isinstance(self.selection_policy, Top2SelectionPolicy):
             raise TypeError(
                 "selection_policy must implement Top2SelectionPolicy."
@@ -397,6 +424,8 @@ class AnchoredTop2Dispatcher:
             raise TypeError(
                 "combination_policy must implement CombinationPolicy."
             )
+        if not isinstance(self.capacity_policy, Top2ToTop1Capacity):
+            raise TypeError("capacity_policy must be Top2ToTop1Capacity.")
 
     def dispatch(
         self,
@@ -406,10 +435,11 @@ class AnchoredTop2Dispatcher:
         expert_ids: Sequence[str],
         anchor_mlp: nn.Module,
         experts: Sequence[nn.Module],
+        expert_availability: Tensor | None = None,
         module_args: Sequence[Any] = (),
         module_kwargs: dict[str, Any] | None = None,
     ) -> Top2DispatchResult:
-        """Select, sparsely execute, combine, and reconstruct top-2 outputs.
+        """Select, capacity-check, execute, and reconstruct sparse outputs.
 
         Args:
             hidden_states:
@@ -423,6 +453,10 @@ class AnchoredTop2Dispatcher:
                 Immutable dense fallback transformation.
             experts:
                 Expert modules in exact ``expert_ids`` order.
+            expert_availability:
+                Optional boolean tensor with shape
+                ``hidden_states.shape[:-1] + (K,)``. Omitting it declares
+                every specialist available.
             module_args:
                 Additional arguments forwarded unchanged to invoked MLPs.
             module_kwargs:
@@ -472,24 +506,35 @@ class AnchoredTop2Dispatcher:
             expert_scores=expert_scores,
             expert_ids=normalized_ids,
         )
+        capacity = self.capacity_policy(
+            selected_routes,
+            expert_availability=expert_availability,
+        )
+        # A composed policy is validated before any MLP executes. In
+        # particular, capacity cannot introduce an unselected specialist.
+        _validate_top2_capacity_result(capacity, selected_routes)
 
         token_shape = selected_routes.selected_indices.shape[:-1]
-        token_count = selected_routes.expert_pair_mask.numel()
+        token_count = capacity.route_arity.numel()
         hidden_size = hidden_states.shape[-1]
         flat_hidden = hidden_states.reshape(token_count, hidden_size)
-        flat_selected = selected_routes.selected_indices.reshape(token_count, 2)
-        flat_pair_mask = selected_routes.expert_pair_mask.reshape(token_count)
+        flat_effective = capacity.effective_indices.reshape(token_count, 2)
+        flat_arity = capacity.route_arity.reshape(token_count)
         anchor_indices = torch.nonzero(
-            ~flat_pair_mask,
+            flat_arity == 0,
             as_tuple=False,
         ).flatten()
-        approved_indices = torch.nonzero(
-            flat_pair_mask,
+        top1_indices = torch.nonzero(
+            flat_arity == 1,
+            as_tuple=False,
+        ).flatten()
+        top2_indices = torch.nonzero(
+            flat_arity == 2,
             as_tuple=False,
         ).flatten()
 
         anchor_output: tuple[Tensor, Tensor] | None = None
-        pair_outputs: list[tuple[Tensor, Tensor]] = []
+        specialist_outputs: list[tuple[Tensor, Tensor]] = []
         output_tail: tuple[int, ...] | None = None
         output_dtype: torch.dtype | None = None
         output_device: torch.device | None = None
@@ -514,36 +559,16 @@ class AnchoredTop2Dispatcher:
             )
             anchor_output = (anchor_indices, candidate_output)
 
-        # Map original flat token positions to the compact approved-pair batch.
-        approved_positions = torch.full(
-            (token_count,),
-            -1,
-            dtype=torch.long,
-            device=hidden_states.device,
-        )
-        if approved_indices.numel():
-            approved_positions = torch.index_copy(
-                approved_positions,
-                dim=0,
-                index=approved_indices,
-                source=torch.arange(
-                    approved_indices.numel(),
-                    dtype=torch.long,
-                    device=hidden_states.device,
-                ),
-            )
-
         for candidate_index, expert in enumerate(normalized_experts, start=1):
-            selected_occurrences = torch.nonzero(
-                (flat_selected == candidate_index)
-                & flat_pair_mask.unsqueeze(-1),
+            active_occurrences = torch.nonzero(
+                flat_effective == candidate_index,
                 as_tuple=False,
             )
-            if selected_occurrences.numel() == 0:
+            if active_occurrences.numel() == 0:
                 continue
 
-            token_indices = selected_occurrences[:, 0]
-            pair_slots = selected_occurrences[:, 1]
+            token_indices = active_occurrences[:, 0]
+            pair_slots = active_occurrences[:, 1]
             candidate_hidden = torch.index_select(
                 flat_hidden,
                 dim=0,
@@ -561,17 +586,10 @@ class AnchoredTop2Dispatcher:
                 expected_dtype=output_dtype,
                 expected_device=output_device,
             )
-            compact_positions = torch.index_select(
-                approved_positions,
-                dim=0,
-                index=token_indices,
-            )
-            if torch.any(compact_positions < 0).item():
-                raise RuntimeError(
-                    "Approved specialist token mapping is internally inconsistent."
-                )
-            flat_pair_positions = compact_positions * 2 + pair_slots
-            pair_outputs.append((flat_pair_positions, candidate_output))
+            # Packing always promotes a lone survivor to slot zero, while
+            # retained pairs preserve their original first/second ordering.
+            flat_pair_positions = token_indices * 2 + pair_slots
+            specialist_outputs.append((flat_pair_positions, candidate_output))
 
         if output_tail is None or output_dtype is None or output_device is None:
             raise ValueError("Cannot dispatch an input with zero tokens.")
@@ -600,37 +618,70 @@ class AnchoredTop2Dispatcher:
             )
 
         flat_mixture_weights = expert_scores.new_zeros((token_count, 2))
-        if approved_indices.numel():
-            expected_pair_slots = approved_indices.numel() * 2
-            actual_pair_slots = sum(
-                int(indices.numel()) for indices, _ in pair_outputs
+        active_slot_count = int(flat_arity.sum().item())
+        actual_active_slots = sum(
+            int(indices.numel()) for indices, _ in specialist_outputs
+        )
+        if actual_active_slots != active_slot_count:
+            raise RuntimeError(
+                "Capacity-approved specialist routes were not completely executed."
             )
-            if actual_pair_slots != expected_pair_slots:
-                raise RuntimeError(
-                    "Approved specialist pairs were not completely executed."
-                )
 
-            flat_pair_output = torch.empty(
-                (expected_pair_slots, *output_tail),
+        if active_slot_count:
+            flat_specialist_output = torch.empty(
+                (token_count * 2, *output_tail),
                 dtype=output_dtype,
                 device=output_device,
             )
-            for pair_positions, candidate_output in pair_outputs:
-                flat_pair_output = torch.index_copy(
-                    flat_pair_output,
+            for pair_positions, candidate_output in specialist_outputs:
+                flat_specialist_output = torch.index_copy(
+                    flat_specialist_output,
                     dim=0,
                     index=pair_positions,
                     source=candidate_output,
                 )
-            selected_outputs = flat_pair_output.reshape(
-                approved_indices.numel(),
+
+        if top1_indices.numel():
+            top1_outputs = torch.index_select(
+                flat_specialist_output,
+                dim=0,
+                index=top1_indices * 2,
+            )
+            flat_output = torch.index_copy(
+                flat_output,
+                dim=0,
+                index=top1_indices,
+                source=top1_outputs,
+            )
+            top1_weights = expert_scores.new_tensor([1.0, 0.0]).expand(
+                top1_indices.numel(),
+                2,
+            )
+            flat_mixture_weights = torch.index_copy(
+                flat_mixture_weights,
+                dim=0,
+                index=top1_indices,
+                source=top1_weights,
+            )
+
+        if top2_indices.numel():
+            top2_positions = (
+                top2_indices.unsqueeze(-1) * 2
+                + torch.arange(2, device=top2_indices.device)
+            ).reshape(-1)
+            selected_outputs = torch.index_select(
+                flat_specialist_output,
+                dim=0,
+                index=top2_positions,
+            ).reshape(
+                top2_indices.numel(),
                 2,
                 *output_tail,
             )
-            approved_scores = selected_routes.selected_scores.reshape(
+            approved_scores = capacity.effective_scores.reshape(
                 token_count,
                 2,
-            )[flat_pair_mask]
+            )[flat_arity == 2]
             combination = self.combination_policy(
                 selected_outputs,
                 selected_scores=approved_scores,
@@ -638,13 +689,13 @@ class AnchoredTop2Dispatcher:
             flat_output = torch.index_copy(
                 flat_output,
                 dim=0,
-                index=approved_indices,
+                index=top2_indices,
                 source=combination.output,
             )
             flat_mixture_weights = torch.index_copy(
                 flat_mixture_weights,
                 dim=0,
-                index=approved_indices,
+                index=top2_indices,
                 source=combination.weights,
             )
 
@@ -653,6 +704,7 @@ class AnchoredTop2Dispatcher:
         return Top2DispatchResult(
             output=output,
             selected_routes=selected_routes,
+            capacity=capacity,
             mixture_weights=mixture_weights,
         )
 
@@ -687,6 +739,74 @@ def _validate_top2_selection_result(
     if selected_routes.selected_scores.device != expert_scores.device:
         raise ValueError(
             "Top-2 selected scores must preserve the router-score device."
+        )
+
+
+def _validate_top2_capacity_result(
+    capacity: Top2CapacityDecision,
+    selected_routes: Top2RouteDecision,
+) -> None:
+    """Require capacity output to be an exact degradation of selected pairs."""
+
+    if not isinstance(capacity, Top2CapacityDecision):
+        raise TypeError("capacity policy must return a Top2CapacityDecision.")
+    if capacity.expert_ids != selected_routes.expert_ids:
+        raise ValueError("Selected and effective routes must share expert_ids.")
+    if capacity.effective_indices.shape != selected_routes.selected_indices.shape:
+        raise ValueError("Selected and effective routes must share pair shape.")
+
+    approved_pair = selected_routes.expert_pair_mask.unsqueeze(-1)
+    invalid_overflow = capacity.overflow_mask & ~approved_pair
+    if invalid_overflow.any().item():
+        raise ValueError(
+            "Anchor-vetoed routes cannot contain specialist overflow."
+        )
+
+    active_slots = approved_pair & ~capacity.overflow_mask
+    first_active = active_slots[..., 0]
+    second_active = active_slots[..., 1]
+    any_active = first_active | second_active
+    both_active = first_active & second_active
+
+    expected_indices = torch.zeros_like(selected_routes.selected_indices)
+    expected_scores = torch.zeros_like(selected_routes.selected_scores)
+    expected_indices[..., 0] = torch.where(
+        any_active,
+        torch.where(
+            first_active,
+            selected_routes.selected_indices[..., 0],
+            selected_routes.selected_indices[..., 1],
+        ),
+        0,
+    )
+    expected_scores[..., 0] = torch.where(
+        any_active,
+        torch.where(
+            first_active,
+            selected_routes.selected_scores[..., 0],
+            selected_routes.selected_scores[..., 1],
+        ),
+        0.0,
+    )
+    expected_indices[..., 1] = torch.where(
+        both_active,
+        selected_routes.selected_indices[..., 1],
+        0,
+    )
+    expected_scores[..., 1] = torch.where(
+        both_active,
+        selected_routes.selected_scores[..., 1],
+        0.0,
+    )
+    expected_arity = active_slots.sum(dim=-1, dtype=torch.long)
+    if (
+        not torch.equal(capacity.effective_indices, expected_indices)
+        or not torch.equal(capacity.effective_scores, expected_scores)
+        or not torch.equal(capacity.route_arity, expected_arity)
+    ):
+        raise ValueError(
+            "Capacity output must exactly retain, degrade, or reject each "
+            "selected specialist pair."
         )
 
 

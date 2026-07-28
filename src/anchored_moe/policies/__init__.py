@@ -3,6 +3,8 @@
 from anchored_moe.policies.capacity import (
     CapacityDecision,
     OverflowToAnchorCapacity,
+    Top2CapacityDecision,
+    Top2ToTop1Capacity,
 )
 from anchored_moe.policies.combination import (
     ActivationCombinationResult,
@@ -39,5 +41,7 @@ __all__ = [
     "ScoreSoftmaxCombination",
     "SelectionPolicy",
     "Top2SelectionPolicy",
+    "Top2CapacityDecision",
     "Top2RouteDecision",
+    "Top2ToTop1Capacity",
 ]
