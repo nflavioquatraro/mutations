@@ -13,8 +13,8 @@ score-softmax remains the default, while COM-002 supplies two baselines. PKG-007
 safely materializes top-1 runtime objects from active local packages.
 
 It does not install packages implicitly, estimate serving capacity, attach
-top-2 dispatch to `RoutedMLP`, validate pair compatibility, or manage
-distributed all-to-all execution. CORE-005 exposes the existing explicit
+top-2 dispatch to `RoutedMLP`, consume PKG-003/POL-005 compatibility metadata,
+or manage distributed all-to-all execution. CORE-005 exposes the existing explicit
 composition boundary through
 `AnchoredMoEForCausalLM.synchronize_registry`; inference remains responsible
 for materialization rather than model loading or package lifecycle.
@@ -341,6 +341,6 @@ The initial implementation groups each candidate with a separate mask scan.
 Optimized batched dispatch, token-aligned auxiliary MLP arguments, capacity
 estimation, live-model checkpoint hash verification, route serialization,
 automatic install hooks, model-level configuration, multi-device
-materialization, top-2 telemetry, pair compatibility, top-2 capacity
-degradation, `RoutedMLP` top-2 integration, and package-driven top-2 attachment
-remain unsupported.
+materialization, top-2 telemetry, compatibility-aware top-2 dispatch,
+top-2 capacity degradation, `RoutedMLP` top-2 integration, and package-driven
+top-2 attachment remain unsupported.

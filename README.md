@@ -29,6 +29,8 @@ standalone weighted top-2 strategy primitives:
   combination policies;
 - adaptive anchor/top-1/top-2 selection with explicit auditable route arity
   and deterministic mixture-threshold behavior;
+- immutable package-declared expert compatibility groups and deterministic
+  global top-2 selection that never mixes unrelated or undeclared experts;
 - standalone sparse anchor-veto top-2 dispatch with ranked specialist
   execution, weighted activation reconstruction, and auditable mixture weights;
 - versioned router feature caches with deterministic row alignment, provenance,
@@ -97,6 +99,7 @@ python examples/verify_full_mlp_expert.py
 python examples/verify_affine_router.py
 python examples/verify_anchored_top1.py
 python examples/verify_anchor_veto_top2.py
+python examples/verify_compatibility_top2.py
 python examples/verify_adaptive_selection.py
 python examples/verify_combination_baselines.py
 python examples/verify_top2_dispatch.py

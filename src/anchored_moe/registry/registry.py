@@ -4,9 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from threading import RLock
+from typing import TYPE_CHECKING
 
 from anchored_moe.registry.package import ExpertPackage, PackageIdentity
 from anchored_moe.utils.hashing import sha256_json
+
+if TYPE_CHECKING:
+    from anchored_moe.registry.compatibility import MixtureCompatibilityIndex
 
 
 REGISTRY_FORMAT_VERSION = 1
@@ -179,6 +183,35 @@ class ExpertRegistry:
 
         with self._lock:
             return self._compatibility_sha256
+
+    def mixture_compatibility(
+        self,
+        *,
+        layer_index: int,
+    ) -> MixtureCompatibilityIndex:
+        """Return PKG-003 metadata for one layer of the active registry.
+
+        The active package snapshot is checked before and after construction
+        so callers never receive compatibility metadata assembled across two
+        registry states. Missing package group declarations remain represented
+        as non-mixable ``None`` entries.
+        """
+
+        from anchored_moe.registry.compatibility import (
+            MixtureCompatibilityIndex,
+        )
+
+        snapshot = self.snapshot()
+        packages = self.active_packages
+        index = MixtureCompatibilityIndex.from_packages(
+            packages,
+            layer_index=layer_index,
+        )
+        if self.snapshot() != snapshot:
+            raise RegistryLifecycleError(
+                "Registry changed while mixture compatibility was assembled."
+            )
+        return index
 
     def snapshot(self) -> RegistrySnapshot:
         """Return an immutable, self-contained active-registry snapshot."""

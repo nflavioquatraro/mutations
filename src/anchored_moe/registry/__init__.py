@@ -5,6 +5,10 @@ from anchored_moe.registry.bindings import (
     ExpertPayloadBinding,
     parse_expert_payload_bindings,
 )
+from anchored_moe.registry.compatibility import (
+    MixtureCompatibilityError,
+    MixtureCompatibilityIndex,
+)
 from anchored_moe.registry.export import (
     CalibratedRouterPackageConfig,
     ExpertPackageExportBinding,
@@ -40,6 +44,8 @@ __all__ = [
     "ExpertPackageManifest",
     "ExpertPayloadBinding",
     "ExpertRegistry",
+    "MixtureCompatibilityError",
+    "MixtureCompatibilityIndex",
     "PackageIdentity",
     "PackageValidationError",
     "PackageValidationReport",

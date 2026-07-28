@@ -11,6 +11,8 @@ from typing import ClassVar
 import torch
 from torch import Tensor
 
+from anchored_moe.registry.compatibility import MixtureCompatibilityIndex
+
 
 @dataclass(frozen=True)
 class RouteDecision:
@@ -554,6 +556,232 @@ class AnchorVetoTop2Selection(SelectionPolicy):
                 dim=-1,
                 index=selected_indices,
             )
+
+        return Top2RouteDecision(
+            selected_indices=selected_indices,
+            selected_scores=selected_scores,
+            expert_ids=normalized_ids,
+        )
+
+
+class CompatibilityConstrainedTop2Selection(SelectionPolicy):
+    """Choose the strongest explicitly compatible positive specialist pair.
+
+    POL-005 ranks compatible pairs lexicographically by their descending score
+    tuple ``(g_(1), g_(2))``. This preserves ordinary top-2 semantics: maximize
+    the strongest member first, then the supporting second member. Exact score
+    ties preserve expert append order and then pair enumeration order.
+
+    A pair is eligible only when both experts share one explicit non-empty
+    PKG-003 group and both calibrated scores are strictly positive. If no pair
+    is eligible, the result contains the best specialist and the fixed-zero
+    anchor in stable score order, so :attr:`Top2RouteDecision.anchor_mask`
+    forces exact anchor execution. Experts with missing group metadata are
+    therefore valid top-1 candidates but can never be mixed.
+
+    Pair enumeration is ``O(K^2)`` in the worst case and intentionally targets
+    small registries. Hierarchical routing or precomputed candidate
+    shortlisting remains separate work.
+    """
+
+    policy_name = "global_compatibility_top2"
+    anchor_score = 0.0
+
+    def __init__(self, compatibility: MixtureCompatibilityIndex) -> None:
+        """Bind selection to one immutable expert compatibility index."""
+
+        if not isinstance(compatibility, MixtureCompatibilityIndex):
+            raise TypeError(
+                "compatibility must be a MixtureCompatibilityIndex."
+            )
+        self.compatibility = compatibility
+
+    def select(
+        self,
+        expert_scores: Tensor,
+        *,
+        expert_ids: Sequence[str],
+    ) -> Top2RouteDecision:
+        """Return the best compatible pair or an anchor-veto fallback.
+
+        Args:
+            expert_scores:
+                Floating-point tensor with shape ``[..., K]`` in candidate
+                expert order.
+            expert_ids:
+                Unique stable identifiers exactly matching the bound
+                compatibility index. Order may differ because groups are
+                realigned by identifier.
+
+        Returns:
+            Pair-shaped deterministic route metadata. A specialist pair is
+            active only when both selected indices are nonzero.
+
+        Raises:
+            TypeError: If scores or identifiers have invalid types.
+            ValueError:
+                If scores, shapes, values, or the compatibility candidate set
+                are invalid.
+        """
+
+        if not isinstance(expert_scores, Tensor):
+            raise TypeError("expert_scores must be a torch.Tensor.")
+        if not expert_scores.is_floating_point():
+            raise TypeError("expert_scores must use a floating-point dtype.")
+        if expert_scores.ndim < 1:
+            raise ValueError(
+                "expert_scores must have a final expert-candidate dimension."
+            )
+
+        normalized_ids = _normalize_expert_ids(expert_ids)
+        expert_count = expert_scores.shape[-1]
+        if expert_count != len(normalized_ids):
+            raise ValueError(
+                "expert_scores final dimension must match expert_ids: "
+                f"{expert_count} != {len(normalized_ids)}."
+            )
+        if not torch.isfinite(expert_scores).all().item():
+            raise ValueError("expert_scores must contain only finite values.")
+        group_ids = self.compatibility.groups_for(normalized_ids)
+
+        token_shape = expert_scores.shape[:-1]
+        if expert_count == 0:
+            selected_indices = torch.zeros(
+                token_shape + (2,),
+                dtype=torch.long,
+                device=expert_scores.device,
+            )
+            selected_scores = expert_scores.new_zeros(token_shape + (2,))
+            return Top2RouteDecision(
+                selected_indices=selected_indices,
+                selected_scores=selected_scores,
+                expert_ids=normalized_ids,
+            )
+
+        # The fallback remains auditable: retain the strongest specialist next
+        # to the anchor, but never expose two nonzero indices without a valid
+        # compatibility group.
+        ranked_specialists = torch.argsort(
+            expert_scores,
+            dim=-1,
+            descending=True,
+            stable=True,
+        )
+        best_index = ranked_specialists[..., 0]
+        best_score = torch.gather(
+            expert_scores,
+            dim=-1,
+            index=best_index.unsqueeze(-1),
+        ).squeeze(-1)
+        best_candidate = best_index + 1
+        best_is_positive = best_score > self.anchor_score
+        anchor_indices = torch.zeros_like(best_candidate)
+        anchor_scores = torch.zeros_like(best_score)
+        selected_indices = torch.stack(
+            (
+                torch.where(
+                    best_is_positive,
+                    best_candidate,
+                    anchor_indices,
+                ),
+                torch.where(
+                    best_is_positive,
+                    anchor_indices,
+                    best_candidate,
+                ),
+            ),
+            dim=-1,
+        )
+        selected_scores = torch.stack(
+            (
+                torch.where(best_is_positive, best_score, anchor_scores),
+                torch.where(best_is_positive, anchor_scores, best_score),
+            ),
+            dim=-1,
+        )
+
+        compatible_pairs = tuple(
+            (first, second)
+            for first in range(expert_count)
+            for second in range(first + 1, expert_count)
+            if group_ids[first] is not None
+            and group_ids[first] == group_ids[second]
+        )
+        pair_found = torch.zeros(
+            token_shape,
+            dtype=torch.bool,
+            device=expert_scores.device,
+        )
+        best_first_score = torch.zeros_like(best_score)
+        best_second_score = torch.zeros_like(best_score)
+
+        for first, second in compatible_pairs:
+            first_raw = expert_scores[..., first]
+            second_raw = expert_scores[..., second]
+            # ``first`` precedes ``second`` in candidate order, so an exact
+            # score tie keeps it in the first ranked slot.
+            first_precedes = first_raw >= second_raw
+            pair_first_score = torch.where(
+                first_precedes,
+                first_raw,
+                second_raw,
+            )
+            pair_second_score = torch.where(
+                first_precedes,
+                second_raw,
+                first_raw,
+            )
+            pair_first_index = torch.where(
+                first_precedes,
+                torch.full_like(best_candidate, first + 1),
+                torch.full_like(best_candidate, second + 1),
+            )
+            pair_second_index = torch.where(
+                first_precedes,
+                torch.full_like(best_candidate, second + 1),
+                torch.full_like(best_candidate, first + 1),
+            )
+
+            eligible = pair_second_score > self.anchor_score
+            lexicographically_better = (
+                (pair_first_score > best_first_score)
+                | (
+                    (pair_first_score == best_first_score)
+                    & (pair_second_score > best_second_score)
+                )
+            )
+            replace = eligible & (~pair_found | lexicographically_better)
+            selected_indices[..., 0] = torch.where(
+                replace,
+                pair_first_index,
+                selected_indices[..., 0],
+            )
+            selected_indices[..., 1] = torch.where(
+                replace,
+                pair_second_index,
+                selected_indices[..., 1],
+            )
+            selected_scores[..., 0] = torch.where(
+                replace,
+                pair_first_score,
+                selected_scores[..., 0],
+            )
+            selected_scores[..., 1] = torch.where(
+                replace,
+                pair_second_score,
+                selected_scores[..., 1],
+            )
+            best_first_score = torch.where(
+                replace,
+                pair_first_score,
+                best_first_score,
+            )
+            best_second_score = torch.where(
+                replace,
+                pair_second_score,
+                best_second_score,
+            )
+            pair_found = pair_found | eligible
 
         return Top2RouteDecision(
             selected_indices=selected_indices,

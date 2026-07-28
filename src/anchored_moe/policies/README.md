@@ -6,9 +6,11 @@ The policies subpackage owns decisions made from already calibrated router
 scores, already selected specialist outputs, and capacity metadata. POL-001
 implements fixed-zero anchored hard top-1 selection. POL-002 ranks an
 anchor-veto top-2 pair, POL-003 chooses adaptive anchor/top-1/top-2 route
-arity, COM-001 combines an approved specialist pair with score-softmax
-weights, COM-002 supplies equal-weight and normalized-positive-evidence
-baselines, and BAL-001 rewrites unavailable top-1 experts to the anchor.
+arity, and POL-005 chooses a globally ranked top-2 pair restricted by explicit
+PKG-003 compatibility groups. COM-001 combines an approved specialist pair
+with score-softmax weights, COM-002 supplies equal-weight and
+normalized-positive-evidence baselines, and BAL-001 rewrites unavailable
+top-1 experts to the anchor.
 
 This subpackage does not extract router features, produce or fit expert scores,
 attach experts, execute MLPs, dispatch tokens, estimate serving capacity,
@@ -23,6 +25,7 @@ evaluation features.
 | POL-001 | `selection.policy: anchored_top1` | `selection.py` | Validated |
 | POL-002 | `selection.policy: anchor_veto_top2` | `selection.py` | Validated |
 | POL-003 | `selection.policy: adaptive_top1_top2` | `selection.py` | Validated |
+| POL-005 | `selection.policy: global_compatibility_top2` | `selection.py` | Validated |
 | COM-001 | `combination.policy: score_softmax` | `combination.py` | Validated |
 | COM-002 | `combination.policy: equal_weight` | `combination.py` | Validated |
 | COM-002 | `combination.policy: normalized_positive_evidence` | `combination.py` | Validated |
@@ -32,8 +35,11 @@ evaluation features.
 `AnchoredTop1Selection` returns `RouteDecision`,
 `AnchorVetoTop2Selection` returns pair-shaped `Top2RouteDecision`, and
 `AdaptiveTop1Top2Selection` returns pair-ranked `AdaptiveRouteDecision`
-metadata with explicit route arity. INF-001 consumes the top-1 result, INF-002
-consumes anchor-veto top-2, and adaptive sparse execution remains separate.
+metadata with explicit route arity.
+`CompatibilityConstrainedTop2Selection` binds one immutable
+`MixtureCompatibilityIndex` and also returns `Top2RouteDecision`. INF-001
+consumes the top-1 result, INF-002 consumes anchor-veto top-2, and
+compatibility-aware and adaptive sparse execution remain separate.
 
 `OverflowToAnchorCapacity` consumes a `RouteDecision` and optional per-token
 expert availability. `CapacityDecision` exposes the effective routes and the
@@ -115,6 +121,38 @@ indices and scores have shape
 \(D_1\times\cdots\times D_n\times 2\). An empty registry duplicates the anchor
 only to preserve this pair-shaped metadata contract; it never represents two
 executions.
+
+For POL-005, let \(c(k)\) be expert \(k\)'s explicit PKG-003 group or
+\(\bot\) when no group is declared. The eligible pair set for token \(t\) is
+
+\[
+\mathcal P_t
+=
+\left\{
+(i,j):
+i<j,\;
+c(i)=c(j)\ne\bot,\;
+g_{t,i}>0,\;
+g_{t,j}>0
+\right\}.
+\]
+
+For each pair, scores are placed in descending order with append order
+breaking an exact tie. POL-005 chooses the lexicographic maximum
+
+\[
+(i^*,j^*)
+=
+\arg\max_{(i,j)\in\mathcal P_t}
+\left(g_{t,(1)},g_{t,(2)}\right).
+\]
+
+Lexicographic ranking preserves top-2 meaning: the strongest compatible first
+member is maximized before the supporting second member. Exact pair-score ties
+retain pair enumeration order. When \(\mathcal P_t=\varnothing\), the best
+specialist is retained beside the fixed-zero anchor in score order. The
+decision is therefore anchor-vetoed without hiding which individual expert
+had the strongest evidence.
 
 For POL-003, let \(g_{t,(1)}\) and \(g_{t,(2)}\) be the first two specialist
 scores after stable descending ranking, and let
@@ -231,6 +269,19 @@ Anchor-veto top-2:
 6. For an empty registry, return a duplicated anchor pair and a false
    specialist-pair mask.
 
+Compatibility-constrained top-2:
+
+1. Apply shared score, identifier, shape, and finite-value validation.
+2. Require the candidate expert set to exactly match the immutable PKG-003
+   index and realign groups by stable expert ID.
+3. Construct an anchor-veto fallback from the best individual specialist.
+4. Enumerate same-group expert pairs in candidate append order.
+5. Require both pair scores to be strictly positive.
+6. Rank each pair internally by score with append-order ties.
+7. Retain the lexicographically strongest score pair; retain the first pair
+   on an exact pair-score tie.
+8. Return the fallback containing the anchor when no pair is eligible.
+
 Adaptive anchor/top-1/top-2:
 
 1. Apply the shared score, identifier, shape, and finite-value validation.
@@ -296,6 +347,14 @@ Capacity fallback:
   conservative anchor and top-1 modes respectively.
 - POL-003 does not execute, combine, capacity-check, or compatibility-check
   selected specialists.
+- POL-005 treats missing group metadata as non-mixable.
+- POL-005 requires exact candidate-set equality with its immutable
+  compatibility index; candidate order may be realigned by stable ID.
+- POL-005 selects only distinct, same-group specialists with two strictly
+  positive scores.
+- POL-005 returns an anchor-containing fallback when no compatible pair is
+  eligible.
+- POL-005 pair and score ties preserve candidate append order.
 - COM-001 receives specialists in POL-002 ranked order and never mixes the
   anchor.
 - COM-001 requires a finite, strictly positive `mix_temperature`.
@@ -327,14 +386,15 @@ specific Transformers model family. INF-001 integrates them with `RoutedMLP`
 only after an explicit `configure_anchored_top1()` call.
 
 `AnchoredMoEConfig` continues to reject
-`selection.policy: anchored_top1`, `selection.policy: anchor_veto_top2`, and
-`selection.policy: adaptive_top1_top2` for model-level configuration because
-runtime strategy construction is not yet configuration-driven. Expert package
-manifests may declare `anchored_top1`; top-2 and adaptive package attachment
-remain unsupported. Standalone experiments can use all selection strategies
-explicitly, and INF-002 composes POL-002 with any `CombinationPolicy` in a
-standalone sparse dispatcher. This avoids silently accepting an incomplete
-model configuration.
+`selection.policy: anchored_top1`, `selection.policy: anchor_veto_top2`,
+`selection.policy: adaptive_top1_top2`, and
+`selection.policy: global_compatibility_top2` for model-level configuration
+because runtime strategy construction is not yet configuration-driven. Expert
+package manifests may declare `anchored_top1`; top-2 and adaptive package
+attachment remain unsupported. Standalone experiments can use all selection
+strategies explicitly. INF-002 composes POL-002 with any `CombinationPolicy`
+in a standalone sparse dispatcher; it does not yet consume POL-005. This
+avoids silently accepting an incomplete model configuration.
 
 ## Configuration and examples
 
@@ -343,7 +403,9 @@ from anchored_moe import (
     AdaptiveTop1Top2Selection,
     AnchorVetoTop2Selection,
     AnchoredTop1Selection,
+    CompatibilityConstrainedTop2Selection,
     EqualWeightCombination,
+    MixtureCompatibilityIndex,
     NormalizedPositiveEvidenceCombination,
     OverflowToAnchorCapacity,
     ScoreSoftmaxCombination,
@@ -366,6 +428,14 @@ effective = OverflowToAnchorCapacity()(
 )
 
 top2 = AnchorVetoTop2Selection()(
+    expert_scores,
+    expert_ids=expert_ids,
+)
+compatibility = MixtureCompatibilityIndex(
+    expert_ids=("code:0", "code:1", "math:0"),
+    group_ids=("code-v1", "code-v1", None),
+)
+compatible_top2 = CompatibilityConstrainedTop2Selection(compatibility)(
     expert_scores,
     expert_ids=expert_ids,
 )
@@ -392,10 +462,12 @@ evidence_baseline = NormalizedPositiveEvidenceCombination()(
 ```
 
 The public strategy names are `anchored_top1`, `anchor_veto_top2`,
-`adaptive_top1_top2`, `score_softmax`, `equal_weight`, and
-`normalized_positive_evidence`. See `examples/verify_anchored_top1.py`,
-`examples/verify_anchor_veto_top2.py`, `examples/verify_adaptive_selection.py`,
-and `examples/verify_combination_baselines.py` for deterministic integration.
+`adaptive_top1_top2`, `global_compatibility_top2`, `score_softmax`,
+`equal_weight`, and `normalized_positive_evidence`. See
+`examples/verify_anchored_top1.py`, `examples/verify_anchor_veto_top2.py`,
+`examples/verify_compatibility_top2.py`,
+`examples/verify_adaptive_selection.py`, and
+`examples/verify_combination_baselines.py` for deterministic integration.
 
 ## References
 
@@ -406,6 +478,8 @@ and `examples/verify_combination_baselines.py` for deterministic integration.
   defines collection of selected scores and expert availability.
 - [PyTorch `argsort` documentation](https://docs.pytorch.org/docs/stable/generated/torch.argsort.html)
   defines the stable descending ordering used for deterministic top-2 ties.
+- [PyTorch `where` documentation](https://docs.pytorch.org/docs/stable/generated/torch.where.html)
+  defines tokenwise replacement while comparing compatible pair candidates.
 - [PyTorch `softmax` documentation](https://docs.pytorch.org/docs/stable/generated/torch.nn.functional.softmax.html)
   defines normalized exponentiation used for COM-001 mixture weights.
 - [PyTorch `clamp` documentation](https://docs.pytorch.org/docs/stable/generated/torch.clamp.html)
@@ -416,9 +490,9 @@ and `examples/verify_combination_baselines.py` for deterministic integration.
   adaptive anchor/top-1/top-2, score-softmax activation combination, and both
   COM-002 baselines.
 
-POL-001, POL-002, POL-003, COM-001, COM-002, and BAL-001 are framework
-infrastructure and do not derive a training or optimization algorithm from a
-paper.
+POL-001, POL-002, POL-003, POL-005, COM-001, COM-002, and BAL-001 are
+framework infrastructure and do not derive a training or optimization
+algorithm from a paper.
 
 ## Tests and known limitations
 
@@ -446,9 +520,16 @@ single-expert padding, arbitrary leading dimensions, dtype/device preservation,
 input immutability, invalid thresholds, malformed public decisions, and
 affine-router integration.
 
+POL-005 tests cover incompatible high-score rejection, selection of a
+lower-ranked compatible pair, lexicographic pair ranking, append-order ties,
+missing-group anchor fallback, empty and single-expert registries, candidate
+realignment, stale compatibility rejection, dtype/device preservation, input
+immutability, registry installation and unloading, explicit binding
+requirements, duplicate expert IDs, and converted-layer coverage.
+
 INF-001 executes effective top-1 routes, INF-002 executes standalone
 anchor-veto specialist pairs, and EVAL-002 records top-1 routes. Capacity
 estimation, second-choice fallback, top-2 degradation, adaptive sparse
-execution, pair compatibility, top-2 telemetry, decision serialization,
-package attachment, `RoutedMLP` top-2 integration, and model-level
-top-1/top-2 configuration remain future work.
+execution, compatibility-aware dispatch, top-2 telemetry, decision
+serialization, package attachment, `RoutedMLP` top-2 integration, and
+model-level top-1/top-2 configuration remain future work.

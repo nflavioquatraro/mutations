@@ -8,13 +8,14 @@ binding, and deterministic registry identity.
 
 PKG-001 defines the versioned manifest and safe payload contract. PKG-002 adds
 strict local `ExpertPackage` descriptors and an atomic in-memory
-`ExpertRegistry`. PKG-007 defines explicit full-MLP payload ownership metadata
-used by the inference composition boundary. NB-003 adds staged expert-only
-package export from independently owned `FullMLPExpert` objects. NB-004 derives
-a new immutable router-bearing version from a calibrated frozen router while
-preserving source expert bytes. The registry never infers layer/expert
-ownership from filenames and installation never attaches modules or
-recalibrates routing.
+`ExpertRegistry`. PKG-003 derives immutable expert-to-mixture-group metadata
+from active package manifests. PKG-007 defines explicit full-MLP payload
+ownership metadata used by the inference composition boundary. NB-003 adds
+staged expert-only package export from independently owned `FullMLPExpert`
+objects. NB-004 derives a new immutable router-bearing version from a
+calibrated frozen router while preserving source expert bytes. The registry
+never infers layer/expert ownership from filenames and installation never
+attaches modules or recalibrates routing.
 
 ## Implemented strategies
 
@@ -22,6 +23,7 @@ recalibrates routing.
 |---|---|---|---|
 | PKG-001 | `package_format_version: 1` | `manifest.py` | Validated |
 | PKG-002 | `ExpertPackage.from_directory`, `ExpertRegistry` | `package.py`, `registry.py` | Validated |
+| PKG-003 | `mixture_compatibility_group`, `MixtureCompatibilityIndex` | `compatibility.py`, `registry.py` | Validated |
 | PKG-007 | `payload_binding_format_version: 1`, `ExpertPayloadBinding` | `bindings.py` | Validated |
 | NB-003 | `ExpertPackageExportConfig`, `ExpertPackageExportBinding`, `export_full_mlp_expert_package` | `export.py` | Validated |
 | NB-004 | `CalibratedRouterPackageConfig`, `derive_calibrated_router_package` | `export.py` | Validated |
@@ -90,6 +92,26 @@ slots \(L\times K\) and `expert_weight_files`. Every converted layer has the
 same \(K\), and \(|K|=\text{expert_count}\). File paths contribute no implied
 ownership.
 
+For stable expert ID \(k\), PKG-003 defines
+
+\[
+c(k)\in\mathcal G\cup\{\bot\},
+\]
+
+where \(\mathcal G\) is the set of explicit manifest group identifiers and
+\(\bot\) represents a missing declaration. Two experts are mix-compatible
+exactly when
+
+\[
+\operatorname{compatible}(i,j)
+=
+\mathbb{1}[i\ne j\land c(i)\ne\bot\land c(i)=c(j)].
+\]
+
+There is no implicit global group: two missing declarations are not
+compatible. The index is aligned by stable expert ID, so router candidate
+order may be realigned without relying on filenames or package paths.
+
 For expert-only package \(P_E\), router payload \(r\), and calibrated metadata
 \(C\), NB-004 creates
 
@@ -150,6 +172,16 @@ Payload-binding validation:
 6. Runtime materialization requires the block and fails explicitly when a
    legacy package does not provide it.
 
+Mixture-compatibility indexing:
+
+1. Capture active packages in stable registry order.
+2. Require the requested converted layer in every active package.
+3. Parse explicit payload bindings and collect the layer's stable expert IDs.
+4. Assign each expert its package-level `mixture_compatibility_group`, retaining
+   a missing declaration as `None`.
+5. Reject duplicate expert IDs across active packages.
+6. Recheck the registry snapshot before returning the immutable index.
+
 Expert-only package export:
 
 1. Validate a complete rectangular set of `(layer, expert_id, expert)`
@@ -207,6 +239,13 @@ Calibrated router-package derivation:
   before runtime materialization.
 - Full-MLP payloads own exactly one `(layer_index, expert_id)` slot.
 - Expert IDs, not filenames, are matched against serialized router-head keys.
+- Compatibility groups never alter package installation eligibility.
+- Missing compatibility metadata means non-mixable, not a shared default.
+- A compatibility index requires explicit payload bindings and exact active
+  layer coverage.
+- Active packages may not repeat an expert ID within one layer index.
+- Candidate expert order may be realigned by ID, but the candidate set must
+  exactly match the compatibility index.
 - NB-003 export never serializes the anchor, optimizer, scheduler, or router.
 - Export destinations must be new; immutable package versions are never
   overwritten.
@@ -260,6 +299,11 @@ the owned `ExpertRegistry`; neither method changes model routes. Calling
 PKG-007. This preserves the same lifecycle semantics behind the higher-level
 Hugging Face facade.
 
+`ExpertRegistry.mixture_compatibility(layer_index=...)` exposes PKG-003 without
+loading expert or router tensors. The resulting index is consumed by
+standalone compatibility-aware policies; model-level top-2 attachment remains
+an inference feature.
+
 ## Configuration and examples
 
 ```python
@@ -274,6 +318,14 @@ print(installed.after.registry_sha256)
 registry.unload(package.identity)
 registry.install(ExpertPackage.from_directory("./code-experts"))
 assert registry.active_registry_sha256 == installed.after.registry_sha256
+```
+
+Compatibility metadata is explicit and layer-specific:
+
+```python
+compatibility = registry.mixture_compatibility(layer_index=18)
+assert compatibility.are_compatible("code:0", "code:1")
+assert not compatibility.are_compatible("code:0", "math:0")
 ```
 
 Expert-only export uses one immutable provenance object and explicit live
@@ -362,7 +414,8 @@ An attachable full-MLP manifest includes:
 ```
 
 See `examples/verify_registry_lifecycle.py` for an executable registry-only
-lifecycle example and `examples/verify_package_runtime.py` for the complete
+lifecycle example, `examples/verify_compatibility_top2.py` for PKG-003/POL-005
+composition, and `examples/verify_package_runtime.py` for the complete
 model-facade lifecycle. `examples/train_expert_package.py` and
 `notebooks/02_train_expert_package.ipynb` exercise the NB-003 training/export
 boundary. `examples/fit_router.py` and
@@ -387,10 +440,10 @@ materialization.
 - [Python `threading.RLock` documentation](https://docs.python.org/3/library/threading.html#rlock-objects)
   defines the synchronization primitive protecting registry state.
 
-PKG-001, PKG-002, PKG-007, NB-003 export, and NB-004 derivation are framework
-infrastructure and do not derive a training or optimization algorithm from a
-paper. NB-004 packages the already documented CAL-004 ridge and CAL-005
-temperature/threshold results without changing their algorithms.
+PKG-001, PKG-002, PKG-003, PKG-007, NB-003 export, and NB-004 derivation are
+framework infrastructure and do not derive a training or optimization
+algorithm from a paper. NB-004 packages the already documented CAL-004 ridge
+and CAL-005 temperature/threshold results without changing their algorithms.
 
 ## Tests and known limitations
 
@@ -400,11 +453,13 @@ empty and active registry hashes, stable installation order, live-file
 revalidation, duplicate activation, exact unloading, reinsertion restoration,
 compatibility rejection, immutable-version conflicts, non-strict descriptor
 rejection, atomic failure behavior, legacy binding-free manifests, explicit
-binding coverage and uniqueness, deterministic staged export, expert-only
-payload closure, dtype derivation, topology and alias rejection, staging
-cleanup, immutable routed derivation, exact expert-copy digests, data/head/
-report compatibility, router hashing, documentation, examples, notebooks, and
-wheel content.
+binding coverage and uniqueness, missing and shared mixture groups, candidate
+realignment, stale candidate sets, duplicate cross-package expert IDs,
+layer-coverage failures, deterministic staged export, expert-only payload
+closure, dtype derivation, topology and alias rejection, staging cleanup,
+immutable routed derivation, exact expert-copy digests, data/head/report
+compatibility, router hashing, documentation, examples, notebooks, and wheel
+content.
 
 PKG-007 materializes the supported binding contract in the inference
 subpackage. NB-003 does not fit or serialize a router, save optimizer state, or
