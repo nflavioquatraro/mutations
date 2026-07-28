@@ -1,4 +1,4 @@
-"""Sparse token dispatch for anchored top-1 and anchor-veto top-2 routing."""
+"""Sparse token dispatch for anchored top-1 and pair-shaped top-2 routing."""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from anchored_moe.policies.selection import (
     AnchorVetoTop2Selection,
     AnchoredTop1Selection,
     RouteDecision,
+    Top2SelectionPolicy,
     Top2RouteDecision,
 )
 
@@ -68,7 +69,7 @@ class Top1DispatchResult:
 
 @dataclass(frozen=True)
 class Top2DispatchResult:
-    """Output and auditable metadata from anchor-veto top-2 dispatch.
+    """Output and auditable metadata from pair-shaped top-2 dispatch.
 
     Attributes:
         output:
@@ -342,12 +343,12 @@ class AnchoredTop1Dispatcher:
 
 
 class AnchoredTop2Dispatcher:
-    """Execute anchor-veto top-2 routes and reconstruct weighted activations.
+    """Execute pair-shaped top-2 routes and reconstruct weighted activations.
 
     Given hidden states ``h[..., H]`` and calibrated specialist scores
     ``G[..., K]``, INF-002 performs:
 
-    1. deterministic anchor-veto top-2 selection;
+    1. one configured :class:`Top2SelectionPolicy`;
     2. one sparse anchor call for all vetoed tokens;
     3. one sparse call per specialist selected by any approved pair;
     4. ranked pair reconstruction;
@@ -365,14 +366,15 @@ class AnchoredTop2Dispatcher:
     would also require sparse indexing.
 
     This dispatcher is framework infrastructure and is not derived from a
-    paper. Pair compatibility, capacity handling, telemetry, package
-    attachment, and distributed execution are deliberately excluded.
+    paper. Pair compatibility is enforced only when the configured policy
+    declares it; capacity handling, telemetry, package attachment, and
+    distributed execution are deliberately excluded.
     """
 
     def __init__(
         self,
         *,
-        selection_policy: AnchorVetoTop2Selection | None = None,
+        selection_policy: Top2SelectionPolicy | None = None,
         combination_policy: CombinationPolicy | None = None,
     ) -> None:
         """Create a dispatcher from independently configurable policies."""
@@ -387,9 +389,9 @@ class AnchoredTop2Dispatcher:
             if combination_policy is None
             else combination_policy
         )
-        if not isinstance(self.selection_policy, AnchorVetoTop2Selection):
+        if not isinstance(self.selection_policy, Top2SelectionPolicy):
             raise TypeError(
-                "selection_policy must be AnchorVetoTop2Selection."
+                "selection_policy must implement Top2SelectionPolicy."
             )
         if not isinstance(self.combination_policy, CombinationPolicy):
             raise TypeError(
@@ -437,7 +439,8 @@ class AnchoredTop2Dispatcher:
                 invalid.
             ValueError:
                 If tensor shapes, dtypes, module counts, outputs, or devices
-                conflict.
+                conflict, or a selection implementation violates the
+                pair-shaped policy contract.
         """
 
         _validate_dispatch_inputs(
@@ -462,6 +465,11 @@ class AnchoredTop2Dispatcher:
         forwarded_kwargs = {} if module_kwargs is None else dict(module_kwargs)
         selected_routes = self.selection_policy(
             expert_scores,
+            expert_ids=normalized_ids,
+        )
+        _validate_top2_selection_result(
+            selected_routes,
+            expert_scores=expert_scores,
             expert_ids=normalized_ids,
         )
 
@@ -646,6 +654,39 @@ class AnchoredTop2Dispatcher:
             output=output,
             selected_routes=selected_routes,
             mixture_weights=mixture_weights,
+        )
+
+
+def _validate_top2_selection_result(
+    selected_routes: Top2RouteDecision,
+    *,
+    expert_scores: Tensor,
+    expert_ids: tuple[str, ...],
+) -> None:
+    """Validate a composed top-2 policy before any candidate MLP executes."""
+
+    if not isinstance(selected_routes, Top2RouteDecision):
+        raise TypeError(
+            "Top2SelectionPolicy must return a Top2RouteDecision."
+        )
+    expected_shape = expert_scores.shape[:-1] + (2,)
+    if selected_routes.selected_indices.shape != expected_shape:
+        raise ValueError(
+            "Top-2 selection result must have the score token shape plus a "
+            f"pair dimension: {tuple(selected_routes.selected_indices.shape)} "
+            f"!= {tuple(expected_shape)}."
+        )
+    if selected_routes.expert_ids != expert_ids:
+        raise ValueError(
+            "Top-2 selection result expert_ids must preserve dispatcher order."
+        )
+    if selected_routes.selected_scores.dtype != expert_scores.dtype:
+        raise ValueError(
+            "Top-2 selected scores must preserve the router-score dtype."
+        )
+    if selected_routes.selected_scores.device != expert_scores.device:
+        raise ValueError(
+            "Top-2 selected scores must preserve the router-score device."
         )
 
 

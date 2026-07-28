@@ -372,6 +372,38 @@ class SelectionPolicy(ABC):
         """Choose candidate routes per token from calibrated expert scores."""
 
 
+class Top2SelectionPolicy(SelectionPolicy):
+    """Interface for policies that always return pair-shaped route metadata.
+
+    INF-002 depends on a final pair dimension even when the anchor vetoes
+    specialist execution. This narrower interface prevents adaptive or top-1
+    policies from being composed with the top-2 dispatcher merely because all
+    selection strategies share the broader :class:`SelectionPolicy` contract.
+
+    Implementations decide which pair is eligible; dispatch and activation
+    combination remain independent inference responsibilities.
+    """
+
+    def __call__(
+        self,
+        expert_scores: Tensor,
+        *,
+        expert_ids: Sequence[str],
+    ) -> Top2RouteDecision:
+        """Delegate to a pair-shaped :meth:`select` implementation."""
+
+        return self.select(expert_scores, expert_ids=expert_ids)
+
+    @abstractmethod
+    def select(
+        self,
+        expert_scores: Tensor,
+        *,
+        expert_ids: Sequence[str],
+    ) -> Top2RouteDecision:
+        """Choose a ranked pair or anchor-containing fallback per token."""
+
+
 class AnchoredTop1Selection(SelectionPolicy):
     """Select the anchor or one expert using fixed-zero anchor evidence.
 
@@ -458,7 +490,7 @@ class AnchoredTop1Selection(SelectionPolicy):
         )
 
 
-class AnchorVetoTop2Selection(SelectionPolicy):
+class AnchorVetoTop2Selection(Top2SelectionPolicy):
     """Rank two candidates and allow specialists only when anchor is absent.
 
     Given calibrated expert scores ``G[..., K]``, the policy prepends the
@@ -564,7 +596,7 @@ class AnchorVetoTop2Selection(SelectionPolicy):
         )
 
 
-class CompatibilityConstrainedTop2Selection(SelectionPolicy):
+class CompatibilityConstrainedTop2Selection(Top2SelectionPolicy):
     """Choose the strongest explicitly compatible positive specialist pair.
 
     POL-005 ranks compatible pairs lexicographically by their descending score

@@ -6,15 +6,17 @@ The inference subpackage owns token dispatch, output reconstruction,
 privacy-safe in-memory route telemetry, and explicit registry-to-model runtime
 synchronization. INF-001 connects already calibrated router scores, anchored
 top-1 selection, BAL-001 capacity fallback, the immutable anchor, and expert
-module objects for one routed layer. INF-002 connects anchor-veto top-2
-selection, sparse specialist execution, and configurable activation
-combination through a standalone model-family-neutral dispatcher. COM-001
-score-softmax remains the default, while COM-002 supplies two baselines. PKG-007
-safely materializes top-1 runtime objects from active local packages.
+module objects for one routed layer. INF-002 connects any pair-shaped
+`Top2SelectionPolicy`, sparse specialist execution, and configurable
+activation combination through a standalone model-family-neutral dispatcher.
+POL-002 supplies ordinary anchor-veto selection and POL-005 supplies
+compatibility-constrained selection. COM-001 score-softmax remains the
+default, while COM-002 supplies two baselines. PKG-007 safely materializes
+top-1 runtime objects from active local packages.
 
 It does not install packages implicitly, estimate serving capacity, attach
-top-2 dispatch to `RoutedMLP`, consume PKG-003/POL-005 compatibility metadata,
-or manage distributed all-to-all execution. CORE-005 exposes the existing explicit
+top-2 dispatch to `RoutedMLP`, construct compatibility metadata, or manage
+distributed all-to-all execution. CORE-005 exposes the existing explicit
 composition boundary through
 `AnchoredMoEForCausalLM.synchronize_registry`; inference remains responsible
 for materialization rather than model loading or package lifecycle.
@@ -50,7 +52,7 @@ the anchor, while candidate \(k\) corresponds to `expert_ids[k - 1]`. The
 output preserves the complete token-leading shape and uses the common trailing
 shape returned by the anchor and experts.
 
-For INF-002, POL-002 returns ranked candidates
+For INF-002, the configured POL-002 or POL-005 policy returns ranked candidates
 \((c_{t,1},c_{t,2})\) and the approved specialist-pair indicator
 
 \[
@@ -122,11 +124,12 @@ Anchored top-1 dispatch:
 8. Reconstruct output order with differentiable `torch.index_copy`.
 9. Optionally copy route metadata into a bounded CPU telemetry history.
 
-Anchor-veto top-2 dispatch:
+Pair-shaped top-2 dispatch:
 
 1. Validate score shape, score/activation dtype, expert count, devices,
    forwarding containers, and policy types before executing any candidate.
-2. Apply POL-002 and flatten only token-leading dimensions.
+2. Apply the configured `Top2SelectionPolicy`; require pair-shaped metadata
+   with unchanged candidate IDs, token shape, score dtype, and device.
 3. Gather all vetoed tokens and execute the anchor in one sparse call.
 4. For each specialist in stable append order, find approved occurrences in
    either ranked slot, gather their hidden states, and execute one sparse call.
@@ -181,7 +184,8 @@ Registry synchronization:
   combination weights.
 - INF-002 emits zero specialist weights for anchor-vetoed tokens and
   non-negative sum-to-one weights for approved tokens.
-- INF-002 does not check capacity or pair compatibility.
+- INF-002 does not check capacity. Pair compatibility is enforced only by a
+  configured compatibility-constrained policy; the dispatcher never infers it.
 - The feature extractor and router heads are frozen at inference attachment.
 - Existing expert gradient flags are preserved.
 - Anchor and expert outputs must share trailing shape, dtype, and device.
@@ -191,8 +195,9 @@ Registry synchronization:
 - Additional MLP arguments are forwarded unchanged. Token-aligned auxiliary
   tensors requiring sparse indexing are not supported by INF-001 or INF-002.
 - PKG-007 implements local explicit top-1 attachment. Top-2 package
-  attachment, `RoutedMLP` integration, capacity handling, telemetry, pair
-  compatibility, and distributed dispatch remain separate features.
+  attachment, `RoutedMLP` integration, capacity handling, telemetry,
+  compatibility-index construction, and distributed dispatch remain separate
+  features.
 - Registry installation and unloading never mutate a model. Synchronization is
   a distinct, explicit API call.
 - Active package order and serialized router-head order determine runtime
@@ -221,10 +226,12 @@ forward and generation paths require no changes.
 
 INF-002 operates on ordinary PyTorch modules and tensors, so affine router
 heads and `FullMLPExpert` objects can be exercised without a model-family
-adapter. Its dispatcher accepts the model-family-neutral `CombinationPolicy`
-interface and defaults to COM-001. It is deliberately not exposed through
-`RoutedMLP`, `AnchoredMoEForCausalLM`, registry synchronization, or
-declarative configuration yet.
+adapter. Its dispatcher accepts model-family-neutral `Top2SelectionPolicy`
+and `CombinationPolicy` interfaces, defaulting to POL-002 and COM-001.
+POL-005 can instead consume a PKG-003 compatibility index supplied explicitly
+by the caller. The dispatcher is deliberately not exposed through `RoutedMLP`,
+`AnchoredMoEForCausalLM`, registry synchronization, or declarative
+configuration yet.
 
 CORE-005 wraps the native causal LM in a `PreTrainedModel` facade. Its
 `forward()` and `generate()` delegate to that native implementation, while
@@ -275,6 +282,21 @@ approved_weights = result.mixture_weights[
 # NormalizedPositiveEvidenceCombination() for COM-002 comparisons.
 ```
 
+Compatibility-aware top-2 uses the same dispatcher:
+
+```python
+compatibility = registry.mixture_compatibility(layer_index=18)
+result = AnchoredTop2Dispatcher(
+    selection_policy=CompatibilityConstrainedTop2Selection(compatibility),
+).dispatch(
+    hidden_states,
+    expert_scores=scores,
+    expert_ids=compatibility.expert_ids,
+    anchor_mlp=anchor,
+    experts=experts_in_compatibility_order,
+)
+```
+
 Explicit package composition:
 
 ```python
@@ -294,6 +316,7 @@ synchronize_anchored_top1_registry(
 ```
 
 See `examples/verify_routed_top1.py`, `examples/verify_top2_dispatch.py`,
+`examples/verify_compatibility_top2.py`,
 `examples/verify_combination_baselines.py`, and
 `examples/verify_package_runtime.py` for deterministic offline examples. The
 last uses `AnchoredMoEForCausalLM` for the complete public top-1 composition
@@ -335,12 +358,13 @@ registries, arbitrary token-leading shapes, no token dropping, configurable
 temperature and combination policy, COM-001/COM-002 weights,
 score/hidden/expert gradients, structural validation before execution,
 candidate output contracts, affine-router and full-MLP integration, public
-result invariants, and preservation of all INF-001 tests.
+result invariants, compatibility-constrained sparse execution, registry-index
+integration, policy-result validation before execution, and preservation of
+all INF-001 tests.
 
 The initial implementation groups each candidate with a separate mask scan.
 Optimized batched dispatch, token-aligned auxiliary MLP arguments, capacity
 estimation, live-model checkpoint hash verification, route serialization,
 automatic install hooks, model-level configuration, multi-device
-materialization, top-2 telemetry, compatibility-aware top-2 dispatch,
-top-2 capacity degradation, `RoutedMLP` top-2 integration, and package-driven
-top-2 attachment remain unsupported.
+materialization, top-2 telemetry, top-2 capacity degradation, `RoutedMLP`
+top-2 integration, and package-driven top-2 attachment remain unsupported.

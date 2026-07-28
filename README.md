@@ -31,8 +31,9 @@ standalone weighted top-2 strategy primitives:
   and deterministic mixture-threshold behavior;
 - immutable package-declared expert compatibility groups and deterministic
   global top-2 selection that never mixes unrelated or undeclared experts;
-- standalone sparse anchor-veto top-2 dispatch with ranked specialist
-  execution, weighted activation reconstruction, and auditable mixture weights;
+- standalone sparse anchor-veto or compatibility-constrained top-2 dispatch
+  with ranked specialist execution, weighted activation reconstruction, and
+  auditable mixture weights;
 - versioned router feature caches with deterministic row alignment, provenance,
   strict safetensors validation, and embedded tensor integrity digests;
 - feature-bank-bound domain and individual-utility label datasets with

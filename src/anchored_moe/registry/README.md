@@ -300,9 +300,9 @@ PKG-007. This preserves the same lifecycle semantics behind the higher-level
 Hugging Face facade.
 
 `ExpertRegistry.mixture_compatibility(layer_index=...)` exposes PKG-003 without
-loading expert or router tensors. The resulting index is consumed by
-standalone compatibility-aware policies; model-level top-2 attachment remains
-an inference feature.
+loading expert or router tensors. The resulting index is consumed by POL-005
+and can be passed through INF-002 for standalone compatibility-aware sparse
+execution; model-level top-2 attachment remains a separate inference feature.
 
 ## Configuration and examples
 
@@ -415,7 +415,8 @@ An attachable full-MLP manifest includes:
 
 See `examples/verify_registry_lifecycle.py` for an executable registry-only
 lifecycle example, `examples/verify_compatibility_top2.py` for PKG-003/POL-005
-composition, and `examples/verify_package_runtime.py` for the complete
+selection and INF-002 sparse execution, and
+`examples/verify_package_runtime.py` for the complete
 model-facade lifecycle. `examples/train_expert_package.py` and
 `notebooks/02_train_expert_package.ipynb` exercise the NB-003 training/export
 boundary. `examples/fit_router.py` and

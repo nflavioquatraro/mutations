@@ -11,10 +11,14 @@ from anchored_moe import (
     AnchoredTop1Selection,
     AnchoredTop2Dispatcher,
     CombinationPolicy,
+    CompatibilityConstrainedTop2Selection,
     EqualWeightCombination,
+    MixtureCompatibilityIndex,
     NormalizedPositiveEvidenceCombination,
     ScoreSoftmaxCombination,
     Top2DispatchResult,
+    Top2RouteDecision,
+    Top2SelectionPolicy,
 )
 
 
@@ -82,6 +86,61 @@ def test_top2_dispatch_executes_sparse_pairs_and_restores_order() -> None:
         torch.stack((first_weights, second_weights)),
     )
     assert result.output.shape == hidden.shape
+
+
+def test_top2_dispatch_executes_only_compatible_pairs() -> None:
+    compatibility = MixtureCompatibilityIndex(
+        expert_ids=("code", "math:0", "math:1", "general"),
+        group_ids=("code-v1", "math-v1", "math-v1", None),
+    )
+    anchor = _CountingLinear(1.0)
+    code = _CountingLinear(8.0)
+    math_zero = _CountingLinear(2.0)
+    math_one = _CountingLinear(-1.0)
+    general = _CountingLinear(4.0)
+    hidden = torch.tensor([[1.0, 2.0], [3.0, 4.0]], requires_grad=True)
+    scores = torch.tensor(
+        [[0.95, 0.80, 0.70, 1.10], [0.60, 0.20, -0.10, 0.90]],
+        requires_grad=True,
+    )
+    dispatcher = AnchoredTop2Dispatcher(
+        selection_policy=CompatibilityConstrainedTop2Selection(compatibility),
+    )
+
+    result = dispatcher.dispatch(
+        hidden,
+        expert_scores=scores,
+        expert_ids=compatibility.expert_ids,
+        anchor_mlp=anchor,
+        experts=(code, math_zero, math_one, general),
+    )
+
+    weights = torch.softmax(torch.tensor([0.80, 0.70]), dim=0)
+    expected_pair = (
+        weights[0] * hidden[0].detach() * 2.0
+        + weights[1] * hidden[0].detach() * -1.0
+    )
+    assert torch.allclose(
+        result.output.detach(),
+        torch.stack((expected_pair, hidden[1].detach())),
+    )
+    assert torch.equal(
+        result.selected_routes.selected_indices,
+        torch.tensor([[2, 3], [4, 0]]),
+    )
+    assert anchor.calls == [1]
+    assert code.calls == []
+    assert math_zero.calls == [1]
+    assert math_one.calls == [1]
+    assert general.calls == []
+
+    result.output.square().sum().backward()
+    assert hidden.grad is not None and torch.isfinite(hidden.grad).all()
+    assert scores.grad is not None and torch.isfinite(scores.grad).all()
+    assert math_zero.weight.grad is not None
+    assert math_one.weight.grad is not None
+    assert code.weight.grad is None
+    assert general.weight.grad is None
 
 
 def test_empty_and_single_expert_registries_execute_only_anchor() -> None:
@@ -254,6 +313,44 @@ def test_top2_dispatch_rejects_incompatible_policy_types() -> None:
         AnchoredTop2Dispatcher(
             combination_policy=object(),  # type: ignore[arg-type]
         )
+
+
+class _WrongOrderTop2Selection(Top2SelectionPolicy):
+    """Test double violating the declared dispatcher candidate order."""
+
+    policy_name = "wrong_order"
+
+    def select(
+        self,
+        expert_scores: torch.Tensor,
+        *,
+        expert_ids: tuple[str, ...],
+    ) -> Top2RouteDecision:
+        return AnchorVetoTop2Selection()(
+            expert_scores,
+            expert_ids=tuple(reversed(expert_ids)),
+        )
+
+
+def test_top2_dispatch_validates_policy_result_before_execution() -> None:
+    anchor = _CountingLinear(1.0)
+    code = _CountingLinear(2.0)
+    math = _CountingLinear(-1.0)
+
+    with pytest.raises(ValueError, match="preserve dispatcher order"):
+        AnchoredTop2Dispatcher(
+            selection_policy=_WrongOrderTop2Selection(),
+        ).dispatch(
+            torch.randn(2, 2),
+            expert_scores=torch.ones(2, 2),
+            expert_ids=("code", "math"),
+            anchor_mlp=anchor,
+            experts=(code, math),
+        )
+
+    assert anchor.calls == []
+    assert code.calls == []
+    assert math.calls == []
 
 
 class _WrongWidth(nn.Module):

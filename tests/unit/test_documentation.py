@@ -69,6 +69,7 @@ from anchored_moe.policies import (
     RouteDecision,
     ScoreSoftmaxCombination,
     SelectionPolicy,
+    Top2SelectionPolicy,
     Top2RouteDecision,
 )
 from anchored_moe.registry import (
@@ -173,6 +174,7 @@ def test_current_public_symbols_have_docstrings() -> None:
         compare_top1_top2_to_oracle,
         plan_expert_pairs,
         SelectionPolicy,
+        Top2SelectionPolicy,
         AdaptiveRouteDecision,
         AdaptiveTop1Top2Selection,
         AnchoredTop1Selection,

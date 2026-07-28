@@ -8,9 +8,11 @@ from pathlib import Path
 import pytest
 import torch
 from safetensors.torch import save_file
+from torch import nn
 
 from anchored_moe import (
     EXPERT_PAYLOAD_BINDING_FORMAT_VERSION,
+    AnchoredTop2Dispatcher,
     CompatibilityConstrainedTop2Selection,
     ExpertPackage,
     ExpertPackageManifest,
@@ -19,6 +21,17 @@ from anchored_moe import (
 )
 from anchored_moe.registry import PACKAGE_FORMAT_VERSION
 from anchored_moe.utils import sha256_file, sha256_json
+
+
+class _Scale(nn.Module):
+    """Deterministic expert used to verify registry-to-dispatch composition."""
+
+    def __init__(self, scale: float) -> None:
+        super().__init__()
+        self.scale = scale
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        return hidden_states * self.scale
 
 
 def _bound_package(
@@ -125,22 +138,43 @@ def test_registry_index_drives_compatible_selection_and_tracks_unload(
     assert index.expert_ids == ("code:0", "math:0", "general:0")
     assert index.group_ids == ("reasoning-v1", "reasoning-v1", None)
 
-    decision = CompatibilityConstrainedTop2Selection(index)(
-        torch.tensor([[0.9, 0.7, 1.2]]),
+    hidden = torch.tensor([[1.0, 2.0]])
+    result = AnchoredTop2Dispatcher(
+        selection_policy=CompatibilityConstrainedTop2Selection(index),
+    ).dispatch(
+        hidden,
+        expert_scores=torch.tensor([[0.9, 0.7, 1.2]]),
         expert_ids=index.expert_ids,
+        anchor_mlp=_Scale(1.0),
+        experts=(_Scale(2.0), _Scale(-1.0), _Scale(8.0)),
     )
-    assert torch.equal(decision.selected_indices, torch.tensor([[1, 2]]))
-    assert decision.expert_pair_mask.item()
+    weights = torch.softmax(torch.tensor([0.9, 0.7]), dim=0)
+    expected = weights[0] * hidden * 2.0 + weights[1] * hidden * -1.0
+    assert torch.equal(
+        result.selected_routes.selected_indices,
+        torch.tensor([[1, 2]]),
+    )
+    assert result.selected_routes.expert_pair_mask.item()
+    assert torch.allclose(result.output, expected)
 
     registry.unload(math.identity)
     reduced = registry.mixture_compatibility(layer_index=2)
-    fallback = CompatibilityConstrainedTop2Selection(reduced)(
-        torch.tensor([[0.9, 1.2]]),
+    fallback = AnchoredTop2Dispatcher(
+        selection_policy=CompatibilityConstrainedTop2Selection(reduced),
+    ).dispatch(
+        hidden,
+        expert_scores=torch.tensor([[0.9, 1.2]]),
         expert_ids=reduced.expert_ids,
+        anchor_mlp=_Scale(1.0),
+        experts=(_Scale(2.0), _Scale(8.0)),
     )
     assert reduced.expert_ids == ("code:0", "general:0")
-    assert torch.equal(fallback.selected_indices, torch.tensor([[2, 0]]))
-    assert fallback.anchor_mask.item()
+    assert torch.equal(
+        fallback.selected_routes.selected_indices,
+        torch.tensor([[2, 0]]),
+    )
+    assert fallback.selected_routes.anchor_mask.item()
+    assert torch.equal(fallback.output, hidden)
 
 
 def test_registry_compatibility_requires_explicit_payload_bindings(

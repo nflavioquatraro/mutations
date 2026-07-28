@@ -31,15 +31,17 @@ evaluation features.
 | COM-002 | `combination.policy: normalized_positive_evidence` | `combination.py` | Validated |
 | BAL-001 | `capacity.overflow: anchor` | `capacity.py` | Validated |
 
-`SelectionPolicy` is the selection strategy interface.
+`SelectionPolicy` is the broad selection strategy interface.
+`Top2SelectionPolicy` narrows it to policies that always return
+pair-shaped `Top2RouteDecision` metadata.
 `AnchoredTop1Selection` returns `RouteDecision`,
 `AnchorVetoTop2Selection` returns pair-shaped `Top2RouteDecision`, and
 `AdaptiveTop1Top2Selection` returns pair-ranked `AdaptiveRouteDecision`
 metadata with explicit route arity.
 `CompatibilityConstrainedTop2Selection` binds one immutable
 `MixtureCompatibilityIndex` and also returns `Top2RouteDecision`. INF-001
-consumes the top-1 result, INF-002 consumes anchor-veto top-2, and
-compatibility-aware and adaptive sparse execution remain separate.
+consumes the top-1 result, while INF-002 consumes either top-2 policy through
+the narrow interface. Adaptive sparse execution remains separate.
 
 `OverflowToAnchorCapacity` consumes a `RouteDecision` and optional per-token
 expert availability. `CapacityDecision` exposes the effective routes and the
@@ -355,8 +357,8 @@ Capacity fallback:
 - POL-005 returns an anchor-containing fallback when no compatible pair is
   eligible.
 - POL-005 pair and score ties preserve candidate append order.
-- COM-001 receives specialists in POL-002 ranked order and never mixes the
-  anchor.
+- COM-001 receives specialists in configured `Top2SelectionPolicy` ranked
+  order and never mixes the anchor.
 - COM-001 requires a finite, strictly positive `mix_temperature`.
 - COM-001 preserves the shared activation/score dtype and device.
 - COM-001 weights are non-negative, finite, and sum to one.
@@ -392,9 +394,9 @@ only after an explicit `configure_anchored_top1()` call.
 because runtime strategy construction is not yet configuration-driven. Expert
 package manifests may declare `anchored_top1`; top-2 and adaptive package
 attachment remain unsupported. Standalone experiments can use all selection
-strategies explicitly. INF-002 composes POL-002 with any `CombinationPolicy`
-in a standalone sparse dispatcher; it does not yet consume POL-005. This
-avoids silently accepting an incomplete model configuration.
+strategies explicitly. INF-002 composes either POL-002 or POL-005 with any
+`CombinationPolicy` in a standalone sparse dispatcher. This does not silently
+enable an incomplete model-level configuration.
 
 ## Configuration and examples
 
@@ -525,11 +527,14 @@ lower-ranked compatible pair, lexicographic pair ranking, append-order ties,
 missing-group anchor fallback, empty and single-expert registries, candidate
 realignment, stale compatibility rejection, dtype/device preservation, input
 immutability, registry installation and unloading, explicit binding
-requirements, duplicate expert IDs, and converted-layer coverage.
+requirements, duplicate expert IDs, converted-layer coverage, sparse INF-002
+execution, exact anchor fallback, gradient preservation, and validation before
+candidate execution.
 
 INF-001 executes effective top-1 routes, INF-002 executes standalone
-anchor-veto specialist pairs, and EVAL-002 records top-1 routes. Capacity
+anchor-veto or compatibility-constrained specialist pairs, and EVAL-002
+records top-1 routes. Capacity
 estimation, second-choice fallback, top-2 degradation, adaptive sparse
-execution, compatibility-aware dispatch, top-2 telemetry, decision
-serialization, package attachment, `RoutedMLP` top-2 integration, and
-model-level top-1/top-2 configuration remain future work.
+execution, top-2 telemetry, decision serialization, package attachment,
+`RoutedMLP` top-2 integration, and model-level top-1/top-2 configuration
+remain future work.

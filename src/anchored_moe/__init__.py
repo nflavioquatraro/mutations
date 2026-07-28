@@ -61,6 +61,7 @@ from anchored_moe.policies import (
     RouteDecision,
     ScoreSoftmaxCombination,
     SelectionPolicy,
+    Top2SelectionPolicy,
     Top2RouteDecision,
 )
 from anchored_moe.registry import (
@@ -187,6 +188,7 @@ __all__ = [
     "Top1Top2OracleComparison",
     "Top2DispatchResult",
     "Top2RouteDecision",
+    "Top2SelectionPolicy",
     "UtilityLabelBank",
     "calibrate_temperature_and_thresholds",
     "compute_pair_utilities",

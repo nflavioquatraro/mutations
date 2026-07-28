@@ -19,6 +19,7 @@ from anchored_moe.policies.selection import (
     CompatibilityConstrainedTop2Selection,
     RouteDecision,
     SelectionPolicy,
+    Top2SelectionPolicy,
     Top2RouteDecision,
 )
 
@@ -37,5 +38,6 @@ __all__ = [
     "RouteDecision",
     "ScoreSoftmaxCombination",
     "SelectionPolicy",
+    "Top2SelectionPolicy",
     "Top2RouteDecision",
 ]
