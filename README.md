@@ -54,6 +54,9 @@ standalone weighted top-2 strategy primitives:
 - synchronized warmup-aware latency and throughput benchmarks, exact unique
   module-state footprint, optional CUDA peak allocation, and route-derived
   active-MLP accounting;
+- deterministic bounded evaluation of the empty registry, every package
+  subset, and every installation order, with optional read-only behavior
+  fingerprints and explicit order-sensitivity reports;
 - opt-in sparse anchored top-1 execution for configured routed MLPs;
 - deterministic overflow-to-anchor fallback with no token dropping;
 - bounded privacy-safe route telemetry and exact route-agreement metrics;

@@ -19,6 +19,13 @@ from anchored_moe.evaluation.lifecycle import (
     RegistryLifecycleEvaluation,
     evaluate_registry_lifecycle,
 )
+from anchored_moe.evaluation.registry_composition import (
+    RegistryCompositionEvaluation,
+    RegistryCompositionEvaluationError,
+    RegistryCompositionTrial,
+    RegistrySubsetEvaluation,
+    evaluate_registry_compositions,
+)
 from anchored_moe.evaluation.quality import (
     Top1Top2OracleComparison,
     compare_top1_top2_to_oracle,
@@ -36,6 +43,10 @@ __all__ = [
     "ModuleStateFootprint",
     "RouteAgreement",
     "RegistryLifecycleEvaluation",
+    "RegistryCompositionEvaluation",
+    "RegistryCompositionEvaluationError",
+    "RegistryCompositionTrial",
+    "RegistrySubsetEvaluation",
     "TensorEquivalence",
     "Top1Top2OracleComparison",
     "assert_route_decisions_equal",
@@ -45,6 +56,7 @@ __all__ = [
     "compare_top1_top2_to_oracle",
     "compare_tensors",
     "evaluate_registry_lifecycle",
+    "evaluate_registry_compositions",
     "fingerprint_module",
     "measure_active_mlp_metrics",
     "measure_module_state_footprint",

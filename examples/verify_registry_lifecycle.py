@@ -12,6 +12,7 @@ from anchored_moe import (
     ExpertPackage,
     ExpertPackageManifest,
     ExpertRegistry,
+    evaluate_registry_compositions,
 )
 from anchored_moe.evaluation import evaluate_registry_lifecycle
 from anchored_moe.registry import PACKAGE_FORMAT_VERSION
@@ -79,8 +80,17 @@ def _create_package(root: Path, specialization: str, offset: float) -> ExpertPac
     return ExpertPackage.from_directory(package_root)
 
 
+def _package_set_fingerprint(registry: ExpertRegistry) -> str:
+    """Hash active package content independently of installation order."""
+
+    identities = sorted(registry.snapshot().active_packages)
+    return sha256_json(
+        {"packages": [identity.to_dict() for identity in identities]}
+    )
+
+
 def main() -> None:
-    """Exercise and evaluate a two-package lifecycle."""
+    """Exercise lifecycle restoration plus every two-package composition."""
 
     with TemporaryDirectory(prefix="anchored-moe-registry-") as temporary:
         root = Path(temporary)
@@ -104,11 +114,22 @@ def main() -> None:
         assert evaluation.exact
         assert reinserted.active_packages == (code.identity, math.identity)
 
+        compositions = evaluate_registry_compositions(
+            (math, code),
+            behavior_fingerprint=_package_set_fingerprint,
+        )
+        assert compositions.subset_count == 4
+        assert compositions.trial_count == 5
+        assert compositions.registry_order_sensitive_subset_count == 1
+        assert compositions.behavior_order_invariant
+
         print(
             "Registry lifecycle validation passed: "
             f"active={reinserted.active_package_count}, "
             f"registry_sha256={reinserted.registry_sha256}, "
-            f"order={[item.specialization_name for item in reinserted.active_packages]}"
+            f"order={[item.specialization_name for item in reinserted.active_packages]}, "
+            f"subsets={compositions.subset_count}, "
+            f"orders={compositions.trial_count}"
         )
 
 

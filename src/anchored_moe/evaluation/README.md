@@ -8,7 +8,10 @@ package removal/reinsertion lifecycle checks, and top-1/top-2 quality
 comparison against explicit counterfactual candidates. EVAL-005 adds
 warmup-aware operation benchmarking, exact resident module-state footprint,
 optional CUDA peak allocation, and route-derived active-MLP accounting.
-Production benchmark orchestration remains outside this subpackage.
+EVAL-006 exhaustively evaluates installation orders and registry subsets under
+an explicit combinatorial trial bound, with optional caller-owned behavior
+fingerprints. Production benchmark orchestration remains outside this
+subpackage.
 
 ## Implemented strategies
 
@@ -19,6 +22,7 @@ Production benchmark orchestration remains outside this subpackage.
 | EVAL-003 | `evaluate_registry_lifecycle` | `lifecycle.py` | Validated |
 | EVAL-004 | `compare_top1_top2_to_oracle` | `quality.py` | Validated |
 | EVAL-005 | `benchmark_operation`, `measure_active_mlp_metrics`, `measure_module_state_footprint` | `efficiency.py` | Validated |
+| EVAL-006 | `evaluate_registry_compositions` | `registry_composition.py` | Validated |
 
 ## Mathematical formulation
 
@@ -133,6 +137,44 @@ Resident module-state bytes sum unique parameter and buffer storages. Shared
 storage is counted once; optimizer state, activations, allocator cache, Python
 objects, and serialized files are excluded.
 
+For \(N\) packages, EVAL-006 evaluates the empty registry and every
+installation order of every non-empty subset. The exact trial count is the
+number of partial permutations:
+
+\[
+C_N
+=
+\sum_{k=0}^{N}P(N,k)
+=
+\sum_{k=0}^{N}\frac{N!}{(N-k)!}.
+\]
+
+For one canonical package subset \(S\), let \(d_\pi(S)\) be the ordered
+registry digest after installation order \(\pi\), and let \(b_\pi(S)\) be an
+optional caller-supplied behavior digest. Registry-order sensitivity and
+behavior-order invariance are:
+
+\[
+O_{\mathrm{registry}}(S)
+=
+\mathbb{1}\left[
+\left|\{d_\pi(S)\}_{\pi\in\Pi(S)}\right|>1
+\right],
+\]
+
+\[
+I_{\mathrm{behavior}}(S)
+=
+\mathbb{1}\left[
+\left|\{b_\pi(S)\}_{\pi\in\Pi(S)}\right|=1
+\right].
+\]
+
+Registry hashes intentionally include active package order, so
+\(O_{\mathrm{registry}}\) is descriptive rather than a failure. A behavior
+fingerprint can instead ignore order or encode model routes, logits, or a
+metric artifact, depending on the experiment.
+
 ## Algorithms
 
 1. Execute a model in evaluation mode before conversion.
@@ -188,6 +230,22 @@ Active-MLP accounting:
 4. Sum anchor and specialist token executions.
 5. Count non-empty anchor and expert groups as ideal sparse module calls.
 
+Registry composition evaluation:
+
+1. Validate package descriptor types, unique immutable versions, the behavior
+   callback, and the positive trial bound.
+2. Canonicalize packages by portable identity and calculate \(C_N\).
+3. Reject an oversized experiment before package preflight or observation.
+4. Install the complete set once in a temporary registry to preflight strict
+   file validation and anchor/router-feature compatibility.
+5. Enumerate subsets by size and canonical combination order.
+6. Install every subset permutation into a fresh registry and capture its
+   immutable snapshot.
+7. Optionally call the explicit behavior observer, require a lowercase SHA-256
+   result, and prove the observer did not mutate the supplied registry.
+8. Group trials by canonical package set and report distinct registry and
+   behavior counts.
+
 ## Assumptions and invariants
 
 - Inputs, model mode, device, and dtype are identical between executions.
@@ -222,6 +280,21 @@ Active-MLP accounting:
   warmup boundary. CPU and MPS runtime peaks are reported as unavailable.
 - Shared state storage is counted once across parent/child or repeated module
   references.
+- Package input order does not affect EVAL-006 enumeration or its report.
+- The empty package subset is always evaluated exactly once.
+- Every non-empty subset contains exactly \(k!\) installation trials.
+- The default 2,048-trial bound permits six packages and rejects seven before
+  enumeration.
+- Complete-set preflight runs before any behavior observer, so incompatible,
+  non-strict, changed, or duplicate-version packages cannot produce a partial
+  behavioral report.
+- Every installation order uses a fresh registry. Historical slots from one
+  trial cannot leak into another.
+- The optional behavior observer is caller-owned and may inspect or explicitly
+  synchronize external state, but it must not mutate the registry passed to
+  it.
+- Behavior fingerprints record only SHA-256 digests. EVAL-006 never records
+  prompts, hidden states, logits, routes, or metric payloads itself.
 
 ## Hugging Face integration
 
@@ -237,6 +310,11 @@ EVAL-005 benchmarks any zero-argument operation, including a Hugging Face
 caller must put the model in the intended evaluation/precision context and set
 `work_items_per_run` consistently. CUDA synchronization and allocator peak
 measurement use PyTorch runtime APIs without changing model state.
+
+EVAL-006 is model-neutral. A behavior callback may explicitly synchronize an
+`AnchoredMoEForCausalLM`, execute fixed Hugging Face inputs, and return a digest
+of routes or logits. The evaluator itself never loads a model, synchronizes a
+registry, recalibrates a router, or retains behavioral tensors.
 
 ## Configuration and examples
 
@@ -287,6 +365,15 @@ work = measure_active_mlp_metrics(route_decision)
 print(runtime.throughput_items_per_second)
 print(runtime.module_state.total_bytes)
 print(work.mean_active_mlps_per_token)
+
+composition = evaluate_registry_compositions(
+    (code_package, math_package),
+    behavior_fingerprint=lambda registry: route_digest(registry),
+    maximum_trials=2_048,
+)
+print(composition.subset_count)
+print(composition.trial_count)
+print(composition.behavior_order_sensitive_subset_count)
 ```
 
 `notebooks/01_convert_dense_model.ipynb` exercises this API against logits,
@@ -298,6 +385,9 @@ model downloads.
 `examples/evaluate_registry_strategies.py` compares top-1 and top-2
 synchronized latency, throughput, state footprint, active MLP work, and
 counterfactual regret with a deterministic offline fixture.
+`examples/verify_registry_lifecycle.py` evaluates removal/reinsertion and then
+all five partial permutations of two packages using an order-invariant
+package-set behavior digest.
 `notebooks/05_evaluate_registry.ipynb` provides the corresponding thin public
 API workflow.
 
@@ -313,7 +403,9 @@ API workflow.
 No paper-derived evaluation algorithm is implemented here. EVAL-004 directly
 operationalizes metrics defined by the repository architecture. EVAL-005 uses
 standard synchronized wall-clock and allocator accounting rather than a
-paper-derived benchmark method.
+paper-derived benchmark method. EVAL-006 directly implements the blueprint's
+required installation-order and every-subset lifecycle experiments using
+standard finite permutations and SHA-256 digests.
 
 ## Tests and known limitations
 
@@ -335,8 +427,17 @@ execution counts, empty routes, warmup exclusion, repetition counts, CPU
 timing aggregates, public serialization mappings, dispatcher integration, and
 invalid inputs. Timing assertions validate contracts and positivity, never
 machine-specific performance thresholds.
+EVAL-006 tests cover the empty registry, canonical input-order independence,
+exhaustive subset/permutation counts, registry-hash sensitivity, invariant and
+sensitive behavior observers, JSON-compatible reports, callback mutation,
+invalid digests, duplicate versions, incompatible complete-set preflight,
+factorial budget rejection before observation, live package revalidation, the
+documentation contract, and the executable lifecycle example.
 Cross-layer trajectory metrics, first-divergence depth, route serialization,
 persistent registry evaluation, model-integrated counterfactual execution,
 confidence intervals, CPU/MPS runtime peak memory, energy measurement,
 distributed aggregation, production hardware baselines, and statistical
-benchmark comparison remain future work.
+benchmark comparison remain future work. EVAL-006 deliberately does not define
+which behavior artifact should be fingerprinted, compare metric magnitudes,
+persist reports, parallelize trials, or attempt exhaustive evaluation beyond
+the caller-approved bound.
