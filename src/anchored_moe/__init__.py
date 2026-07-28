@@ -26,8 +26,15 @@ from anchored_moe.calibration import (
 from anchored_moe.configuration import AnchoredMoEConfig, ResolvedStrategyConfig
 from anchored_moe.experts import Expert, ExpertSerializationError, FullMLPExpert
 from anchored_moe.evaluation import (
+    ActiveMLPMetrics,
+    EfficiencyBenchmarkConfig,
+    EfficiencyBenchmarkReport,
+    ModuleStateFootprint,
     Top1Top2OracleComparison,
+    benchmark_operation,
     compare_top1_top2_to_oracle,
+    measure_active_mlp_metrics,
+    measure_module_state_footprint,
 )
 from anchored_moe.inference import (
     AnchoredTop1Dispatcher,
@@ -110,6 +117,7 @@ from anchored_moe.training import (
 __all__ = [
     "AffineRouterHead",
     "ActivationCombinationResult",
+    "ActiveMLPMetrics",
     "AdaptiveRouteDecision",
     "AdaptiveTop1Top2Selection",
     "AnchorVetoTop2Selection",
@@ -129,6 +137,8 @@ __all__ = [
     "CounterfactualRoute",
     "CounterfactualRouteLosses",
     "DomainLabelBank",
+    "EfficiencyBenchmarkConfig",
+    "EfficiencyBenchmarkReport",
     "EXPERT_PAYLOAD_BINDING_FORMAT_VERSION",
     "Expert",
     "ExpertObjectiveConfig",
@@ -158,6 +168,7 @@ __all__ = [
     "LabelBankSerializationError",
     "MixtureCompatibilityError",
     "MixtureCompatibilityIndex",
+    "ModuleStateFootprint",
     "NormalizedPositiveEvidenceCombination",
     "OverflowToAnchorCapacity",
     "PackageMaterializationError",
@@ -191,10 +202,13 @@ __all__ = [
     "Top2SelectionPolicy",
     "UtilityLabelBank",
     "calibrate_temperature_and_thresholds",
+    "benchmark_operation",
     "compute_pair_utilities",
     "derive_calibrated_router_package",
     "evaluate_counterfactual_oracle",
     "fit_independent_ridge",
+    "measure_active_mlp_metrics",
+    "measure_module_state_footprint",
     "compare_top1_top2_to_oracle",
     "export_full_mlp_expert_package",
     "parse_expert_payload_bindings",

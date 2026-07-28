@@ -44,6 +44,12 @@ NOTEBOOK_CASES = (
         "NB-005 validation passed",
         "composition_summary",
     ),
+    (
+        PROJECT_ROOT / "notebooks" / "05_evaluate_registry.ipynb",
+        "NB-006",
+        "NB-006 validation passed",
+        "evaluation_summary",
+    ),
 )
 
 

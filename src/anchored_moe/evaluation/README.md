@@ -5,8 +5,10 @@
 The evaluation subpackage measures architectural invariants. The current scope
 includes dense equivalence, anchor-state immutability, exact route agreement,
 package removal/reinsertion lifecycle checks, and top-1/top-2 quality
-comparison against explicit counterfactual candidates. End-to-end benchmark
-execution and efficiency metrics are deferred.
+comparison against explicit counterfactual candidates. EVAL-005 adds
+warmup-aware operation benchmarking, exact resident module-state footprint,
+optional CUDA peak allocation, and route-derived active-MLP accounting.
+Production benchmark orchestration remains outside this subpackage.
 
 ## Implemented strategies
 
@@ -16,6 +18,7 @@ execution and efficiency metrics are deferred.
 | EVAL-002 | `compare_route_decisions`, `assert_route_decisions_equal` | `routing.py` | Validated |
 | EVAL-003 | `evaluate_registry_lifecycle` | `lifecycle.py` | Validated |
 | EVAL-004 | `compare_top1_top2_to_oracle` | `quality.py` | Validated |
+| EVAL-005 | `benchmark_operation`, `measure_active_mlp_metrics`, `measure_module_state_footprint` | `efficiency.py` | Validated |
 
 ## Mathematical formulation
 
@@ -94,6 +97,42 @@ specialists:
 
 It is defined as zero when no token executes a pair.
 
+For \(M\) measured runs, \(W\) declared work items per run, and synchronized
+wall-clock durations \(\ell_i>0\), EVAL-005 reports
+
+\[
+\bar{\ell}=\frac{1}{M}\sum_{i=1}^{M}\ell_i,
+\qquad
+Q=\frac{MW}{\sum_{i=1}^{M}\ell_i}.
+\]
+
+Median latency and the deterministic nearest-rank 95th percentile retain the
+same raw duration sample. Throughput \(Q\) is meaningful only when callers use
+the same work-unit definition across strategies.
+
+For token \(t\), anchored top-1 has one active MLP. Pair-shaped top-2 has pair
+indicator \(p_t\), where one means two specialists execute and zero means the
+anchor executes:
+
+\[
+C_{\mathrm{top1}}=N,
+\qquad
+C_{\mathrm{top2}}=\sum_t(1+p_t).
+\]
+
+For adaptive route arity \(k_t\in\{0,1,2\}\), with zero denoting the anchor:
+
+\[
+C_{\mathrm{adaptive}}
+=
+\sum_t\left(\mathbb{1}[k_t=0]+k_t\right).
+\]
+
+Mean active MLPs per token is \(C/N\), defined as zero for an empty decision.
+Resident module-state bytes sum unique parameter and buffer storages. Shared
+storage is counted once; optimizer state, activations, allocator cache, Python
+objects, and serialized files are excluded.
+
 ## Algorithms
 
 1. Execute a model in evaluation mode before conversion.
@@ -130,6 +169,25 @@ Top-1/top-2 oracle comparison:
 6. compute best-single, best-pair, selected-pair gain, oracle-pair gain, and
    destructive-mixture statistics.
 
+Efficiency benchmarking:
+
+1. Validate the run counts, work-unit count, and benchmark device.
+2. Execute configured warmup runs and synchronize asynchronous device work.
+3. Optionally reset CUDA peak-allocation statistics after warmup.
+4. Synchronize immediately before and after every measured operation.
+5. Retain every positive wall-clock duration and calculate aggregate latency
+   and throughput properties.
+6. Count unique supplied parameter and buffer storages after execution but
+   outside timed regions so lazy state is represented.
+
+Active-MLP accounting:
+
+1. Read only the immutable route decision.
+2. Count anchor-executed tokens using the policy's anchor mask.
+3. Count active specialist slots in stable expert order.
+4. Sum anchor and specialist token executions.
+5. Count non-empty anchor and expert groups as ideal sparse module calls.
+
 ## Assumptions and invariants
 
 - Inputs, model mode, device, and dtype are identical between executions.
@@ -150,6 +208,20 @@ Top-1/top-2 oracle comparison:
 - Anchor-vetoed top-2 tokens execute and are evaluated as the exact anchor.
 - Aggregate second-expert and destructive-mixture metrics include only tokens
   that actually execute two specialists.
+- Benchmark setup cost is included only when the caller places it inside the
+  zero-argument operation.
+- Device synchronization brackets every measured run; module mode, gradient
+  mode, autocast, seeds, and thread counts remain caller-controlled.
+- Work items are explicit and positive. EVAL-005 does not infer whether they
+  represent tokens, sequences, or examples.
+- Top-2 anchor-veto metadata counts one anchor execution and no specialist
+  execution, even when the inactive ranked slot contains an expert candidate.
+- Active-MLP metrics count mathematical token executions separately from
+  sparse module calls.
+- CUDA peak allocation is allocator-global for the configured device after the
+  warmup boundary. CPU and MPS runtime peaks are reported as unavailable.
+- Shared state storage is counted once across parent/child or repeated module
+  references.
 
 ## Hugging Face integration
 
@@ -159,6 +231,12 @@ requests `output_hidden_states=True`. No model or tokenizer download is needed.
 EVAL-004 is an offline PyTorch transform over policy decisions and losses
 measured elsewhere. It does not require a Hugging Face model, but accepts
 outputs from deterministic Dataset transforms or model evaluation loops.
+
+EVAL-005 benchmarks any zero-argument operation, including a Hugging Face
+`forward()` or `generate()` closure and the standalone sparse dispatchers. The
+caller must put the model in the intended evaluation/precision context and set
+`work_items_per_run` consistently. CUDA synchronization and allocator peak
+measurement use PyTorch runtime APIs without changing model state.
 
 ## Configuration and examples
 
@@ -193,6 +271,22 @@ comparison = compare_top1_top2_to_oracle(
 print(comparison.mean_top1_regret)
 print(comparison.mean_top2_regret)
 print(comparison.destructive_mixture_fraction)
+
+config = EfficiencyBenchmarkConfig(
+    warmup_runs=2,
+    measured_runs=20,
+    work_items_per_run=input_ids.numel(),
+    device=str(input_ids.device),
+)
+runtime = benchmark_operation(
+    lambda: model(input_ids=input_ids),
+    config=config,
+    modules=model,
+)
+work = measure_active_mlp_metrics(route_decision)
+print(runtime.throughput_items_per_second)
+print(runtime.module_state.total_bytes)
+print(work.mean_active_mlps_per_token)
 ```
 
 `notebooks/01_convert_dense_model.ipynb` exercises this API against logits,
@@ -201,6 +295,11 @@ the post-conversion trainable-parameter count.
 `examples/verify_top1_top2_oracle.py` exercises sparse pair coverage,
 deterministic oracle selection, router regret, and destructive mixing without
 model downloads.
+`examples/evaluate_registry_strategies.py` compares top-1 and top-2
+synchronized latency, throughput, state footprint, active MLP work, and
+counterfactual regret with a deterministic offline fixture.
+`notebooks/05_evaluate_registry.ipynb` provides the corresponding thin public
+API workflow.
 
 ## References
 
@@ -212,7 +311,9 @@ model downloads.
   motivates explicit tolerance declarations for future runtime variants.
 
 No paper-derived evaluation algorithm is implemented here. EVAL-004 directly
-operationalizes metrics defined by the repository architecture.
+operationalizes metrics defined by the repository architecture. EVAL-005 uses
+standard synchronized wall-clock and allocator accounting rather than a
+paper-derived benchmark method.
 
 ## Tests and known limitations
 
@@ -228,7 +329,14 @@ EVAL-004 tests cover exact policy-to-candidate mapping, anchor veto, reversed
 pair ranking, sparse-pair coverage, registry and token-shape alignment,
 best-single and best-pair losses, top-1/top-2 regret, second-expert gain,
 destructive-mixture rate, policy integration, and executable example behavior.
+EVAL-005 tests cover unique shared storage, non-resident meta tensors, lazy
+state initialization, frozen/trainable byte accounting, top-1/top-2/adaptive
+execution counts, empty routes, warmup exclusion, repetition counts, CPU
+timing aggregates, public serialization mappings, dispatcher integration, and
+invalid inputs. Timing assertions validate contracts and positivity, never
+machine-specific performance thresholds.
 Cross-layer trajectory metrics, first-divergence depth, route serialization,
 persistent registry evaluation, model-integrated counterfactual execution,
-compute-adjusted quality, confidence intervals, and distributed aggregation
-remain future work.
+confidence intervals, CPU/MPS runtime peak memory, energy measurement,
+distributed aggregation, production hardware baselines, and statistical
+benchmark comparison remain future work.

@@ -6,6 +6,15 @@ from anchored_moe.evaluation.equivalence import (
     compare_tensors,
     fingerprint_module,
 )
+from anchored_moe.evaluation.efficiency import (
+    ActiveMLPMetrics,
+    EfficiencyBenchmarkConfig,
+    EfficiencyBenchmarkReport,
+    ModuleStateFootprint,
+    benchmark_operation,
+    measure_active_mlp_metrics,
+    measure_module_state_footprint,
+)
 from anchored_moe.evaluation.lifecycle import (
     RegistryLifecycleEvaluation,
     evaluate_registry_lifecycle,
@@ -21,15 +30,22 @@ from anchored_moe.evaluation.routing import (
 )
 
 __all__ = [
+    "ActiveMLPMetrics",
+    "EfficiencyBenchmarkConfig",
+    "EfficiencyBenchmarkReport",
+    "ModuleStateFootprint",
     "RouteAgreement",
     "RegistryLifecycleEvaluation",
     "TensorEquivalence",
     "Top1Top2OracleComparison",
     "assert_route_decisions_equal",
     "assert_tensors_equivalent",
+    "benchmark_operation",
     "compare_route_decisions",
     "compare_top1_top2_to_oracle",
     "compare_tensors",
     "evaluate_registry_lifecycle",
     "fingerprint_module",
+    "measure_active_mlp_metrics",
+    "measure_module_state_footprint",
 ]

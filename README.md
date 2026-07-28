@@ -49,6 +49,9 @@ standalone weighted top-2 strategy primitives:
   selection, and direct counterfactual-table construction;
 - top-1/top-2 counterfactual comparison with best-single and best-pair loss,
   second-expert gain, and destructive-mixture metrics;
+- synchronized warmup-aware latency and throughput benchmarks, exact unique
+  module-state footprint, optional CUDA peak allocation, and route-derived
+  active-MLP accounting;
 - opt-in sparse anchored top-1 execution for configured routed MLPs;
 - deterministic overflow-to-anchor fallback with no token dropping;
 - bounded privacy-safe route telemetry and exact route-agreement metrics;
@@ -72,7 +75,7 @@ standalone weighted top-2 strategy primitives:
   and an explicit install/synchronize/unload lifecycle;
 - executable offline notebooks for base-model inspection, exact
   dense-equivalence verification, forced-path expert training/export, and
-  custom package composition.
+  custom package composition and top-1/top-2 quality/efficiency evaluation.
 
 Automatic model mutation during installation, online replay-teacher execution,
 multi-expert training, model-integrated and package-driven top-2 execution,
@@ -110,6 +113,7 @@ python examples/verify_independent_ridge.py
 python examples/verify_temperature_thresholds.py
 python examples/verify_pair_utilities.py
 python examples/verify_top1_top2_oracle.py
+python examples/evaluate_registry_strategies.py
 python examples/verify_routed_top1.py
 python examples/verify_registry_lifecycle.py
 python examples/verify_package_runtime.py
@@ -132,7 +136,10 @@ The equivalent guided workflows are available in:
   immutable router-package derivation, and runtime materialization;
 - [`notebooks/04_compose_custom_model.ipynb`](./notebooks/04_compose_custom_model.ipynb)
   for explicit package installation, synchronization, unloading, and
-  deterministic reinsertion through `AnchoredMoEForCausalLM`.
+  deterministic reinsertion through `AnchoredMoEForCausalLM`;
+- [`notebooks/05_evaluate_registry.ipynb`](./notebooks/05_evaluate_registry.ipynb)
+  for an offline top-1/top-2 comparison of counterfactual quality, latency,
+  throughput, state footprint, and active-MLP work.
 
 The notebooks default to deterministic local Qwen3 smoke models and require no
 network access.
