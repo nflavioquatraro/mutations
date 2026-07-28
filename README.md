@@ -40,6 +40,8 @@ standalone weighted top-2 strategy primitives:
   combination policies;
 - adaptive anchor/top-1/top-2 selection with explicit auditable route arity
   and deterministic mixture-threshold behavior;
+- confidence-gated dynamic-\(k\) selection with stable specialist ranking,
+  explicit per-token compute bounds, and auditable variable route arity;
 - immutable package-declared expert compatibility groups and deterministic
   global top-2 selection that never mixes unrelated or undeclared experts;
 - standalone sparse anchor-veto or compatibility-constrained top-2 dispatch
@@ -116,8 +118,8 @@ slots or rollback records. Pair-aware top-2 global recalibration, embedding
 registry-router histories in composition checkpoints, and automatic router
 activation during registry changes remain separate tracked features.
 Teacher-score distribution distillation, top-2/adaptive distillation,
-cross-layer route hysteresis, and frozen-route expert training also remain
-separate work.
+cross-layer route hysteresis, arbitrary-\(k\) capacity/combination/dispatch,
+and frozen-route expert training also remain separate work.
 
 ## Development setup
 
@@ -144,6 +146,7 @@ python examples/verify_anchored_top1.py
 python examples/verify_anchor_veto_top2.py
 python examples/verify_compatibility_top2.py
 python examples/verify_adaptive_selection.py
+python examples/verify_dynamic_k_selection.py
 python examples/verify_combination_baselines.py
 python examples/verify_top2_dispatch.py
 python examples/verify_router_feature_bank.py

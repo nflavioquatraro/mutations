@@ -7,11 +7,13 @@ scores, already selected specialist outputs, and capacity metadata. POL-001
 implements fixed-zero anchored hard top-1 selection. POL-002 ranks an
 anchor-veto top-2 pair, POL-003 chooses adaptive anchor/top-1/top-2 route
 arity, and POL-005 chooses a globally ranked top-2 pair restricted by explicit
-PKG-003 compatibility groups. COM-001 combines an approved specialist pair
-with score-softmax weights, COM-002 supplies equal-weight and
-normalized-positive-evidence baselines, and BAL-001 rewrites unavailable
-top-1 experts to the anchor. BAL-002 consumes an approved top-2 pair and
-degrades it deterministically to its available survivor or the anchor.
+PKG-003 compatibility groups. POL-006 chooses a confidence-qualified
+specialist prefix under an explicit per-token maximum-expert budget. COM-001
+combines an approved specialist pair with score-softmax weights, COM-002
+supplies equal-weight and normalized-positive-evidence baselines, and BAL-001
+rewrites unavailable top-1 experts to the anchor. BAL-002 consumes an approved
+top-2 pair and degrades it deterministically to its available survivor or the
+anchor.
 
 This subpackage does not extract router features, produce or fit expert scores,
 attach experts, execute MLPs, dispatch tokens, estimate serving capacity,
@@ -27,6 +29,7 @@ evaluation features.
 | POL-002 | `selection.policy: anchor_veto_top2` | `selection.py` | Validated |
 | POL-003 | `selection.policy: adaptive_top1_top2` | `selection.py` | Validated |
 | POL-005 | `selection.policy: global_compatibility_top2` | `selection.py` | Validated |
+| POL-006 | `selection.policy: dynamic_k` | `selection.py` | Validated |
 | COM-001 | `combination.policy: score_softmax` | `combination.py` | Validated |
 | COM-002 | `combination.policy: equal_weight` | `combination.py` | Validated |
 | COM-002 | `combination.policy: normalized_positive_evidence` | `combination.py` | Validated |
@@ -39,11 +42,14 @@ pair-shaped `Top2RouteDecision` metadata.
 `AnchoredTop1Selection` returns `RouteDecision`,
 `AnchorVetoTop2Selection` returns pair-shaped `Top2RouteDecision`, and
 `AdaptiveTop1Top2Selection` returns pair-ranked `AdaptiveRouteDecision`
-metadata with explicit route arity.
+metadata with explicit route arity. `DynamicKSelection` returns
+`DynamicKRouteDecision` metadata whose ranking width is the configured
+per-token compute bound and whose active prefix varies by confidence.
 `CompatibilityConstrainedTop2Selection` binds one immutable
 `MixtureCompatibilityIndex` and also returns `Top2RouteDecision`. INF-001
 consumes the top-1 result, while INF-002 consumes either top-2 policy through
-the narrow interface. Adaptive sparse execution remains separate.
+the narrow interface. Adaptive and arbitrary-\(k\) sparse execution remain
+separate.
 
 `OverflowToAnchorCapacity` consumes a `RouteDecision` and optional per-token
 expert availability. `CapacityDecision` exposes the effective routes and the
@@ -186,6 +192,33 @@ shape \(D_1\times\cdots\times D_n\). If fewer than two specialists exist,
 candidate index zero and score zero pad the missing ranking slots. Padding is
 never active.
 
+For POL-006, let \(K_{\max}\ge1\) be the configured per-token specialist
+budget and let \(\tau_{\mathrm{act}}\ge0\) be the confidence threshold.
+After a stable descending specialist-only ranking, the active arity is
+
+\[
+a_t
+=
+\min\left(
+K_{\max},
+\sum_{i=1}^{K}
+\mathbb{1}\left[g_{t,i}>\tau_{\mathrm{act}}\right]
+\right).
+\]
+
+The active set is the first \(a_t\) entries of the retained ranking. Thus
+\(a_t=0\) selects the anchor and \(1\le a_t\le K_{\max}\) selects a bounded
+specialist prefix. The strict inequality makes an exact confidence-threshold
+tie inactive. A non-negative threshold preserves the fixed-zero anchor
+interpretation: selected specialists always carry strictly positive evidence.
+
+`DynamicKRouteDecision` retains
+\(\min(K,K_{\max})\) real candidates and pads the remaining ranking width with
+candidate-zero and score-zero entries. Its tensors have shapes
+\(D_1\times\cdots\times D_n\times K_{\max}\) for ranked indices and scores,
+and \(D_1\times\cdots\times D_n\) for arity. The cap is a deterministic
+per-token compute bound; it is not a batch-wide capacity allocation.
+
 For an approved pair \(i,j\), COM-001 computes
 
 \[
@@ -315,6 +348,21 @@ Adaptive anchor/top-1/top-2:
    greater than the mixture threshold; otherwise choose top-1.
 7. Return ranked metadata, route arity, mode masks, and active per-expert masks.
 
+Dynamic-\(k\) confidence and budget selection:
+
+1. Apply the shared score, identifier, shape, and finite-value validation.
+2. Require a positive integer maximum-expert budget and a finite non-negative
+   activation threshold.
+3. Stable-sort all specialists in descending score order.
+4. Retain at most the configured maximum-expert count.
+5. Count retained scores strictly greater than the activation threshold.
+6. Use arity zero for anchor fallback and otherwise activate that many entries
+   from the ranked prefix.
+7. Pad an undersized or empty registry with inactive candidate-zero and
+   score-zero entries.
+8. Return ranked metadata, bounded route arity, arity masks, and active
+   per-expert masks without executing or combining experts.
+
 Score-softmax combination:
 
 1. Require finite pair scores and matching pair-ordered activation prefixes.
@@ -379,6 +427,15 @@ Top-2 capacity degradation:
   conservative anchor and top-1 modes respectively.
 - POL-003 does not execute, combine, capacity-check, or compatibility-check
   selected specialists.
+- POL-006 route arity is between zero and `max_experts`, inclusive.
+- POL-006 activates specialists only on a strict threshold exceedance and
+  preserves append order on exact score ties.
+- POL-006 padding uses candidate zero and score zero but can never appear in
+  the active ranking prefix.
+- POL-006's `max_experts` is a per-token compute ceiling, not an availability
+  guarantee or a batch capacity assignment.
+- POL-006 does not learn difficulty, enforce capacity, execute experts,
+  combine their outputs, or claim compatibility among the selected experts.
 - POL-005 treats missing group metadata as non-mixable.
 - POL-005 requires exact candidate-set equality with its immutable
   compatibility index; candidate order may be realigned by stable ID.
@@ -424,12 +481,13 @@ only after an explicit `configure_anchored_top1()` call.
 `AnchoredMoEConfig` continues to reject
 `selection.policy: anchored_top1`, `selection.policy: anchor_veto_top2`,
 `selection.policy: adaptive_top1_top2`, and
-`selection.policy: global_compatibility_top2` for model-level configuration
-because runtime strategy construction is not yet configuration-driven. Expert
-package manifests may declare `anchored_top1`; top-2 and adaptive package
-attachment remain unsupported. Standalone experiments can use all selection
-strategies explicitly. INF-002 composes either POL-002 or POL-005 with any
-`CombinationPolicy` and BAL-002 in a standalone sparse dispatcher.
+`selection.policy: global_compatibility_top2`, and
+`selection.policy: dynamic_k` for model-level configuration because runtime
+strategy construction is not yet configuration-driven. Expert package
+manifests may declare `anchored_top1`; top-2, adaptive, and dynamic-\(k\)
+package attachment remain unsupported. Standalone experiments can use all
+selection strategies explicitly. INF-002 composes either POL-002 or POL-005
+with any `CombinationPolicy` and BAL-002 in a standalone sparse dispatcher.
 `capacity.degradation: top2_to_top1` documents that direct API strategy;
 `AnchoredMoEConfig` does not accept it until top-2 model attachment and
 configuration-driven policy construction exist. This does not silently enable
@@ -443,6 +501,7 @@ from anchored_moe import (
     AnchorVetoTop2Selection,
     AnchoredTop1Selection,
     CompatibilityConstrainedTop2Selection,
+    DynamicKSelection,
     EqualWeightCombination,
     MixtureCompatibilityIndex,
     NormalizedPositiveEvidenceCombination,
@@ -490,6 +549,15 @@ adaptive = AdaptiveTop1Top2Selection(mix_threshold=0.25)(
 anchor_tokens = adaptive.anchor_mask
 single_expert_tokens = adaptive.top1_mask
 mixed_expert_tokens = adaptive.top2_mask
+dynamic = DynamicKSelection(
+    max_experts=3,
+    activation_threshold=0.25,
+)(
+    expert_scores,
+    expert_ids=expert_ids,
+)
+anchor_tokens = dynamic.anchor_mask
+three_expert_tokens = dynamic.mask_for_arity(3)
 approved_scores = top2.selected_scores[top2.expert_pair_mask]
 mixed = ScoreSoftmaxCombination(mix_temperature=1.0)(
     pair_ordered_expert_outputs,
@@ -506,11 +574,13 @@ evidence_baseline = NormalizedPositiveEvidenceCombination()(
 ```
 
 The public strategy names are `anchored_top1`, `anchor_veto_top2`,
-`adaptive_top1_top2`, `global_compatibility_top2`, `score_softmax`,
-`equal_weight`, `normalized_positive_evidence`, and `top2_to_top1`. See
+`adaptive_top1_top2`, `global_compatibility_top2`, `dynamic_k`,
+`score_softmax`, `equal_weight`, `normalized_positive_evidence`, and
+`top2_to_top1`. See
 `examples/verify_anchored_top1.py`, `examples/verify_anchor_veto_top2.py`,
 `examples/verify_compatibility_top2.py`,
-`examples/verify_adaptive_selection.py`, and
+`examples/verify_adaptive_selection.py`,
+`examples/verify_dynamic_k_selection.py`, and
 `examples/verify_combination_baselines.py` for deterministic integration.
 
 ## References
@@ -531,12 +601,23 @@ The public strategy names are `anchored_top1`, `anchor_veto_top2`,
 - The repository
   [architecture blueprint](../../../anchored-plugin-moe-architecture.md)
   defines fixed-zero anchor evidence, anchored hard top-1, anchor-veto top-2,
-  adaptive anchor/top-1/top-2, score-softmax activation combination, both
-  COM-002 baselines, and capacity-aware top-2 degradation.
+  adaptive anchor/top-1/top-2, dynamic-\(k\) allocation, score-softmax
+  activation combination, both COM-002 baselines, and capacity-aware top-2
+  degradation.
+- [Harder Tasks Need More Experts: Dynamic Routing in MoE Models](https://arxiv.org/abs/2403.07652)
+  motivates varying the number of active experts with routing confidence.
+  POL-006 uses an explicit calibrated-score threshold rather than the paper's
+  learned dynamic routing mechanism.
+- [DA-MoE: Towards Dynamic Expert Allocation for Mixture-of-Experts Models](https://arxiv.org/abs/2409.06669)
+  motivates token-dependent expert counts. POL-006 provides deterministic
+  selection metadata and a fixed per-token cap rather than learning token
+  importance or a compute-allocation objective.
 
-POL-001, POL-002, POL-003, POL-005, COM-001, COM-002, BAL-001, and BAL-002 are
-framework infrastructure and do not derive a training or optimization
-algorithm from a paper.
+POL-001, POL-002, POL-003, POL-005, COM-001, COM-002, BAL-001, and BAL-002
+are framework infrastructure and do not derive a training or optimization
+algorithm from a paper. POL-006 is paper-motivated, with its deterministic
+anchored threshold and per-token cap documented as project-specific
+differences.
 
 ## Tests and known limitations
 
@@ -570,6 +651,13 @@ single-expert padding, arbitrary leading dimensions, dtype/device preservation,
 input immutability, invalid thresholds, malformed public decisions, and
 affine-router integration.
 
+POL-006 tests cover arities from anchor through the configured budget, strict
+confidence-threshold ties, global strongest-prefix retention, append-order
+ties, active arity and per-expert masks, empty and undersized registry padding,
+arbitrary leading dimensions, dtype/device and score-gradient preservation,
+input immutability, invalid confidence and budget configuration, malformed
+public decisions, and affine-router integration.
+
 POL-005 tests cover incompatible high-score rejection, selection of a
 lower-ranked compatible pair, lexicographic pair ranking, append-order ties,
 missing-group anchor fallback, empty and single-expert registries, candidate
@@ -582,6 +670,7 @@ candidate execution.
 INF-001 executes effective top-1 routes, INF-002 executes capacity-adjusted
 standalone anchor-veto or compatibility-constrained routes, and EVAL-002
 records top-1 routes. Capacity estimation, fallback beyond the selected pair,
-adaptive sparse execution, top-2 telemetry, decision serialization, package attachment,
-`RoutedMLP` top-2 integration, and model-level top-1/top-2 configuration
-remain future work.
+adaptive or arbitrary-\(k\) sparse execution, arbitrary-\(k\) activation
+combination and compatibility, top-2 telemetry, decision serialization,
+package attachment, `RoutedMLP` top-2 integration, and model-level routed
+strategy configuration remain future work.

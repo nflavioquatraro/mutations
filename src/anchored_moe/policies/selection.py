@@ -1,4 +1,4 @@
-"""Deterministic anchored top-1, top-2, and adaptive selection policies."""
+"""Deterministic anchored top-1, top-2, adaptive, and dynamic-k selection."""
 
 from __future__ import annotations
 
@@ -341,6 +341,189 @@ class AdaptiveRouteDecision:
         return slot_indices < self.route_arity.unsqueeze(-1)
 
 
+@dataclass(frozen=True)
+class DynamicKRouteDecision:
+    """Ranked specialists and bounded variable route arity for every token.
+
+    ``ranked_indices`` and ``ranked_scores`` have shape
+    ``token_shape + (max_experts,)``. Candidate index ``i + 1`` represents
+    ``expert_ids[i]``; candidate zero pads the ranking when the registry
+    contains fewer specialists than the configured compute budget.
+
+    ``route_arity`` has ``token_shape`` and contains the number of active
+    ranked specialists. Zero selects the immutable anchor. Positive arity
+    selects that many entries from the ranking prefix.
+
+    Attributes:
+        ranked_indices:
+            Stable specialist ranking, padded with candidate zero as needed.
+        ranked_scores:
+            Calibrated scores aligned with ``ranked_indices``; padding scores
+            are zero.
+        route_arity:
+            Integer tensor containing the active specialist count per token.
+        expert_ids:
+            Expert identifiers in the stable order used by candidate indices.
+    """
+
+    ranked_indices: Tensor
+    ranked_scores: Tensor
+    route_arity: Tensor
+    expert_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        """Validate ranking, padding, arity, dtype, and device invariants."""
+
+        if not isinstance(self.ranked_indices, Tensor):
+            raise TypeError("ranked_indices must be a torch.Tensor.")
+        if self.ranked_indices.dtype != torch.long:
+            raise TypeError("ranked_indices must use torch.long.")
+        if not isinstance(self.ranked_scores, Tensor):
+            raise TypeError("ranked_scores must be a torch.Tensor.")
+        if not self.ranked_scores.is_floating_point():
+            raise TypeError("ranked_scores must use a floating-point dtype.")
+        if self.ranked_indices.shape != self.ranked_scores.shape:
+            raise ValueError(
+                "ranked_indices and ranked_scores must have the same shape."
+            )
+        if self.ranked_indices.ndim < 1:
+            raise ValueError(
+                "dynamic-k rankings must have a final compute-budget dimension."
+            )
+        if self.ranked_indices.shape[-1] < 1:
+            raise ValueError(
+                "dynamic-k rankings must retain at least one candidate slot."
+            )
+        if not isinstance(self.route_arity, Tensor):
+            raise TypeError("route_arity must be a torch.Tensor.")
+        if self.route_arity.dtype != torch.long:
+            raise TypeError("route_arity must use torch.long.")
+        if self.route_arity.shape != self.ranked_indices.shape[:-1]:
+            raise ValueError(
+                "route_arity must have the ranking token-leading shape."
+            )
+        if not (
+            self.ranked_indices.device
+            == self.ranked_scores.device
+            == self.route_arity.device
+        ):
+            raise ValueError(
+                "ranked_indices, ranked_scores, and route_arity must share "
+                "one device."
+            )
+
+        normalized_ids = _normalize_expert_ids(self.expert_ids)
+        object.__setattr__(self, "expert_ids", normalized_ids)
+        if self.ranked_indices.numel():
+            minimum = int(self.ranked_indices.min().item())
+            maximum = int(self.ranked_indices.max().item())
+            if minimum < 0 or maximum > len(normalized_ids):
+                raise ValueError(
+                    "ranked_indices contains a candidate outside the padding "
+                    f"index and {len(normalized_ids)} declared experts."
+                )
+        if not torch.isfinite(self.ranked_scores).all().item():
+            raise ValueError("ranked_scores must contain only finite values.")
+
+        retained_width = self.ranked_indices.shape[-1]
+        retained_count = min(retained_width, len(normalized_ids))
+        if retained_count and torch.any(
+            self.ranked_indices[..., :retained_count] == 0
+        ).item():
+            raise ValueError(
+                "available specialists must occupy every retained ranking "
+                "slot before padding."
+            )
+        if retained_count < retained_width:
+            if torch.any(
+                self.ranked_indices[..., retained_count:] != 0
+            ).item():
+                raise ValueError(
+                    "missing specialist ranking slots must use padding index zero."
+                )
+            if torch.any(self.ranked_scores[..., retained_count:] != 0).item():
+                raise ValueError(
+                    "missing specialist ranking slots must use padding score zero."
+                )
+
+        # Candidate zero may repeat only in the inactive padding suffix.
+        # Pairwise validation keeps public construction unambiguous without
+        # assuming that callers still retain the complete source score tensor.
+        for first_slot in range(retained_count):
+            for second_slot in range(first_slot + 1, retained_count):
+                if torch.any(
+                    self.ranked_indices[..., first_slot]
+                    == self.ranked_indices[..., second_slot]
+                ).item():
+                    raise ValueError(
+                        "dynamic-k rankings must contain distinct specialists."
+                    )
+
+        if self.route_arity.numel():
+            minimum_arity = int(self.route_arity.min().item())
+            maximum_arity = int(self.route_arity.max().item())
+            if minimum_arity < 0 or maximum_arity > retained_count:
+                raise ValueError(
+                    "route_arity values must be between zero and the number "
+                    "of retained specialists."
+                )
+        if torch.any(
+            self.ranked_indices[self._active_slot_mask()] == 0
+        ).item():
+            raise ValueError("active dynamic-k routes cannot use padding index zero.")
+
+    @property
+    def max_experts(self) -> int:
+        """Return the configured per-token specialist compute budget."""
+
+        return self.ranked_indices.shape[-1]
+
+    @property
+    def anchor_mask(self) -> Tensor:
+        """Return tokens assigned to the immutable anchor."""
+
+        return self.route_arity == 0
+
+    @property
+    def specialist_mask(self) -> Tensor:
+        """Return tokens assigned to one or more specialists."""
+
+        return self.route_arity > 0
+
+    def mask_for_arity(self, arity: int) -> Tensor:
+        """Return tokens assigned to exactly ``arity`` specialists."""
+
+        if isinstance(arity, bool) or not isinstance(arity, int):
+            raise TypeError("arity must be an integer.")
+        if arity < 0 or arity > self.max_experts:
+            raise ValueError(
+                "arity must be between zero and the configured max_experts."
+            )
+        return self.route_arity == arity
+
+    def mask_for_expert(self, expert_id: str) -> Tensor:
+        """Return tokens where one declared expert is in the active prefix."""
+
+        try:
+            candidate_index = self.expert_ids.index(expert_id) + 1
+        except ValueError as error:
+            raise KeyError(f"Unknown expert_id: {expert_id!r}.") from error
+        active_matches = (
+            self.ranked_indices == candidate_index
+        ) & self._active_slot_mask()
+        return torch.any(active_matches, dim=-1)
+
+    def _active_slot_mask(self) -> Tensor:
+        """Return ranking slots enabled by each token's route arity."""
+
+        slot_indices = torch.arange(
+            self.max_experts,
+            dtype=torch.long,
+            device=self.route_arity.device,
+        )
+        return slot_indices < self.route_arity.unsqueeze(-1)
+
+
 class SelectionPolicy(ABC):
     """Interface for choosing anchor or expert candidates from router scores.
 
@@ -357,7 +540,12 @@ class SelectionPolicy(ABC):
         expert_scores: Tensor,
         *,
         expert_ids: Sequence[str],
-    ) -> RouteDecision | Top2RouteDecision | AdaptiveRouteDecision:
+    ) -> (
+        RouteDecision
+        | Top2RouteDecision
+        | AdaptiveRouteDecision
+        | DynamicKRouteDecision
+    ):
         """Delegate to :meth:`select` for ordinary callable use."""
 
         return self.select(expert_scores, expert_ids=expert_ids)
@@ -368,7 +556,12 @@ class SelectionPolicy(ABC):
         expert_scores: Tensor,
         *,
         expert_ids: Sequence[str],
-    ) -> RouteDecision | Top2RouteDecision | AdaptiveRouteDecision:
+    ) -> (
+        RouteDecision
+        | Top2RouteDecision
+        | AdaptiveRouteDecision
+        | DynamicKRouteDecision
+    ):
         """Choose candidate routes per token from calibrated expert scores."""
 
 
@@ -966,6 +1159,172 @@ class AdaptiveTop1Top2Selection(SelectionPolicy):
                 )
 
         return AdaptiveRouteDecision(
+            ranked_indices=ranked_indices,
+            ranked_scores=ranked_scores,
+            route_arity=route_arity,
+            expert_ids=normalized_ids,
+        )
+
+
+class DynamicKSelection(SelectionPolicy):
+    """Select a threshold-qualified ranking prefix under a compute budget.
+
+    For descending calibrated specialist scores ``g_(1), ..., g_(K)`` and
+    finite ``activation_threshold >= 0``, POL-006 selects
+
+    ``k = min(max_experts, count(g_i > activation_threshold))``.
+
+    Zero selects the immutable anchor; otherwise the first ``k`` ranked
+    specialists are active. The strict comparison makes an exact threshold
+    tie inactive. Stable sorting preserves append order for expert-score ties.
+    ``max_experts`` is a per-token upper bound, not a batch-wide capacity
+    allocator.
+
+    References:
+        Huang et al., "Harder Tasks Need More Experts: Dynamic Routing in MoE
+        Models." https://arxiv.org/abs/2403.07652
+
+        Li et al., "DA-MoE: Towards Dynamic Expert Allocation for
+        Mixture-of-Experts Models." https://arxiv.org/abs/2409.06669
+
+    Differences from the papers:
+        This deterministic inference policy uses already calibrated anchored
+        scores, a fixed confidence threshold, and an explicit per-token cap.
+        It does not learn token difficulty, optimize a compute-allocation
+        objective, enforce batch capacity, execute experts, or combine their
+        outputs.
+    """
+
+    policy_name = "dynamic_k"
+    anchor_score = 0.0
+
+    def __init__(
+        self,
+        *,
+        max_experts: int,
+        activation_threshold: float = 0.0,
+    ) -> None:
+        """Create confidence-gated selection with a positive expert budget."""
+
+        if isinstance(max_experts, bool) or not isinstance(max_experts, int):
+            raise TypeError("max_experts must be an integer.")
+        if max_experts <= 0:
+            raise ValueError("max_experts must be greater than zero.")
+        if isinstance(activation_threshold, bool) or not isinstance(
+            activation_threshold,
+            (int, float),
+        ):
+            raise TypeError("activation_threshold must be a real number.")
+        normalized_threshold = float(activation_threshold)
+        if not isfinite(normalized_threshold) or normalized_threshold < 0:
+            raise ValueError(
+                "activation_threshold must be finite and greater than or "
+                "equal to zero."
+            )
+        self.max_experts = max_experts
+        self.activation_threshold = normalized_threshold
+
+    def select(
+        self,
+        expert_scores: Tensor,
+        *,
+        expert_ids: Sequence[str],
+    ) -> DynamicKRouteDecision:
+        """Return stable rankings and bounded variable arity per token.
+
+        Args:
+            expert_scores:
+                Floating-point tensor with shape ``[..., K]``. The final
+                dimension follows ``expert_ids`` order and may be empty.
+            expert_ids:
+                Unique, stable identifiers for the ``K`` specialist columns.
+
+        Returns:
+            A :class:`DynamicKRouteDecision` whose ranking width equals
+            :attr:`max_experts`.
+
+        Raises:
+            TypeError:
+                If scores or identifiers use invalid public types.
+            ValueError:
+                If score shape, identifiers, or values are invalid.
+        """
+
+        if not isinstance(expert_scores, Tensor):
+            raise TypeError("expert_scores must be a torch.Tensor.")
+        if not expert_scores.is_floating_point():
+            raise TypeError("expert_scores must use a floating-point dtype.")
+        if expert_scores.ndim < 1:
+            raise ValueError(
+                "expert_scores must have a final expert-candidate dimension."
+            )
+
+        normalized_ids = _normalize_expert_ids(expert_ids)
+        expert_count = expert_scores.shape[-1]
+        if expert_count != len(normalized_ids):
+            raise ValueError(
+                "expert_scores final dimension must match expert_ids: "
+                f"{expert_count} != {len(normalized_ids)}."
+            )
+        if not torch.isfinite(expert_scores).all().item():
+            raise ValueError("expert_scores must contain only finite values.")
+
+        token_shape = expert_scores.shape[:-1]
+        retained_count = min(self.max_experts, expert_count)
+        if retained_count:
+            # Ranking all specialists before applying the budget ensures that
+            # the retained prefix is globally strongest. Stable ordering gives
+            # exact score ties deterministic append-order semantics.
+            all_ranked_indices = torch.argsort(
+                expert_scores,
+                dim=-1,
+                descending=True,
+                stable=True,
+            )
+            retained_zero_based = all_ranked_indices[..., :retained_count]
+            retained_scores = torch.gather(
+                expert_scores,
+                dim=-1,
+                index=retained_zero_based,
+            )
+            ranked_indices = retained_zero_based + 1
+            ranked_scores = retained_scores
+            route_arity = (
+                retained_scores > self.activation_threshold
+            ).sum(dim=-1, dtype=torch.long)
+        else:
+            ranked_indices = torch.zeros(
+                token_shape + (0,),
+                dtype=torch.long,
+                device=expert_scores.device,
+            )
+            ranked_scores = expert_scores.new_zeros(token_shape + (0,))
+            route_arity = torch.zeros(
+                token_shape,
+                dtype=torch.long,
+                device=expert_scores.device,
+            )
+
+        padding_count = self.max_experts - retained_count
+        if padding_count:
+            padding_indices = torch.zeros(
+                token_shape + (padding_count,),
+                dtype=torch.long,
+                device=expert_scores.device,
+            )
+            padding_scores = expert_scores.new_zeros(
+                token_shape + (padding_count,)
+            )
+            ranked_indices = torch.cat(
+                (ranked_indices, padding_indices),
+                dim=-1,
+            )
+            ranked_scores = torch.cat(
+                (ranked_scores, padding_scores),
+                dim=-1,
+            )
+
+        return DynamicKRouteDecision(
             ranked_indices=ranked_indices,
             ranked_scores=ranked_scores,
             route_arity=route_arity,
