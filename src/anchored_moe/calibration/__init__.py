@@ -11,6 +11,12 @@ from anchored_moe.calibration.labels import (
     LabelBankSerializationError,
     UtilityLabelBank,
 )
+from anchored_moe.calibration.margins import (
+    HeadStabilityMarginReport,
+    StabilityMarginRefinementError,
+    StabilityMarginRefinementReport,
+    refine_stability_margins,
+)
 from anchored_moe.calibration.oracle import (
     CounterfactualOracleResult,
     CounterfactualRoute,
@@ -41,6 +47,7 @@ __all__ = [
     "CounterfactualRouteLosses",
     "FeatureBankSerializationError",
     "HeadCalibrationReport",
+    "HeadStabilityMarginReport",
     "LabelBankSerializationError",
     "PairSamplingPlan",
     "PairUtilityResult",
@@ -48,6 +55,8 @@ __all__ = [
     "ROUTER_LABEL_BANK_FORMAT_VERSION",
     "RidgeFittingError",
     "RouterFeatureBank",
+    "StabilityMarginRefinementError",
+    "StabilityMarginRefinementReport",
     "TemperatureThresholdCalibrationError",
     "TemperatureThresholdCalibrationReport",
     "UtilityLabelBank",
@@ -56,4 +65,5 @@ __all__ = [
     "evaluate_counterfactual_oracle",
     "fit_independent_ridge",
     "plan_expert_pairs",
+    "refine_stability_margins",
 ]

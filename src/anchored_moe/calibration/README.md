@@ -12,7 +12,9 @@ per-head binary temperature scaling and held-out false-activation-constrained
 threshold selection. CAL-007 defines a sparse counterfactual route-loss table
 and evaluates router regret against a deterministic anchor-first oracle.
 CAL-003 supplies deterministic bounded pair plans plus pair utility and
-improvement-over-best-single targets from aligned precomputed losses.
+improvement-over-best-single targets from aligned precomputed losses. CAL-006
+refines newly calibrated package heads against an immutable incumbent router
+using explicit stability and useful-win margins.
 
 NB-004 composes the validated CAL-004/CAL-005 outputs with an immutable
 NB-003 expert-only package. Its registry-owned artifact boundary verifies the
@@ -21,9 +23,9 @@ publishing a new router-bearing package version.
 
 This subpackage does not extract hidden states through model hooks, execute
 counterfactual model paths, learn pair mixture weights, construct a persistent
-pair-utility bank, refine stability margins, or install packages. Those
-responsibilities remain with later calibration formats, CAL-006, model
-backends, routers, and the registry.
+pair-utility bank, mutate an incumbent router, persist registry-specific
+routers, or install packages. Those responsibilities remain with model
+backends, routers, RTR-004, PKG-005, and the registry.
 
 ## Implemented strategies
 
@@ -34,6 +36,7 @@ backends, routers, and the registry.
 | CAL-003 | `plan_expert_pairs`, `compute_pair_utilities` | `pairs.py` | Validated |
 | CAL-004 | `fitting: independent_ridge`, `regularization: <positive float>` | `ridge.py` | Validated |
 | CAL-005 | `calibration: temperature_threshold`, `false_activation_rate: <0..1>` | `temperature.py` | Validated |
+| CAL-006 | `refinement: stability_margin`, explicit stability/win partitions | `margins.py` | Validated |
 | CAL-007 | `CounterfactualRouteLosses`, `evaluate_counterfactual_oracle` | `oracle.py` | Validated |
 | NB-004 | `CalibratedRouterPackageConfig`, `derive_calibrated_router_package` | `registry/export.py` | Validated |
 
@@ -51,6 +54,12 @@ new frozen router plus a JSON-compatible
 `TemperatureThresholdCalibrationReport`. Per-head metrics are represented by
 `HeadCalibrationReport`; `TemperatureThresholdCalibrationError` reports
 numerically unusable calibration results.
+`refine_stability_margins` consumes frozen CAL-005 candidate heads, an
+optional frozen incumbent score bank, and aligned candidate utilities. It
+returns independently owned frozen heads plus a JSON-compatible
+`StabilityMarginRefinementReport`. `HeadStabilityMarginReport` records
+deployed-dtype before/after hinge and route metrics;
+`StabilityMarginRefinementError` reports non-finite state or scores.
 `CounterfactualRouteLosses` owns detached CPU losses for the anchor, every
 single expert, and an explicit sparse set of evaluated pairs.
 `evaluate_counterfactual_oracle` returns the minimum-loss candidate,
@@ -217,6 +226,54 @@ Among eligible score boundaries, CAL-005 maximizes true-positive count, then
 minimizes false-positive count, then selects the higher threshold. With no
 negative rows FAR is defined as zero; with no positive rows the tie rules
 select a conservative no-activation threshold.
+
+For CAL-006, let the immutable incumbent maximum include the fixed-zero anchor:
+
+\[
+m_{\ell,t}^{\mathrm{old}}
+=
+\max\left(0,\max_{j\in\mathcal E_{\mathrm{old}}}
+g_{\ell,t,j}^{\mathrm{old}}\right).
+\]
+
+For candidate \(k\), stability rows \(\mathcal I_S\), useful win rows
+\(\mathcal I_{W,k}^{+}=\{t\in\mathcal I_W:a_{\ell,t,k}>0\}\), and non-negative
+margins \(\gamma_S,\gamma_W\), the hinge terms are
+
+\[
+\mathcal L_{\ell,k}^{S}
+=
+\frac{1}{|\mathcal I_S|}
+\sum_{t\in\mathcal I_S}
+\max(0,g_{\ell,t,k}^{\mathrm{new}}
+-m_{\ell,t}^{\mathrm{old}}+\gamma_S),
+\]
+
+\[
+\mathcal L_{\ell,k}^{W}
+=
+\frac{1}{|\mathcal I_{W,k}^{+}|}
+\sum_{t\in\mathcal I_{W,k}^{+}}
+\max(0,m_{\ell,t}^{\mathrm{old}}+\gamma_W
+-g_{\ell,t,k}^{\mathrm{new}}).
+\]
+
+The win term is zero when a head has no positive-utility win rows. CAL-006
+optimizes each candidate affine state
+\(\theta_{\ell,k}=(w_{\ell,k},b_{\ell,k})\) independently:
+
+\[
+\mathcal L_{\ell,k}
+=
+\lambda_S\mathcal L_{\ell,k}^{S}
++\lambda_W\mathcal L_{\ell,k}^{W}
++\lambda_D\frac{\|\theta_{\ell,k}-\theta_{\ell,k}^{(0)}\|_2^2}
+{|\theta_{\ell,k}|}.
+\]
+
+Temperature and threshold remain fixed at their CAL-005 values. Because the
+affine state changes, the CAL-006 report—not the earlier CAL-005 report—is
+authoritative for deployment activation metrics of the refined head.
 
 For \(K\) experts, CAL-003 considers the registry-ordered pair universe
 
@@ -400,6 +457,26 @@ Temperature and threshold calibration:
 10. Return canonical row partitions and per-head losses, counts, rates,
     statuses, temperatures, and thresholds in a JSON-compatible report.
 
+Stability-margin refinement:
+
+1. Require frozen finite candidate heads, a frozen finite incumbent router or
+   anchor-only `None`, and exact feature/utility layer and expert alignment.
+2. Require non-empty, disjoint stability and win row-ID subsets and
+   canonicalize them into feature-bank order.
+3. Evaluate the incumbent score bank in its deployed dtype and take the
+   maximum with the fixed-zero anchor without retaining gradients.
+4. For each candidate head, keep only strictly positive-utility win rows and
+   optimize its stability hinge, win hinge, and proximal drift independently.
+5. Run seed-free full-batch Adam on CPU in `torch.float64` for the configured
+   fixed number of steps and retain the best observed objective.
+6. Copy the best affine state to a new frozen head in the source dtype/device,
+   while preserving temperature, threshold, ownership, and append order.
+7. Re-evaluate deployed-dtype scores; retain the exact CAL-005 source state if
+   dtype conversion does not improve the complete objective.
+8. Return canonical partitions, hyperparameters, before/after violations,
+   incumbent-overwrite activations, useful-row counts, and status in a
+   JSON-compatible report.
+
 Pair planning and utility construction:
 
 1. Require at least two unique experts in stable registry order.
@@ -511,6 +588,23 @@ NB-004 package derivation:
   exact copies, global head order is preserved, and output heads are frozen.
 - Reports contain row IDs, calibration bounds, iteration count, losses,
   thresholds, counts, rates, and fallback statuses, but no prompt text.
+- CAL-006 candidates and incumbents are frozen, finite, feature-compatible,
+  and layer-complete; candidate and incumbent expert IDs are disjoint.
+- Stability and win row IDs are non-empty, unique, known, and disjoint, but
+  may leave unused feature-bank rows for independent evaluation.
+- The fixed-zero anchor participates in every incumbent maximum. `None`
+  explicitly represents an anchor-only registry.
+- Only strictly positive-utility win rows train a candidate; zero and negative
+  utility are reported as ignored rather than forced to activate.
+- Full-batch float64 optimization is deterministic and does not read or alter
+  global pseudorandom state. The initialization remains an eligible best state.
+- CAL-006 never mutates the incumbent, candidate, features, or utilities.
+  Returned heads own new frozen storage and preserve global append order,
+  temperature, threshold, dtype, and device.
+- Post-refinement metrics use deployed score arithmetic. They supersede the
+  original CAL-005 activation metrics because affine parameters have changed.
+- CAL-006 is package-local fitting; it neither mutates a logical router nor
+  persists a registry-specific router version.
 - CAL-003 requires at least two experts and defaults to at most 64 evaluated
   pairs; exhaustive \(O(K^2)\) enumeration requires `max_pairs=None`.
 - Pair sampling depends only on the non-negative seed and exact registry
@@ -585,6 +679,15 @@ The resulting router uses the existing RTR-002 safetensors format, which
 already stores each head's temperature and threshold. The separate report can
 be written as resolved experiment JSON beside that payload.
 
+CAL-006 is another offline tensor transform. Feature and utility partitions
+may come from deterministic Hugging Face Dataset filters for old/general and
+new-domain examples, but raw examples remain outside the API. The incumbent
+uses the model-neutral `RouterScoreBank` contract, so independently owned
+RTR-002 heads and the compiled RTR-003 logical router are both valid score
+sources. Refined candidates remain RTR-002 heads and retain their safe
+safetensors serialization. Registry-specific association and restoration are
+deferred to RTR-004 and PKG-005.
+
 NB-004 makes that deployment boundary explicit:
 `derive_calibrated_router_package()` consumes the exact banks, calibrated
 router, and report; emits a new local package version; and leaves the original
@@ -611,6 +714,7 @@ from anchored_moe import (
     evaluate_counterfactual_oracle,
     fit_independent_ridge,
     plan_expert_pairs,
+    refine_stability_margins,
 )
 
 extractor = IdentityRouterFeatureExtractor(feature_size=4096)
@@ -660,6 +764,19 @@ calibrated_router, calibration_report = (
 )
 calibrated_router.save_safetensors("calibrated-router.safetensors")
 resolved_metadata = calibration_report.to_dict()
+
+refined_router, stability_report = refine_stability_margins(
+    calibrated_router,
+    incumbent_router,
+    refinement_bank,
+    refinement_utilities,
+    stability_row_ids=old_and_general_row_ids,
+    win_row_ids=new_domain_row_ids,
+    stability_margin=0.1,
+    win_margin=0.1,
+)
+refined_router.save_safetensors("stability-refined-router.safetensors")
+resolved_stability_metadata = stability_report.to_dict()
 
 routed_package = derive_calibrated_router_package(
     expert_only_package,
@@ -711,6 +828,9 @@ and anchored top-1 selection without model downloads.
 See `examples/verify_temperature_thresholds.py` for separate fitting and
 held-out calibration banks, explicit row partitions, immutable calibration,
 budgeted threshold selection, and anchored top-1 routes.
+See `examples/verify_stability_margins.py` for deterministic candidate-only
+refinement, exact incumbent/source preservation, post-refinement violation
+metrics, and sequential anchored top-1 routes.
 See `examples/verify_pair_utilities.py` for bounded SHA-256 pair planning,
 pair utility, strict mixture margins, best-pair targets, and CAL-007 handoff.
 See `examples/verify_top1_top2_oracle.py` for sparse candidate construction,
@@ -752,6 +872,10 @@ CAL-001 and CAL-002 are framework infrastructure and do not derive an
 optimization algorithm from a paper.
 CAL-003's SHA-256-ranked bounded sampling and loss arithmetic are also
 framework infrastructure rather than a paper-derived algorithm.
+CAL-006 implements the blueprint's project-specific hinge equations. Its
+full-batch optimizer, proximal drift term, candidate-only ownership boundary,
+and post-refinement report are documented implementation choices rather than
+paper-derived behavior.
 CAL-007 is also framework evaluation infrastructure rather than a
 paper-derived algorithm.
 NB-004 only validates and packages CAL-004/CAL-005 outputs; it introduces no
@@ -798,6 +922,15 @@ JSON-compatible reports, calibrated-head serialization, CAL-004 integration
 with a separate held-out bank, anchored top-1 routing, public documentation,
 and executable example behavior.
 
+CAL-006 tests cover exact feature/utility/head alignment, anchor-only and
+specialist incumbents, fixed-zero incumbent maxima, explicit canonical
+partitions, positive-utility win masking, both hinge equations, proximal
+drift, deterministic repeated optimization, best-initialization fallback,
+deployed-dtype metrics, source immutability, storage independence, frozen
+outputs, append order, safetensors reload, CAL-005 integration, anchored
+top-1 sequential routes, public documentation, malformed input rejection, and
+executable example behavior.
+
 CAL-007 tests cover canonical anchor/single/sparse-pair ordering, deterministic
 ties, selected-route lookup, non-negative regret, route agreement, defensive
 CPU storage, gradient detachment, malformed candidates, non-finite losses,
@@ -813,7 +946,9 @@ The current formats have no automatic model hooks, counterfactual model
 execution, learned pair weights, serialized pair-utility bank, sharding,
 streaming writer, memory mapping, compression,
 distributed merge, joint multiclass calibration, confidence intervals, or
-stability-margin refinement. Domain-label ridge targets, weighted or
-incremental fitting, automatic data splitting, and model-integrated collection
-are also unsupported. Those remain later calibration features or future
-format versions.
+registry-wide recalibration. CAL-006 does not enforce CAL-005's original
+false-activation budget after changing affine parameters; its own
+post-refinement report is authoritative. Domain-label ridge targets, weighted
+or incremental fitting, automatic data splitting, and model-integrated
+collection are also unsupported. Those remain later calibration features or
+future format versions.

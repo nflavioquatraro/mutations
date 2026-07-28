@@ -47,6 +47,9 @@ standalone weighted top-2 strategy primitives:
   affine router heads;
 - immutable per-head temperature scaling and held-out threshold selection
   under an explicit false-activation budget;
+- deterministic candidate-only stability-margin refinement against an
+  immutable incumbent router, with explicit old/general and useful new-domain
+  partitions plus post-refinement route metrics;
 - immutable sparse counterfactual route-loss tables with deterministic
   anchor-first oracle selection and per-token router regret;
 - deterministic bounded or explicitly exhaustive expert-pair plans with
@@ -94,7 +97,9 @@ Automatic model mutation during installation, capacity estimation, fallback
 beyond a selected pair, online replay-teacher execution,
 local mini-MoE and mixture-aware joint training, model-integrated and
 package-driven top-2 execution, persistent registry storage, Hub transfer, and
-full-model serialization are intentionally not implemented yet.
+full-model serialization are intentionally not implemented yet. Global
+router-only recalibration and registry-specific refined-router persistence
+also remain separate tracked features.
 
 ## Development setup
 
@@ -126,6 +131,7 @@ python examples/verify_router_feature_bank.py
 python examples/verify_router_label_banks.py
 python examples/verify_independent_ridge.py
 python examples/verify_temperature_thresholds.py
+python examples/verify_stability_margins.py
 python examples/verify_pair_utilities.py
 python examples/verify_top1_top2_oracle.py
 python examples/evaluate_registry_strategies.py

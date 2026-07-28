@@ -6,11 +6,14 @@ from anchored_moe.calibration import (
     DomainLabelBank,
     FeatureBankSerializationError,
     HeadCalibrationReport,
+    HeadStabilityMarginReport,
     LabelBankSerializationError,
     PairSamplingPlan,
     PairUtilityResult,
     RidgeFittingError,
     RouterFeatureBank,
+    StabilityMarginRefinementError,
+    StabilityMarginRefinementReport,
     TemperatureThresholdCalibrationError,
     TemperatureThresholdCalibrationReport,
     UtilityLabelBank,
@@ -22,6 +25,7 @@ from anchored_moe.calibration import (
     evaluate_counterfactual_oracle,
     fit_independent_ridge,
     plan_expert_pairs,
+    refine_stability_margins,
 )
 from anchored_moe.configuration import AnchoredMoEConfig, ResolvedStrategyConfig
 from anchored_moe.experts import Expert, ExpertSerializationError, FullMLPExpert
@@ -178,6 +182,7 @@ __all__ = [
     "IndependentExpertTrainingRun",
     "FullMLPExpert",
     "HeadCalibrationReport",
+    "HeadStabilityMarginReport",
     "IdentityRouterFeatureExtractor",
     "PackageValidationError",
     "PackageValidationReport",
@@ -218,6 +223,8 @@ __all__ = [
     "RoutedMLP",
     "SelectionPolicy",
     "ScoreSoftmaxCombination",
+    "StabilityMarginRefinementError",
+    "StabilityMarginRefinementReport",
     "TemperatureThresholdCalibrationError",
     "TemperatureThresholdCalibrationReport",
     "Top1DispatchResult",
@@ -243,6 +250,7 @@ __all__ = [
     "parse_expert_payload_bindings",
     "plan_expert_pairs",
     "prepare_forced_path_training",
+    "refine_stability_margins",
     "train_independent_expert_set",
     "synchronize_anchored_top1_registry",
 ]
