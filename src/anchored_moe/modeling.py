@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import torch
 from torch import Tensor, nn
 from transformers import (
     AutoModelForCausalLM,
@@ -19,6 +20,7 @@ from anchored_moe.experts.base import Expert
 from anchored_moe.inference.dispatch import AnchoredTop1Dispatcher
 from anchored_moe.inference.telemetry import RouteTelemetry
 from anchored_moe.policies.capacity import OverflowToAnchorCapacity
+from anchored_moe.policies.combination import ScoreSoftmaxCombination
 from anchored_moe.registry.package import ExpertPackage, PackageIdentity
 from anchored_moe.registry.composition import (
     COMPOSITION_MANIFEST_FILENAME,
@@ -76,6 +78,7 @@ class RoutedMLP(nn.Module):
         self.router_heads: RouterScoreBank | None = None
         self.experts = nn.ModuleList()
         self._dispatcher: AnchoredTop1Dispatcher | None = None
+        self._local_combination: ScoreSoftmaxCombination | None = None
         self._route_telemetry: RouteTelemetry | None = None
 
     @property
@@ -187,8 +190,86 @@ class RoutedMLP(nn.Module):
         self.router_heads = None
         self.experts = nn.ModuleList([expert])
         self._dispatcher = None
+        self._local_combination = None
         self._route_telemetry = None
         self.routing_mode = "forced_expert"
+
+    def configure_local_mini_moe(
+        self,
+        *,
+        layer_index: int,
+        router_feature_extractor: RouterFeatureExtractor,
+        router_heads: RouterScoreBank,
+        experts: Mapping[str, Expert],
+        combination_policy: ScoreSoftmaxCombination,
+    ) -> None:
+        """Attach the differentiable two-expert TRN-003 training path.
+
+        Every token executes both package-local experts. Their two calibrated
+        affine scores are normalized by ``combination_policy`` and the weighted
+        activation is returned. The permanent anchor is deliberately absent
+        from local specialization routing, but remains frozen and untouched.
+
+        This method accepts exactly two experts so the selected set is fixed:
+        score-softmax remains differentiable without a discrete top-k boundary
+        or a load-balancing objective. General local top-k training is outside
+        the first TRN-003 implementation.
+        """
+
+        if self.routing_mode != "forced_anchor":
+            raise RuntimeError(
+                "Local mini-MoE training requires forced_anchor mode."
+            )
+        if (
+            isinstance(layer_index, bool)
+            or not isinstance(layer_index, int)
+            or layer_index < 0
+        ):
+            raise ValueError("layer_index must be a non-negative integer.")
+        if not isinstance(router_feature_extractor, RouterFeatureExtractor):
+            raise TypeError(
+                "router_feature_extractor must be a RouterFeatureExtractor."
+            )
+        if not isinstance(router_heads, RouterScoreBank):
+            raise TypeError("router_heads must implement RouterScoreBank.")
+        if router_feature_extractor.output_size != router_heads.feature_size:
+            raise ValueError(
+                "Router feature output size must match the score bank."
+            )
+        if not isinstance(combination_policy, ScoreSoftmaxCombination):
+            raise TypeError(
+                "combination_policy must be ScoreSoftmaxCombination."
+            )
+        if not isinstance(experts, Mapping) or not all(
+            isinstance(expert_id, str) and isinstance(expert, Expert)
+            for expert_id, expert in experts.items()
+        ):
+            raise TypeError("experts must map string IDs to Expert modules.")
+
+        expert_ids = router_heads.expert_ids_for_layer(layer_index)
+        if len(expert_ids) != 2:
+            raise ValueError(
+                "Local mini-MoE training requires exactly two router experts."
+            )
+        if set(experts) != set(expert_ids) or len(experts) != 2:
+            raise ValueError(
+                "Attached expert IDs must exactly match the two local router "
+                f"scores: {tuple(experts)} != {expert_ids}."
+            )
+
+        ordered_experts = [experts[expert_id] for expert_id in expert_ids]
+        # Router features define a frozen shared coordinate system. Only the
+        # package-owned affine heads and experts participate in optimization.
+        router_feature_extractor.requires_grad_(False)
+        self.layer_index = layer_index
+        self.expert_ids = expert_ids
+        self.router_feature_extractor = router_feature_extractor
+        self.router_heads = router_heads
+        self.experts = nn.ModuleList(ordered_experts)
+        self._dispatcher = None
+        self._local_combination = combination_policy
+        self._route_telemetry = None
+        self.routing_mode = "local_mini_moe"
 
     def replace_anchored_top1(
         self,
@@ -234,6 +315,7 @@ class RoutedMLP(nn.Module):
         self.router_heads = None
         self.experts = nn.ModuleList()
         self._dispatcher = None
+        self._local_combination = None
         self._route_telemetry = None
         self.routing_mode = "forced_anchor"
 
@@ -302,6 +384,7 @@ class RoutedMLP(nn.Module):
         self.router_heads = router_heads
         self.experts = nn.ModuleList(ordered_experts)
         self._dispatcher = dispatcher
+        self._local_combination = None
         self._route_telemetry = route_telemetry
         self.routing_mode = "anchored_top1"
 
@@ -319,6 +402,37 @@ class RoutedMLP(nn.Module):
             if len(self.experts) != 1:
                 raise RuntimeError("RoutedMLP forced-expert runtime is incomplete.")
             return self.experts[0](hidden_states, *args, **kwargs)
+        if self.routing_mode == "local_mini_moe":
+            if (
+                self.layer_index is None
+                or self.router_feature_extractor is None
+                or self.router_heads is None
+                or self._local_combination is None
+                or len(self.experts) != 2
+            ):
+                raise RuntimeError(
+                    "RoutedMLP local mini-MoE runtime is incomplete."
+                )
+            if "expert_availability" in kwargs:
+                raise ValueError(
+                    "Local mini-MoE training does not apply inference capacity."
+                )
+            features = self.router_feature_extractor(hidden_states)
+            selected_scores = self.router_heads(
+                features,
+                layer_index=self.layer_index,
+            )
+            selected_outputs = [
+                expert(hidden_states, *args, **kwargs)
+                for expert in self.experts
+            ]
+            # The inserted axis follows all token axes and precedes the MLP
+            # output axis, matching COM-001's pair-shaped tensor contract.
+            pair_outputs = torch.stack(selected_outputs, dim=-2)
+            return self._local_combination(
+                pair_outputs,
+                selected_scores=selected_scores,
+            ).output
 
         if (
             self.layer_index is None

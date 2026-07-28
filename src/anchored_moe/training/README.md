@@ -11,11 +11,13 @@ expert is attached at every converted layer, and every token executes that
 expert without consulting a router. TRN-002 composes that isolated path into
 an independently trained latent expert set: two or more complete expert paths
 receive their own Trainer inputs and execute sequentially against the same
-immutable anchor. TRN-005 adds independently weighted replay KL against
+immutable anchor. TRN-003 jointly trains exactly two package-local experts and
+their affine router heads through a differentiable score-softmax mixture.
+TRN-005 adds independently weighted replay KL against
 precomputed immutable-anchor logits and parameter drift from
 expert-initialization snapshots. Training does not own data partitioning,
-package export, router fitting, replay-logit generation, local mini-MoE or
-mixture-aware training, or process-level parallel expert dispatch.
+package export, global router fitting, replay-logit generation, post-hoc
+mixture refinement, balancing, or process-level parallel expert dispatch.
 
 ## Implemented strategies
 
@@ -23,6 +25,7 @@ mixture-aware training, or process-level parallel expert dispatch.
 |---|---|---|---|
 | TRN-001 | `ForcedExpertBinding`, `prepare_forced_path_training`, `ForcedPathExpertTrainer` | `expert_trainer.py` | Validated |
 | TRN-002 | `IndependentExpertTrainingRun`, `train_independent_expert_set`, immutable run/set reports | `independent.py` | Validated |
+| TRN-003 | `LocalMiniMoETrainingConfig`, `LocalMiniMoEExpertBinding`, `LocalMiniMoETrainer`, immutable topology/run reports | `mini_moe.py` | Validated |
 | TRN-005 | `ExpertObjectiveConfig`, `ReplayKLPreservation`, `ExpertWeightDrift`, `ExpertObjectiveReport` | `objectives.py`, `expert_trainer.py` | Validated |
 
 `ForcedPathTrainingReport` records the resolved layer topology and exact
@@ -110,6 +113,48 @@ forms a joint loss \(\sum_k\mathcal L_k\), never routes one batch across
 multiple experts, and never allows gradients from run \(k\) to reach expert
 \(j\). Declared run order is operationally deterministic but does not change
 the anchor because every non-expert parameter remains frozen.
+
+For the TRN-003 local pair \(K=\{1,2\}\), affine package-owned heads produce
+
+\[
+g_{\ell,k}(h)=w_{\ell,k}^{\top}\phi_\ell(h)+b_{\ell,k},
+\]
+
+and COM-001 supplies differentiable weights
+
+\[
+\alpha_{\ell,k}(h)
+=
+\frac{\exp(g_{\ell,k}(h)/T_{\mathrm{mix}})}
+{\sum_{j=1}^{2}\exp(g_{\ell,j}(h)/T_{\mathrm{mix}})}.
+\]
+
+Every specialization token executes both experts:
+
+\[
+y_{\ell,t}
+=
+\alpha_{\ell,1}(h_{\ell,t})E_{\ell,1}(h_{\ell,t})
++
+\alpha_{\ell,2}(h_{\ell,t})E_{\ell,2}(h_{\ell,t}).
+\]
+
+The anchor is not a candidate inside this forced package-local mixture. It
+returns with coefficient one after cleanup because every wrapper is restored
+to `forced_anchor`. The trainable set is
+
+\[
+\mathcal P_{\mathrm{train}}
+=
+\bigcup_{\ell\in C,k\in\{1,2\}}\mathcal P_{\mathrm{optimizer}}(E_{\ell,k})
+\cup
+\bigcup_{\ell\in C,k\in\{1,2\}}\mathcal P(w_{\ell,k},b_{\ell,k}).
+\]
+
+Zero affine weights receive deterministic biases
+\((+\epsilon,-\epsilon)\) in stable expert order. This breaks identical
+anchor-copy expert symmetry without randomness; both softmax weights remain
+strictly positive, so both experts receive gradients.
 
 For forced-path logits \(z_{\ell,t}\), precomputed immutable-anchor logits
 \(z^A_{\ell,t}\), replay temperature \(T\), and non-negative token weights
@@ -219,6 +264,25 @@ Independent expert-set execution:
 9. On any exception, perform the same route reset and complete parameter
    freezing before propagating the original failure.
 
+Local mini-MoE execution:
+
+1. Require exactly two unique expert IDs at every converted layer and a
+   layer-major `AppendOnlyRouterHeads` rectangle with matching ownership.
+2. Require temperature-one, threshold-zero affine heads whose weights and
+   biases are exactly zero.
+3. Reject model/expert/router/feature parameter or storage aliases before
+   mutating any route.
+4. Freeze the model and feature transformation, then enable only each
+   expert-declared optimizer subset and the affine heads.
+5. Initialize the two head biases to \(+\epsilon\) and \(-\epsilon\) in stable
+   expert order.
+6. Attach both experts to every converted wrapper in `local_mini_moe` mode.
+7. Execute both full-token expert paths and combine them with COM-001.
+8. Reassert route objects and parameter identities before the one supported
+   Trainer run.
+9. On success or failure, clear gradients, freeze package artifacts, and
+   restore every wrapper to exact `forced_anchor` execution.
+
 TRN-005 objective execution:
 
 1. Validate finite non-negative objective weights and a positive replay
@@ -251,15 +315,27 @@ TRN-005 objective execution:
 - Each TRN-002 run owns its Trainer arguments and may own a distinct dataset,
   collator, seed, schedule, and TRN-005 objective configuration.
 - TRN-002 preserves caller-declared run order and reports in that same order.
-- Only one expert path is registered on the model at a time. Successful and
-  failed runs both finish with empty routed expert lists, exact
+- TRN-003 supports exactly two experts with identical complete layer coverage.
+- TRN-003 requires fresh zero affine heads; calibrated or previously trained
+  heads are rejected rather than silently overwritten.
+- Only the affine heads and expert-declared optimizer subsets train. The router
+  feature transformation remains frozen.
+- Both local experts execute for every specialization token. Anchor abstention,
+  capacity fallback, and load balancing do not run inside local training.
+- Opposite deterministic biases break initial symmetry without changing
+  affine weights.
+- `LocalMiniMoETrainer` is one-shot. Successful and failed runs detach the
+  mixture and freeze its external experts and router heads.
+- During TRN-002, only one expert path is registered on the model at a time.
+  Successful and failed runs finish with empty routed expert lists, exact
   `forced_anchor` mode, cleared gradients, and all model/expert parameters
   frozen.
 - Failure cleanup is not expert-weight rollback. A run that fails after an
   optimizer step may leave its external expert object partially trained.
-- Anchor, attention, embeddings, normalization, language-model head, routers,
-  and incumbent experts remain frozen.
-- Every token executes the new expert at every converted layer.
+- Anchor, attention, embeddings, normalization, language-model head, global or
+  incumbent routers, and incumbent experts remain frozen.
+- Every TRN-001/TRN-002 token executes the new expert at every converted layer;
+  every TRN-003 token executes both package-local experts.
 - Trainer construction and every `train()` call assert the exact trainable
   parameter identity set.
 - Full copied experts declare every owned parameter. EXP-002
@@ -299,6 +375,13 @@ keyword arguments. The coordinator is intentionally sequential in one Python
 process. Callers that require concurrent training should launch independent
 models/processes with TRN-001 and reconcile their expert-only artifacts; a
 shared in-process model is not concurrently mutated.
+
+`LocalMiniMoETrainer` is a second small `transformers.Trainer` subclass. It
+registers both experts, the shared frozen feature extractor, and the affine
+head bank before Accelerate device preparation. The standard model loss,
+optimizer, scheduler, accumulation, clipping, callbacks, and data pipeline are
+unchanged. Cleanup happens in `train()`'s `finally` block, so data-loading and
+optimizer failures cannot leave a routed model active.
 
 When replay KL is enabled, the trainer extends Hugging Face's resolved dataset
 signature columns with only the configured teacher and mask keys. Standard
@@ -387,6 +470,29 @@ report = train_independent_expert_set(
 print(report.expert_ids, report.total_global_steps)
 ```
 
+Two local experts and their fresh affine heads train jointly:
+
+```python
+trainer = LocalMiniMoETrainer(
+    model=model,
+    backend=Qwen3Backend(),
+    expert_bindings=local_pair_bindings,
+    router_feature_extractor=IdentityRouterFeatureExtractor(hidden_size),
+    router_heads=fresh_two_expert_heads,
+    config=LocalMiniMoETrainingConfig(
+        mix_temperature=1.0,
+        router_bias_epsilon=1e-3,
+    ),
+    args=TrainingArguments(
+        output_dir="./local-mini-moe-run",
+        save_strategy="no",
+    ),
+    train_dataset=dataset,
+)
+trainer.train()
+print(trainer.training_report)
+```
+
 See `examples/verify_forced_path_training.py` for a deterministic offline
 training run using a randomly initialized tiny Qwen3 model, precomputed anchor
 logits, token masks, and both TRN-005 terms.
@@ -394,7 +500,9 @@ logits, token masks, and both TRN-005 terms.
 boundary consumed by the same Trainer.
 `examples/verify_independent_expert_set.py` trains two independent data
 partitions with distinct seeds and verifies expert updates, exact anchor
-restoration, route cleanup, and final freezing. See
+restoration, route cleanup, and final freezing.
+`examples/verify_local_mini_moe.py` jointly trains two local experts and their
+router, then verifies exact anchor restoration and final freezing. See
 `examples/train_expert_package.py` and
 `notebooks/02_train_expert_package.ipynb` for the NB-003 export boundary.
 
@@ -421,9 +529,11 @@ restoration, route cleanup, and final freezing. See
   motivates start-point parameter regularization. This implementation applies
   it only to expert parameters and normalizes by scalar parameter count.
 
-TRN-001 and TRN-002 are framework infrastructure and introduce no
-paper-derived training algorithm. TRN-005 adapts the referenced distillation
-and L2-SP objectives with the differences stated above.
+TRN-001 through TRN-003 are framework infrastructure and introduce no
+paper-derived training algorithm. TRN-003 implements the package-local
+score-softmax strategy specified by the repository architecture blueprint.
+TRN-005 adapts the referenced distillation and L2-SP objectives with the
+differences stated above.
 
 ## Tests and known limitations
 
@@ -451,12 +561,20 @@ independent optimizer steps, updates to every expert, byte-exact anchor state,
 empty routed expert lists after completion, complete gradient clearing and
 freezing, and forced-anchor restoration after a later data-loading failure.
 
+TRN-003 tests cover strict configuration round trips, exact two-expert
+rectangles, fresh-router enforcement, deterministic opposite biases, COM-001
+activation math, gradients to both experts and router heads, exact optimizer
+ownership, real two-step causal-language-model optimization, immutable
+reports, byte-exact anchor restoration, complete gradient clearing and
+freezing, and failure-safe cleanup after data loading raises.
+
 NB-003 records training-dataset and base-checkpoint provenance but does not
 serialize per-example teacher logits or generate them online. Precomputed
 full-vocabulary logits can also be storage-intensive; compact teacher targets
 are not implemented. Online teacher execution, dataset streaming,
 automatic data partitioning, concurrent in-process expert training,
-cross-expert diversity objectives, local mini-MoE, router fitting,
-mixture-aware training, transactional expert-weight rollback, expert-only
+cross-expert diversity objectives, local expert counts other than two, local
+capacity or balancing, TRN-005 objectives inside TRN-003, post-hoc
+mixture-aware refinement, transactional expert-weight rollback, expert-only
 optimizer checkpoint resume, mixed-precision, multi-device, and distributed
 acceptance tests remain future work.

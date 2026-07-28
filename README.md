@@ -97,6 +97,9 @@ standalone weighted top-2 strategy primitives:
 - independent latent expert-set training with per-expert datasets, seeds, and
   Trainer configuration, global storage-isolation checks, immutable reports,
   and failure-safe anchor-route restoration;
+- deterministic two-expert local mini-MoE training with package-owned affine
+  router heads, score-softmax activation mixing, exact optimizer isolation,
+  and success/failure-safe anchor-route restoration;
 - optional token-masked replay KL against precomputed immutable-anchor logits
   and normalized expert-initialization weight-drift regularization;
 - staged expert-only package export with deterministic payload bindings,
@@ -116,7 +119,8 @@ standalone weighted top-2 strategy primitives:
 
 Automatic model mutation during installation, capacity estimation, fallback
 beyond a selected pair, online replay-teacher execution,
-local mini-MoE and mixture-aware joint training, model-integrated and
+local mixtures larger than two experts, post-hoc mixture-aware refinement,
+local balancing, model-integrated and
 package-driven top-2 execution, persistent registry storage, Hub transfer, and
 anchor-weight bundling are intentionally not implemented yet. Learned
 mixture-head package binding and model-integrated oracle weight sweeps also
@@ -173,6 +177,7 @@ python examples/verify_package_runtime.py
 python examples/export_reload_lifecycle.py
 python examples/verify_forced_path_training.py
 python examples/verify_independent_expert_set.py
+python examples/verify_local_mini_moe.py
 python examples/train_expert_package.py
 python examples/fit_router.py
 ```

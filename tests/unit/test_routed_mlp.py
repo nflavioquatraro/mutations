@@ -13,6 +13,7 @@ from anchored_moe import (
     IdentityRouterFeatureExtractor,
     RouteTelemetry,
     RoutedMLP,
+    ScoreSoftmaxCombination,
 )
 
 
@@ -173,3 +174,42 @@ def test_forced_expert_mode_executes_every_token_without_router() -> None:
     assert wrapper.router_heads is None
     assert wrapper.expert_ids == ("code",)
     assert torch.equal(output, torch.tensor([[2.0, 4.0], [6.0, 8.0]]))
+
+
+def test_local_mini_moe_mixes_two_full_experts_and_routes_gradients() -> None:
+    """The fixed local pair keeps COM-001 differentiable during training."""
+
+    anchor = nn.Linear(2, 2, bias=False)
+    with torch.no_grad():
+        anchor.weight.copy_(torch.eye(2))
+    wrapper = RoutedMLP(anchor)
+    first = FullMLPExpert.from_anchor(anchor)
+    second = FullMLPExpert.from_anchor(anchor)
+    with torch.no_grad():
+        first.expert_mlp.weight.copy_(torch.eye(2) * 2.0)
+        second.expert_mlp.weight.copy_(torch.eye(2) * 4.0)
+    features = IdentityRouterFeatureExtractor(2)
+    heads = AppendOnlyRouterHeads(2)
+    heads.append(AffineRouterHead(2, layer_index=1, expert_id="code:0"))
+    heads.append(AffineRouterHead(2, layer_index=1, expert_id="code:1"))
+
+    wrapper.configure_local_mini_moe(
+        layer_index=1,
+        router_feature_extractor=features,
+        router_heads=heads,
+        experts={"code:0": first, "code:1": second},
+        combination_policy=ScoreSoftmaxCombination(),
+    )
+    hidden_states = torch.tensor([[1.0, 2.0]], requires_grad=True)
+    output = wrapper(hidden_states)
+    output.sum().backward()
+
+    assert wrapper.routing_mode == "local_mini_moe"
+    assert torch.equal(output, torch.tensor([[3.0, 6.0]]))
+    assert heads.heads[0].linear.bias.grad is not None
+    assert torch.count_nonzero(heads.heads[0].linear.bias.grad).item() == 1
+    assert all(
+        parameter.grad is not None
+        for expert in (first, second)
+        for parameter in expert.parameters()
+    )

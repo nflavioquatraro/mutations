@@ -246,6 +246,11 @@ For scores with shape
 the score shape and the combined output has shape
 \(D_1\times\cdots\times D_n\times O_1\cdots\times O_m\).
 
+TRN-003 reuses this exact COM-001 tensor contract during local training. Its
+package contains exactly two experts, so the selected pair is fixed and both
+scores remain differentiable; anchor veto and capacity policies are not
+evaluated inside that forced package-local training topology.
+
 COM-002's fixed baseline ignores score magnitude after selection:
 
 \[
