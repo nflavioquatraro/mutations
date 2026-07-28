@@ -12,8 +12,10 @@ import transformers
 from transformers import Qwen3ForCausalLM
 
 from anchored_moe import (
+    COMPOSITION_MANIFEST_FILENAME,
     EXPERT_PAYLOAD_BINDING_FORMAT_VERSION,
     AffineRouterHead,
+    AnchoredModelError,
     AnchoredMoEConfig,
     AnchoredMoEForCausalLM,
     AppendOnlyRouterHeads,
@@ -225,6 +227,169 @@ def test_package_install_sync_unload_and_reinsert_restore_model_routes(
         atol=0.0,
         rtol=0.0,
     )
+
+
+def test_local_composition_round_trip_restores_registry_routes_and_logits(
+    tiny_qwen3_model: Qwen3ForCausalLM,
+    tmp_path: Path,
+) -> None:
+    """CORE-006 must preserve package bytes and exact routed behavior."""
+
+    anchor_checkpoint = tmp_path / "anchor"
+    tiny_qwen3_model.save_pretrained(anchor_checkpoint)
+    model = AnchoredMoEForCausalLM.from_pretrained(
+        anchor_checkpoint,
+        converted_layers=[2, 3],
+        local_files_only=True,
+    ).eval()
+    package = _runtime_package(
+        tmp_path / "code-package",
+        model.anchor_model,
+    )
+    model.install(package)
+    synchronized = model.synchronize_registry()
+    model.generation_config.max_new_tokens = 7
+
+    input_ids = torch.tensor([[1, 7, 11, 3], [2, 5, 13, 9]])
+    with torch.no_grad():
+        expected_logits = model(input_ids=input_ids).logits
+
+    composition = tmp_path / "composition"
+    model.save_pretrained(composition)
+
+    assert (composition / COMPOSITION_MANIFEST_FILENAME).is_file()
+    assert not (composition / "model.safetensors").exists()
+    bundled_package = next((composition / "packages").iterdir())
+    for relative_path in (
+        *package.manifest.expert_weight_files,
+        *package.manifest.router_files,
+        "manifest.json",
+    ):
+        assert (bundled_package / relative_path).read_bytes() == (
+            package.package_directory / relative_path
+        ).read_bytes()
+
+    reloaded = AnchoredMoEForCausalLM.from_pretrained(
+        composition,
+        local_files_only=True,
+    ).eval()
+    with torch.no_grad():
+        actual_logits = reloaded(input_ids=input_ids).logits
+
+    assert reloaded.registry.active_identities == (package.identity,)
+    assert (
+        reloaded.registry.active_registry_sha256
+        == synchronized.registry_sha256
+        == reloaded.synchronized_registry_sha256
+    )
+    assert reloaded.generation_config.max_new_tokens == 7
+    assert_tensors_equivalent(
+        actual_logits,
+        expected_logits,
+        name="CORE-006 routed round-trip logits",
+        atol=0.0,
+        rtol=0.0,
+    )
+    for layer_index in (2, 3):
+        wrapper = reloaded.anchor_model.model.layers[layer_index].mlp
+        assert isinstance(wrapper, RoutedMLP)
+        assert wrapper.routing_mode == "anchored_top1"
+        assert wrapper.expert_ids == ("code:0",)
+
+
+def test_composition_save_rejects_stale_registry_and_existing_destination(
+    tiny_qwen3_model: Qwen3ForCausalLM,
+    tmp_path: Path,
+) -> None:
+    """Serialization must never hide synchronization or replace an artifact."""
+
+    anchor_checkpoint = tmp_path / "anchor"
+    tiny_qwen3_model.save_pretrained(anchor_checkpoint)
+    model = AnchoredMoEForCausalLM.from_pretrained(
+        anchor_checkpoint,
+        converted_layers=[2, 3],
+        local_files_only=True,
+    )
+    package = _runtime_package(
+        tmp_path / "code-package",
+        model.anchor_model,
+    )
+    model.install(package)
+    destination = tmp_path / "composition"
+
+    with pytest.raises(AnchoredModelError, match="stale composition"):
+        model.save_pretrained(destination)
+    assert not destination.exists()
+
+    model.synchronize_registry()
+    model.save_pretrained(destination)
+    with pytest.raises(FileExistsError, match="already exists"):
+        model.save_pretrained(destination)
+
+
+def test_composition_load_rejects_tampered_bundled_package(
+    tiny_qwen3_model: Qwen3ForCausalLM,
+    tmp_path: Path,
+) -> None:
+    """Strict package hashes must be checked before an anchor is composed."""
+
+    anchor_checkpoint = tmp_path / "anchor"
+    tiny_qwen3_model.save_pretrained(anchor_checkpoint)
+    model = AnchoredMoEForCausalLM.from_pretrained(
+        anchor_checkpoint,
+        converted_layers=[2, 3],
+        local_files_only=True,
+    )
+    package = _runtime_package(
+        tmp_path / "code-package",
+        model.anchor_model,
+    )
+    model.install(package)
+    model.synchronize_registry()
+    composition = tmp_path / "composition"
+    model.save_pretrained(composition)
+
+    bundled_package = next((composition / "packages").iterdir())
+    payload = bundled_package / package.manifest.expert_weight_files[0]
+    payload.write_bytes(payload.read_bytes() + b"tampered")
+
+    with pytest.raises(AnchoredModelError, match="Cannot load anchored composition"):
+        AnchoredMoEForCausalLM.from_pretrained(
+            composition,
+            local_files_only=True,
+        )
+
+
+def test_composition_load_rejects_incompatible_relocated_anchor(
+    tiny_qwen3_model: Qwen3ForCausalLM,
+    tmp_path: Path,
+) -> None:
+    """A relocated anchor must retain the saved configuration identity."""
+
+    anchor_checkpoint = tmp_path / "anchor"
+    tiny_qwen3_model.save_pretrained(anchor_checkpoint)
+    model = AnchoredMoEForCausalLM.from_pretrained(
+        anchor_checkpoint,
+        converted_layers=[2, 3],
+        local_files_only=True,
+    )
+    composition = tmp_path / "composition"
+    model.save_pretrained(composition)
+
+    incompatible_config = tiny_qwen3_model.config.to_dict()
+    incompatible_config["vocab_size"] += 1
+    incompatible_anchor = Qwen3ForCausalLM(
+        type(tiny_qwen3_model.config).from_dict(incompatible_config)
+    )
+    incompatible_checkpoint = tmp_path / "incompatible-anchor"
+    incompatible_anchor.save_pretrained(incompatible_checkpoint)
+
+    with pytest.raises(AnchoredModelError, match="base_config_sha256"):
+        AnchoredMoEForCausalLM.from_pretrained(
+            composition,
+            anchor_model_name_or_path=incompatible_checkpoint,
+            local_files_only=True,
+        )
 
 
 def test_model_upgrade_and_rollback_require_explicit_synchronization(

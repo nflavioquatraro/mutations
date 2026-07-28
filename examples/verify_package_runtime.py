@@ -50,6 +50,7 @@ def _export_package(
 ) -> ExpertPackage:
     """Export one safely bound two-layer package with positive router scores."""
 
+    root.mkdir()
     weight_files: list[str] = []
     bindings: list[dict[str, object]] = []
     hashes: dict[str, str] = {}
@@ -146,20 +147,23 @@ def _export_package(
 
 
 def main() -> None:
-    """Exercise the public model facade and explicit package lifecycle."""
+    """Exercise package lifecycle and the CORE-006 composition round trip."""
 
     anchor = _tiny_model()
     input_ids = torch.tensor([[1, 7, 11, 3]])
     with torch.no_grad():
         dense_logits = anchor(input_ids=input_ids).logits
 
-    model = AnchoredMoEForCausalLM.from_anchor_model(
-        anchor,
-        converted_layers=[2, 3],
-    )
-
     with TemporaryDirectory(prefix="anchored-moe-runtime-") as temporary:
-        package = _export_package(Path(temporary), model)
+        root = Path(temporary)
+        anchor_checkpoint = root / "anchor"
+        anchor.save_pretrained(anchor_checkpoint)
+        model = AnchoredMoEForCausalLM.from_pretrained(
+            anchor_checkpoint,
+            converted_layers=[2, 3],
+            local_files_only=True,
+        )
+        package = _export_package(root / "package", model)
         model.install(package)
         installed = model.synchronize_registry()
         with torch.no_grad():
@@ -192,8 +196,28 @@ def main() -> None:
         )
         assert reinserted.registry_sha256 == installed.registry_sha256
 
+        composition_checkpoint = root / "composition"
+        model.save_pretrained(composition_checkpoint)
+        reloaded = AnchoredMoEForCausalLM.from_pretrained(
+            composition_checkpoint,
+            local_files_only=True,
+        )
+        with torch.no_grad():
+            reloaded_logits = reloaded(input_ids=input_ids).logits
+        assert_tensors_equivalent(
+            reloaded_logits,
+            routed_logits,
+            name="reloaded composition logits",
+            atol=0.0,
+            rtol=0.0,
+        )
+        assert (
+            reloaded.synchronized_registry_sha256
+            == installed.registry_sha256
+        )
+
         print(
-            "CORE-005/NB-005 composition validation passed: "
+            "CORE-005/CORE-006/NB-005 composition validation passed: "
             f"layers={installed.configured_layers}, "
             f"experts={installed.expert_ids_by_layer}, "
             f"registry_sha256={installed.registry_sha256}"

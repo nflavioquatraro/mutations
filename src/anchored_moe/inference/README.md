@@ -23,7 +23,9 @@ top-2 dispatch to `RoutedMLP`, construct compatibility metadata, or manage
 distributed all-to-all execution. CORE-005 exposes the existing explicit
 composition boundary through
 `AnchoredMoEForCausalLM.synchronize_registry`; inference remains responsible
-for materialization rather than model loading or package lifecycle.
+for materialization rather than package lifecycle. CORE-006 persists the
+already synchronized anchored-top-1 composition and invokes the same explicit
+materialization boundary while restoring a saved checkpoint.
 
 ## Implemented strategies
 
@@ -35,6 +37,7 @@ for materialization rather than model loading or package lifecycle.
 | PKG-007 | `synchronize_anchored_top1_registry` | `composition.py`, `modeling.py` | Validated |
 | TRN-001 | `RoutedMLP.configure_forced_expert` | `modeling.py` | Validated |
 | CORE-005 | `AnchoredMoEForCausalLM.synchronize_registry` | `modeling.py` | Validated |
+| CORE-006 | synchronized composition save/reload | `modeling.py`, `registry/composition.py` | Validated |
 
 ## Mathematical formulation
 
@@ -259,6 +262,13 @@ CORE-005 wraps the native causal LM in a `PreTrainedModel` facade. Its
 configuration because synchronization, rather than configuration parsing,
 currently proves that all required package payloads exist.
 
+CORE-006 requires this explicit synchronization before saving. Loading a
+composition validates its package snapshot first, constructs the model around
+the referenced external anchor, and then calls the same synchronization path
+to restore the saved behavior. It does not change the rule that later install,
+unload, upgrade, and rollback operations require another explicit
+`synchronize_registry()` call.
+
 ## Configuration and examples
 
 ```python
@@ -370,7 +380,9 @@ flow, validation before execution, bounded telemetry, aggregate counts,
 privacy-sensitive field exclusion, and exact Qwen3 hidden-state/logit equality
 when a selected expert is an anchor copy. PKG-007 adds package-driven
 multi-layer materialization, exact removal fallback, deterministic reinsertion,
-and malformed router/binding failure before model mutation.
+and malformed router/binding failure before model mutation. CORE-006 adds
+stale-runtime rejection and exact routed-logit, route-mode, expert-order, and
+registry-hash restoration after local save/reload.
 
 INF-002 acceptance tests cover mixed anchor/pair decisions, exact ranked
 mixtures, sparse call counts, inactive specialists, empty and single-expert

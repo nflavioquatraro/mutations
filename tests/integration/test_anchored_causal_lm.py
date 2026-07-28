@@ -168,14 +168,16 @@ def test_invalid_anchor_config_hash_fails_before_conversion(
     assert tiny_qwen3_model.model.layers[3].mlp is original_mlp
 
 
-def test_full_model_serialization_is_rejected_until_core_006(
+def test_composition_serialization_requires_an_external_anchor_reference(
     tiny_qwen3_model: Qwen3ForCausalLM,
     tmp_path: Path,
 ) -> None:
+    """In-memory anchors cannot produce a reloadable reference-only artifact."""
+
     model = AnchoredMoEForCausalLM.from_anchor_model(
         tiny_qwen3_model,
         converted_layers=[3],
     )
 
-    with pytest.raises(NotImplementedError, match="CORE-006"):
+    with pytest.raises(AnchoredModelError, match="base_model_name_or_path"):
         model.save_pretrained(tmp_path / "unsafe-full-model")

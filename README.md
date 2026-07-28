@@ -89,6 +89,9 @@ standalone weighted top-2 strategy primitives:
 - a Hugging Face `AnchoredMoEForCausalLM` facade with base-checkpoint loading,
   exact native forward and generation delegation, backend-driven conversion,
   and an explicit install/upgrade/rollback/synchronize/unload lifecycle;
+- immutable local `save_pretrained()`/`from_pretrained()` composition
+  checkpoints that reference the pinned anchor, bundle byte-identical active
+  packages, reject stale runtime state, and restore exact routed behavior;
 - executable offline notebooks for base-model inspection, exact
   dense-equivalence verification, forced-path expert training/export, and
   custom package composition and top-1/top-2 quality/efficiency evaluation.
@@ -97,9 +100,11 @@ Automatic model mutation during installation, capacity estimation, fallback
 beyond a selected pair, online replay-teacher execution,
 local mini-MoE and mixture-aware joint training, model-integrated and
 package-driven top-2 execution, persistent registry storage, Hub transfer, and
-full-model serialization are intentionally not implemented yet. Global
-router-only recalibration and registry-specific refined-router persistence
-also remain separate tracked features.
+anchor-weight bundling are intentionally not implemented yet. Composition
+checkpoints retain the active registry snapshot but not inactive historical
+slots or rollback records. Global router-only recalibration and
+registry-specific refined-router persistence also remain separate tracked
+features.
 
 ## Development setup
 

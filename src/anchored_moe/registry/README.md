@@ -16,7 +16,9 @@ staged expert-only package export from independently owned `FullMLPExpert`
 objects. NB-004 derives a new immutable router-bearing version from a calibrated
 frozen router while preserving source expert bytes. The registry never infers
 layer/expert ownership from filenames, and lifecycle operations never attach
-modules or recalibrate routing.
+modules or recalibrate routing. CORE-006 adds an immutable local composition
+checkpoint that references the external anchor, bundles active packages, and
+persists the exact active registry identity without serializing anchor weights.
 
 ## Implemented strategies
 
@@ -27,6 +29,7 @@ modules or recalibrate routing.
 | PKG-003 | `mixture_compatibility_group`, `MixtureCompatibilityIndex` | `compatibility.py`, `registry.py` | Validated |
 | PKG-004 | `ExpertRegistry.upgrade`, `ExpertRegistry.rollback`, `RegistryUpgradeChange` | `registry.py` | Validated |
 | PKG-007 | `payload_binding_format_version: 1`, `ExpertPayloadBinding` | `bindings.py` | Validated |
+| CORE-006 | `AnchoredMoEForCausalLM.save_pretrained`, local composition `from_pretrained` | `composition.py`, `modeling.py` | Validated |
 | NB-003 | `ExpertPackageExportConfig`, `ExpertPackageExportBinding`, `export_full_mlp_expert_package` | `export.py` | Validated |
 | NB-004 | `CalibratedRouterPackageConfig`, `derive_calibrated_router_package` | `export.py` | Validated |
 
@@ -140,6 +143,26 @@ while the new manifest additionally binds \(d_r=\operatorname{SHA256}(r)\),
 the source manifest digest, calibration-bank identities, and the complete
 CAL-005 report.
 
+For anchored configuration bytes \(C\), optional generation configuration
+bytes \(G\), ordered active package identities \(P\), and registry digest
+\(d_{\mathrm{registry}}\), CORE-006 records
+
+\[
+S=
+\left(
+\operatorname{SHA256}(C),
+\operatorname{SHA256}(G),
+P,
+d_{\mathrm{registry}},
+d_{\mathrm{base\ config}}
+\right).
+\]
+
+The anchor tensors are deliberately outside \(S\). Reloading resolves the
+recorded anchor repository or path and revision, then requires its live
+configuration digest to equal \(d_{\mathrm{base\ config}}\). Each copied
+package retains its original manifest identity and internal payload hashes.
+
 ## Algorithms
 
 Package descriptor construction:
@@ -173,6 +196,24 @@ Unload and reinsertion:
    restored.
 
 Every failure condition is checked before active state changes.
+
+Composition checkpoint export and reload:
+
+1. Require a pinned external anchor reference and configuration digest.
+2. Require the active registry hash to equal the runtime hash most recently
+   applied by explicit model synchronization.
+3. Revalidate every active package before copying.
+4. Save anchored and generation configuration into a private sibling staging
+   directory.
+5. Copy packages in active-registry order under content-addressed directories.
+6. Strictly reload every copied package and require unchanged identity.
+7. Write a canonical version-1 composition manifest containing file hashes,
+   anchor pins, package order, compatibility binding, and registry hash.
+8. Validate complete directory closure, then atomically rename the new
+   directory into place without replacing an existing path.
+9. On reload, validate the complete local artifact before loading the external
+   anchor, reconstruct the exact active registry snapshot, and explicitly
+   materialize anchored top-1 routing.
 
 Atomic upgrade and rollback:
 
@@ -301,10 +342,21 @@ Calibrated router-package derivation:
 - Router feature size and dtype match the package feature/hidden contract.
 - The manifest records source identity, bank identities, calibration report,
   thresholds, runtime, and router payload hash without embedding prompts.
+- CORE-006 composition destinations are new and immutable.
+- Composition checkpoints contain no anchor tensors and require an external
+  anchor reference plus live configuration-hash agreement.
+- Active package bytes, identities, ordering, compatibility binding, and
+  registry hash survive a round trip.
+- Saving rejects stale registry/runtime state rather than synchronizing
+  implicitly.
+- Loading a saved composition restores its runtime explicitly; ordinary
+  install, unload, upgrade, and rollback operations remain registry-only.
+- Symbolic links, untracked files, unsafe package paths, modified
+  configurations, and modified package payloads are rejected.
 
-The registry validates compatibility between packages. Validation against a
-concrete live model and exact runtime environment remains part of future model
-composition.
+The registry validates compatibility between packages. CORE-006 also checks
+the live anchor configuration digest; exact anchor-weight and runtime-version
+enforcement remain future compatibility work.
 
 ## Hugging Face integration
 
@@ -337,6 +389,15 @@ routes. Calling `.synchronize_registry()` separately applies the active
 registry through PKG-007. This preserves the same lifecycle semantics behind
 the higher-level Hugging Face facade.
 
+`AnchoredMoEForCausalLM.save_pretrained()` publishes the CORE-006 local
+composition format. Unlike a conventional full-weight Hugging Face checkpoint,
+it does not write the anchor state dict. A matching
+`AnchoredMoEForCausalLM.from_pretrained()` call detects the local composition,
+validates it, loads the recorded anchor through `AutoModelForCausalLM`, rebuilds
+the registry, and restores the saved anchored-top-1 runtime. The optional
+`anchor_model_name_or_path` argument relocates an equivalent local anchor;
+configuration hashes still have to match. Hub transfer remains PKG-006.
+
 `ExpertRegistry.mixture_compatibility(layer_index=...)` exposes PKG-003 without
 loading expert or router tensors. The resulting index is consumed by POL-005
 and can be passed through INF-002 for standalone compatibility-aware sparse
@@ -363,6 +424,21 @@ assert upgrade.after.active_packages[0] == replacement.identity
 
 rollback = registry.rollback(upgrade, package)
 assert rollback.after == upgrade.before
+```
+
+A synchronized model composition round-trips through familiar Hugging Face
+method names while keeping anchor weights separate:
+
+```python
+model.install(ExpertPackage.from_directory("./code-experts"))
+model.synchronize_registry()
+model.save_pretrained("./code-composition")
+
+reloaded = AnchoredMoEForCausalLM.from_pretrained("./code-composition")
+assert (
+    reloaded.synchronized_registry_sha256
+    == model.registry.active_registry_sha256
+)
 ```
 
 Compatibility metadata is explicit and layer-specific:
@@ -462,7 +538,8 @@ See `examples/verify_registry_lifecycle.py` for an executable registry-only
 lifecycle example, `examples/verify_compatibility_top2.py` for PKG-003/POL-005
 selection and INF-002 sparse execution, and
 `examples/verify_package_runtime.py` for the complete
-model-facade lifecycle. `examples/train_expert_package.py` and
+model-facade lifecycle plus CORE-006 save/reload round trip.
+`examples/train_expert_package.py` and
 `notebooks/02_train_expert_package.ipynb` exercise the NB-003 training/export
 boundary. `examples/fit_router.py` and
 `notebooks/03_fit_and_calibrate_router.ipynb` exercise NB-004 derivation and
@@ -487,8 +564,8 @@ materialization.
 - [Python `threading.RLock` documentation](https://docs.python.org/3/library/threading.html#rlock-objects)
   defines the synchronization primitive protecting registry state.
 
-PKG-001, PKG-002, PKG-003, PKG-004, PKG-007, NB-003 export, and NB-004
-derivation are framework infrastructure and do not derive a training or
+PKG-001, PKG-002, PKG-003, PKG-004, PKG-007, CORE-006, NB-003 export, and
+NB-004 derivation are framework infrastructure and do not derive a training or
 optimization algorithm from a paper. NB-004 packages the already documented
 CAL-004 ridge and CAL-005 temperature/threshold results without changing their
 algorithms.
@@ -508,7 +585,9 @@ candidate sets, duplicate cross-package expert IDs, layer-coverage failures,
 deterministic staged export, expert-only payload closure, dtype derivation,
 topology and alias rejection, staging cleanup, immutable routed derivation,
 exact expert-copy digests, data/head/report compatibility, router hashing,
-documentation, examples, notebooks, and wheel content.
+composition file and package tampering, stale-runtime rejection, exact routed
+logit and registry restoration, documentation, examples, notebooks, and wheel
+content.
 
 PKG-007 materializes the supported binding contract in the inference
 subpackage. NB-003 does not fit or serialize a router, save optimizer state, or
@@ -516,5 +595,8 @@ generate replay teacher labels. NB-004 supports one package-local independent
 affine router and anchored top-1 policy; standalone registry-specific routers
 remain PKG-005. Persistent registry files, cross-process locking, exact
 live-model checkpoint hashing, runtime-version enforcement, rollback across an
-intervening registry change, automatic model synchronization, Hub transfer,
-and distributed lifecycle operations remain unsupported.
+intervening registry change, historical inactive-slot persistence, standalone
+registry persistence, optional anchor bundling, Hub transfer, and distributed
+lifecycle operations remain unsupported. CORE-006 restores only the active
+registry snapshot; it does not retain inactive package content or rollback
+records.

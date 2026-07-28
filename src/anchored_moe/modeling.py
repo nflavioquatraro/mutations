@@ -20,6 +20,12 @@ from anchored_moe.inference.dispatch import AnchoredTop1Dispatcher
 from anchored_moe.inference.telemetry import RouteTelemetry
 from anchored_moe.policies.capacity import OverflowToAnchorCapacity
 from anchored_moe.registry.package import ExpertPackage, PackageIdentity
+from anchored_moe.registry.composition import (
+    COMPOSITION_MANIFEST_FILENAME,
+    CompositionCheckpointError,
+    export_composition_checkpoint,
+    load_composition_checkpoint,
+)
 from anchored_moe.registry.registry import (
     ExpertRegistry,
     RegistryChange,
@@ -390,10 +396,10 @@ class AnchoredMoEForCausalLM(PreTrainedModel, GenerationMixin):
             Optional existing in-memory expert registry. It is never
             synchronized implicitly.
 
-    The class is infrastructure rather than a paper-derived algorithm. It does
-    not implement CORE-006: ``save_pretrained`` is rejected until an explicit
-    format can preserve independent packages without silently bundling or
-    duplicating the anchor.
+    CORE-006 saves a local composition checkpoint rather than a duplicate full
+    model. The checkpoint references the exact external anchor, bundles active
+    package directories, and restores the synchronized anchored-top-1 runtime.
+    Hub transfer and optional anchor bundling remain separate features.
     """
 
     config_class = AnchoredMoEConfig
@@ -449,6 +455,15 @@ class AnchoredMoEForCausalLM(PreTrainedModel, GenerationMixin):
         self._conversion_report = self._backend.convert(
             self.anchor_model,
             self.config,
+        )
+        registry_snapshot = self._registry.snapshot()
+        # A newly converted empty registry is exactly synchronized because all
+        # wrappers begin in forced-anchor mode. A supplied non-empty registry
+        # remains deliberately unapplied until synchronize_registry() succeeds.
+        self._synchronized_registry_sha256 = (
+            registry_snapshot.registry_sha256
+            if not registry_snapshot.active_packages
+            else None
         )
 
         # Generation is delegated to the native anchor implementation. Sharing
@@ -514,33 +529,71 @@ class AnchoredMoEForCausalLM(PreTrainedModel, GenerationMixin):
         backend: ModelBackend | None = None,
         registry: ExpertRegistry | None = None,
         converted_layers: str | tuple[int, ...] | list[int] = "upper_half",
+        anchor_model_name_or_path: str | Path | None = None,
         revision: str | None = None,
         **kwargs: Any,
     ) -> AnchoredMoEForCausalLM:
-        """Load a base checkpoint through ``AutoModelForCausalLM`` and convert it.
+        """Load a base checkpoint or a local CORE-006 composition checkpoint.
 
         ``pretrained_model_name_or_path``, ``revision``, ``model_args``, and
         remaining keyword arguments are forwarded to the Hugging Face anchor
-        loader. This method loads a base checkpoint, not a serialized anchored
-        composition; that round trip remains CORE-006.
+        loader. A local directory containing
+        ``anchored_moe_composition.json`` is validated as a composition before
+        its referenced anchor is loaded. ``anchor_model_name_or_path`` may
+        relocate that same anchor for an offline or moved local checkpoint.
 
         Args:
-            pretrained_model_name_or_path: Hub identifier or local base model.
+            pretrained_model_name_or_path:
+                Hub identifier, local base model, or local composition.
             anchored_moe_config:
                 Optional resolved anchored configuration. If omitted, the
                 backend is derived from the loaded base model and the supplied
-                layer selector.
+                layer selector. It is rejected for composition loading because
+                the saved configuration is immutable.
             backend: Optional explicit backend implementation.
-            registry: Optional unsynchronized in-memory registry.
+            registry:
+                Optional unsynchronized in-memory registry for base loading.
+                It is rejected for composition loading.
             converted_layers:
                 Layer selector used only when no anchored configuration is
                 supplied.
-            revision: Exact base checkpoint revision where applicable.
+            anchor_model_name_or_path:
+                Optional relocated anchor used only for composition loading.
+            revision:
+                Exact base checkpoint revision. For a composition it must match
+                the saved revision when that revision is pinned.
 
         Returns:
-            Loaded, frozen, and converted anchored causal LM.
+            Loaded, frozen, converted, and—when applicable—synchronized model.
         """
 
+        source = Path(pretrained_model_name_or_path)
+        is_local_composition = (
+            source.is_dir()
+            and (source / COMPOSITION_MANIFEST_FILENAME).is_file()
+        )
+        if is_local_composition:
+            if anchored_moe_config is not None:
+                raise AnchoredModelError(
+                    "anchored_moe_config cannot override a saved composition."
+                )
+            if registry is not None:
+                raise AnchoredModelError(
+                    "registry cannot override a saved composition."
+                )
+            return cls._from_local_composition(
+                source,
+                *model_args,
+                backend=backend,
+                anchor_model_name_or_path=anchor_model_name_or_path,
+                revision=revision,
+                **kwargs,
+            )
+        if anchor_model_name_or_path is not None:
+            raise AnchoredModelError(
+                "anchor_model_name_or_path is valid only when loading a local "
+                "composition checkpoint."
+            )
         if anchored_moe_config is not None and not isinstance(
             anchored_moe_config,
             AnchoredMoEConfig,
@@ -584,6 +637,71 @@ class AnchoredMoEForCausalLM(PreTrainedModel, GenerationMixin):
             registry=registry,
         )
 
+    @classmethod
+    def _from_local_composition(
+        cls,
+        checkpoint_directory: Path,
+        *model_args: Any,
+        backend: ModelBackend | None,
+        anchor_model_name_or_path: str | Path | None,
+        revision: str | None,
+        **kwargs: Any,
+    ) -> AnchoredMoEForCausalLM:
+        """Load one validated local composition and its external anchor."""
+
+        try:
+            checkpoint = load_composition_checkpoint(checkpoint_directory)
+        except CompositionCheckpointError as error:
+            raise AnchoredModelError(
+                f"Cannot load anchored composition: {error}"
+            ) from error
+        saved_revision = checkpoint.manifest.base_model_revision
+        if (
+            revision is not None
+            and saved_revision is not None
+            and revision != saved_revision
+        ):
+            raise AnchoredModelError(
+                "Requested anchor revision does not match the saved "
+                f"composition: {revision!r} != {saved_revision!r}."
+            )
+        anchor_source = (
+            anchor_model_name_or_path
+            if anchor_model_name_or_path is not None
+            else checkpoint.manifest.base_model_name_or_path
+        )
+        anchor_model = AutoModelForCausalLM.from_pretrained(
+            anchor_source,
+            *model_args,
+            revision=revision if revision is not None else saved_revision,
+            **kwargs,
+        )
+        registry = ExpertRegistry.from_snapshot(
+            checkpoint.packages,
+            registry_format_version=(
+                checkpoint.manifest.registry_format_version
+            ),
+            registry_sha256=checkpoint.manifest.registry_sha256,
+            compatibility_sha256=checkpoint.manifest.compatibility_sha256,
+        )
+        model = cls(
+            checkpoint.config,
+            anchor_model,
+            backend=backend,
+            registry=registry,
+        )
+        if checkpoint.generation_config is not None:
+            model.generation_config = checkpoint.generation_config
+            model.anchor_model.generation_config = (
+                checkpoint.generation_config
+            )
+        report = model.synchronize_registry()
+        if report.registry_sha256 != checkpoint.manifest.registry_sha256:
+            raise AnchoredModelError(
+                "Loaded runtime does not match the saved registry identity."
+            )
+        return model
+
     @property
     def backend(self) -> ModelBackend:
         """Return the model-family adapter used for conversion and composition."""
@@ -601,6 +719,12 @@ class AnchoredMoEForCausalLM(PreTrainedModel, GenerationMixin):
         """Return the immutable backend conversion summary."""
 
         return self._conversion_report
+
+    @property
+    def synchronized_registry_sha256(self) -> str | None:
+        """Return the registry identity currently applied to routed wrappers."""
+
+        return self._synchronized_registry_sha256
 
     def install(self, package: ExpertPackage) -> RegistryChange:
         """Install a package descriptor without changing the model runtime."""
@@ -649,11 +773,13 @@ class AnchoredMoEForCausalLM(PreTrainedModel, GenerationMixin):
             synchronize_anchored_top1_registry,
         )
 
-        return synchronize_anchored_top1_registry(
+        report = synchronize_anchored_top1_registry(
             self.anchor_model,
             backend=self._backend,
             registry=self._registry,
         )
+        self._synchronized_registry_sha256 = report.registry_sha256
+        return report
 
     def forward(self, *args: Any, **kwargs: Any) -> Any:
         """Delegate causal-LM forward execution to the native anchor model."""
@@ -689,14 +815,83 @@ class AnchoredMoEForCausalLM(PreTrainedModel, GenerationMixin):
             "Anchor output embeddings are immutable after composition."
         )
 
-    def save_pretrained(self, *args: Any, **kwargs: Any) -> None:
-        """Reject unsafe full-model persistence until CORE-006 is implemented."""
+    def save_pretrained(
+        self,
+        save_directory: str | Path,
+        *,
+        safe_serialization: bool = True,
+        push_to_hub: bool = False,
+        **kwargs: Any,
+    ) -> None:
+        """Save an immutable local composition without copying anchor weights.
 
-        raise NotImplementedError(
-            "AnchoredMoEForCausalLM serialization is not implemented. "
-            "Persist expert packages independently through their safe "
-            "safetensors APIs until CORE-006 defines the composition format."
+        The active registry must already be synchronized. Existing
+        destinations, unsafe serialization requests, Hub publication, and
+        unsupported Hugging Face full-weight options are rejected explicitly.
+        """
+
+        if safe_serialization is not True:
+            raise AnchoredModelError(
+                "CORE-006 composition checkpoints require safe_serialization=True."
+            )
+        if push_to_hub:
+            raise AnchoredModelError(
+                "Composition Hub publication is deferred to PKG-006."
+            )
+        if kwargs:
+            names = ", ".join(sorted(kwargs))
+            raise TypeError(
+                "Unsupported composition save_pretrained option(s): "
+                f"{names}."
+            )
+        snapshot = self._registry.snapshot()
+        if self._synchronized_registry_sha256 != snapshot.registry_sha256:
+            raise AnchoredModelError(
+                "Cannot save a stale composition; call synchronize_registry() "
+                "after the latest registry change."
+            )
+        self._validate_synchronized_runtime(
+            has_active_packages=bool(snapshot.active_packages)
         )
+        try:
+            export_composition_checkpoint(
+                save_directory,
+                config=self.config,
+                generation_config=self.generation_config,
+                registry=self._registry,
+            )
+        except CompositionCheckpointError as error:
+            raise AnchoredModelError(
+                f"Cannot save anchored composition: {error}"
+            ) from error
+
+    def _validate_synchronized_runtime(
+        self,
+        *,
+        has_active_packages: bool,
+    ) -> None:
+        """Reject runtime modes that cannot round-trip through CORE-006."""
+
+        references = tuple(self._backend.iter_mlp_references(self.anchor_model))
+        wrappers = tuple(
+            reference.module
+            for reference in references
+            if isinstance(reference.module, RoutedMLP)
+        )
+        if len(wrappers) != len(self._conversion_report.converted_layers):
+            raise AnchoredModelError(
+                "Converted routed-wrapper topology changed before serialization."
+            )
+        expected_mode = "anchored_top1" if has_active_packages else "forced_anchor"
+        invalid_modes = sorted(
+            {wrapper.routing_mode for wrapper in wrappers}
+            - {expected_mode}
+        )
+        if invalid_modes:
+            raise AnchoredModelError(
+                "Runtime modes do not match the synchronized registry: "
+                f"expected={expected_mode!r}, found={invalid_modes}."
+            )
 
 
 def _backend_from_name(name: str) -> ModelBackend:

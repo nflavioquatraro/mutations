@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from threading import RLock
 from typing import TYPE_CHECKING
@@ -250,6 +251,55 @@ class ExpertRegistry:
         self._slots: list[tuple[str, str]] = []
         self._known_manifest_hashes: dict[tuple[str, str], str] = {}
         self._compatibility_sha256: str | None = None
+
+    @classmethod
+    def from_snapshot(
+        cls,
+        packages: Sequence[ExpertPackage],
+        *,
+        registry_format_version: int,
+        registry_sha256: str,
+        compatibility_sha256: str | None,
+    ) -> ExpertRegistry:
+        """Reconstruct the exact active state of a persisted registry snapshot.
+
+        CORE-006 checkpoints retain active package order and the permanent
+        compatibility binding. Historical inactive slots are deliberately not
+        retained because their package content is absent from the checkpoint.
+
+        Every package is strictly revalidated through ordinary installation
+        before the reconstructed snapshot is compared with the persisted one.
+        """
+
+        if isinstance(packages, (str, bytes)) or not isinstance(
+            packages,
+            Sequence,
+        ):
+            raise TypeError("packages must be a sequence of ExpertPackage.")
+        normalized = tuple(packages)
+        if not all(isinstance(package, ExpertPackage) for package in normalized):
+            raise TypeError("packages must contain only ExpertPackage values.")
+        expected = RegistrySnapshot(
+            registry_format_version=registry_format_version,
+            registry_sha256=registry_sha256,
+            compatibility_sha256=compatibility_sha256,
+            active_packages=tuple(package.identity for package in normalized),
+        )
+
+        registry = cls()
+        for package in normalized:
+            registry.install(package)
+        if not normalized and compatibility_sha256 is not None:
+            # An empty active registry can still remain permanently bound after
+            # unloading its final package. No tensor or package identity is
+            # synthesized; only the recorded compatibility constraint returns.
+            with registry._lock:
+                registry._compatibility_sha256 = compatibility_sha256
+        if registry.snapshot() != expected:
+            raise RegistryLifecycleError(
+                "Packages do not reconstruct the persisted registry snapshot."
+            )
+        return registry
 
     @property
     def active_packages(self) -> tuple[ExpertPackage, ...]:

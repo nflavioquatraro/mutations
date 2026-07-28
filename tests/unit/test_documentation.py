@@ -91,8 +91,12 @@ from anchored_moe.policies import (
     Top2ToTop1Capacity,
 )
 from anchored_moe.registry import (
+    COMPOSITION_FORMAT_VERSION,
+    AnchoredCompositionManifest,
     EXPERT_PAYLOAD_BINDING_FORMAT_VERSION,
     CalibratedRouterPackageConfig,
+    CompositionCheckpointError,
+    CompositionPackageEntry,
     ExpertPackage,
     ExpertPackageExportBinding,
     ExpertPackageExportConfig,
@@ -244,6 +248,9 @@ def test_current_public_symbols_have_docstrings() -> None:
         RegistryCompositionReport,
         synchronize_anchored_top1_registry,
         CalibratedRouterPackageConfig,
+        AnchoredCompositionManifest,
+        CompositionCheckpointError,
+        CompositionPackageEntry,
         ExpertPackage,
         ExpertPackageExportBinding,
         ExpertPackageExportConfig,
@@ -292,4 +299,5 @@ def test_current_public_symbols_have_docstrings() -> None:
     ]
 
     assert EXPERT_PAYLOAD_BINDING_FORMAT_VERSION == 1
+    assert COMPOSITION_FORMAT_VERSION == 1
     assert all(inspect.getdoc(symbol) for symbol in public_symbols)
