@@ -10,7 +10,10 @@ warmup-aware operation benchmarking, exact resident module-state footprint,
 optional CUDA peak allocation, and route-derived active-MLP accounting.
 EVAL-006 exhaustively evaluates installation orders and registry subsets under
 an explicit combinatorial trial bound, with optional caller-owned behavior
-fingerprints. Production benchmark orchestration remains outside this
+fingerprints. EVAL-007 validates plot-ready router-data scaling grids against
+strict append-only and matched local partial-MoE baselines, with explicit
+training/evaluation row provenance and specialization-interior, boundary, and
+mixed-input strata. Production benchmark orchestration remains outside this
 subpackage.
 
 ## Implemented strategies
@@ -23,6 +26,7 @@ subpackage.
 | EVAL-004 | `compare_top1_top2_to_oracle` | `quality.py` | Validated |
 | EVAL-005 | `benchmark_operation`, `measure_active_mlp_metrics`, `measure_module_state_footprint` | `efficiency.py` | Validated |
 | EVAL-006 | `evaluate_registry_compositions` | `registry_composition.py` | Validated |
+| EVAL-007 | `evaluate_router_data_scaling`, `RouterDataScalingReport` | `scaling.py` | Validated |
 
 ## Mathematical formulation
 
@@ -175,6 +179,38 @@ Registry hashes intentionally include active package order, so
 fingerprint can instead ignore order or encode model routes, logits, or a
 metric artifact, depending on the experiment.
 
+For router-training sample count \(n\), held-out stratum \(d\), performance
+metric \(P\), and mean router regret \(R\), EVAL-007 compares strict
+append-only \(A\), router-only recalibration \(G_n\), and matched local partial
+MoE \(M\). Let \(s=1\) for a higher-is-better performance metric and \(s=-1\)
+otherwise. Direction-normalized router gain and the remaining gap to the
+partial MoE are
+
+\[
+\Delta^{P}_{A\rightarrow G}(n,d)
+=s\left(P_{G_n,d}-P_{A,d}\right),
+\qquad
+\Delta^{P}_{G\rightarrow M}(n,d)
+=s\left(P_{M,d}-P_{G_n,d}\right).
+\]
+
+Positive first terms favor router-only recalibration. Positive second terms
+mean the matched partial MoE remains better. Because lower regret is always
+better,
+
+\[
+\Delta^{R}_{A\rightarrow G}(n,d)
+=R_{A,d}-R_{G_n,d},
+\qquad
+\Delta^{R}_{G\rightarrow M}(n,d)
+=R_{G_n,d}-R_{M,d}.
+\]
+
+The sample schedule \(n_1<\cdots<n_J\) is backed by strictly nested row sets
+\(T_1\subset\cdots\subset T_J\). The held-out stratum sets
+\(H_{\mathrm{interior}},H_{\mathrm{boundary}},H_{\mathrm{mixed}}\) are
+pairwise disjoint and satisfy \(T_J\cap\bigcup_d H_d=\varnothing\).
+
 ## Algorithms
 
 1. Execute a model in evaluation mode before conversion.
@@ -246,6 +282,23 @@ Registry composition evaluation:
 8. Group trials by canonical package set and report distinct registry and
    behavior counts.
 
+Router-data scaling evaluation:
+
+1. Canonicalize the three required held-out strata and their explicit row IDs.
+2. Canonicalize fixed append-only and matched partial-MoE metric blocks.
+3. Sort router-only trials by positive training sample count.
+4. Require strictly nested router-training row sets and reject every
+   train/evaluation or cross-stratum overlap.
+5. Require one registry and compatibility identity across all RTR-004 reports.
+6. Match every RTR-004 layer and expert order to the completed TRN-003
+   two-expert topology.
+7. Validate exact held-out row counts for every strategy, trial, and stratum.
+8. Calculate direction-normalized performance and regret gaps without imposing
+   a monotonicity assumption.
+9. Emit a deterministic JSON-compatible report containing measurements,
+   derived gaps, row provenance, RTR-004 reports, and compact TRN-003
+   provenance.
+
 ## Assumptions and invariants
 
 - Inputs, model mode, device, and dtype are identical between executions.
@@ -295,6 +348,21 @@ Registry composition evaluation:
   it.
 - Behavior fingerprints record only SHA-256 digests. EVAL-006 never records
   prompts, hidden states, logits, routes, or metric payloads itself.
+- EVAL-007 accepts exactly specialization-interior, boundary, and mixed-input
+  strata so scaling conclusions cannot silently omit difficult regimes.
+- Router-training subsets grow strictly and retain all rows from the preceding
+  sample count. Training and held-out row IDs never overlap.
+- The strict append-only and matched partial-MoE measurements are fixed across
+  sample counts; only router-only recalibration varies with replay size.
+- Every router-only trial contains its immutable RTR-004 report. Registry,
+  compatibility, layer, and expert identities remain constant across trials.
+- The matched baseline contains provenance extracted from a completed TRN-003
+  report. The report stores no expert, router, model, optimizer, prompt, or
+  activation object.
+- Performance direction is explicit. Router regret is finite, non-negative,
+  and always interpreted as lower-is-better.
+- Scaling curves are observations, not acceptance thresholds. More replay data
+  is not required to improve held-out metrics monotonically.
 
 ## Hugging Face integration
 
@@ -315,6 +383,12 @@ EVAL-006 is model-neutral. A behavior callback may explicitly synchronize an
 `AnchoredMoEForCausalLM`, execute fixed Hugging Face inputs, and return a digest
 of routes or logits. The evaluator itself never loads a model, synchronizes a
 registry, recalibrates a router, or retains behavioral tensors.
+
+EVAL-007 is also offline and model-neutral at aggregation time. Hugging Face
+evaluation loops may produce the stratum metrics, RTR-004 produces each
+router-only provenance report, and a completed `LocalMiniMoETrainer` supplies
+the matched TRN-003 provenance. The evaluator never reruns Trainer, mutates a
+router, or retains model state.
 
 ## Configuration and examples
 
@@ -374,6 +448,18 @@ composition = evaluate_registry_compositions(
 print(composition.subset_count)
 print(composition.trial_count)
 print(composition.behavior_order_sensitive_subset_count)
+
+scaling = evaluate_router_data_scaling(
+    metric_name="mean_token_nll",
+    higher_is_better=False,
+    evaluation_row_ids_by_stratum=evaluation_rows,
+    append_only_metrics=append_only_metrics,
+    router_only_trials=recalibrated_trials,
+    matched_partial_moe_metrics=partial_moe_metrics,
+    matched_partial_moe_training=local_training_report,
+)
+print(scaling.router_training_sample_counts)
+print(scaling.gaps)
 ```
 
 `notebooks/01_convert_dense_model.ipynb` exercises this API against logits,
@@ -388,6 +474,9 @@ counterfactual regret with a deterministic offline fixture.
 `examples/verify_registry_lifecycle.py` evaluates removal/reinsertion and then
 all five partial permutations of two packages using an order-invariant
 package-set behavior digest.
+`examples/evaluate_router_data_scaling.py` constructs a two-point,
+three-stratum EVAL-007 grid, validates RTR-004/TRN-003 provenance, and emits
+the complete plot-ready JSON report.
 `notebooks/05_evaluate_registry.ipynb` provides the corresponding thin public
 API workflow.
 
@@ -405,7 +494,11 @@ operationalizes metrics defined by the repository architecture. EVAL-005 uses
 standard synchronized wall-clock and allocator accounting rather than a
 paper-derived benchmark method. EVAL-006 directly implements the blueprint's
 required installation-order and every-subset lifecycle experiments using
-standard finite permutations and SHA-256 digests.
+standard finite permutations and SHA-256 digests. EVAL-007 directly
+operationalizes section 19.3 of the architecture blueprint. Its initial matched
+baseline is the framework's supported two-expert TRN-003 local mini-MoE rather
+than a new conventional-MoE training implementation; this difference is also
+documented beside the public evaluator.
 
 ## Tests and known limitations
 
@@ -433,6 +526,13 @@ sensitive behavior observers, JSON-compatible reports, callback mutation,
 invalid digests, duplicate versions, incompatible complete-set preflight,
 factorial budget rejection before observation, live package revalidation, the
 documentation contract, and the executable lifecycle example.
+EVAL-007 tests cover canonical sample/stratum ordering, strict nested replay
+subsets, disjoint held-out provenance, fixed registry and compatibility
+identity, exact RTR-004/TRN-003 topology matching, metric row counts,
+direction-normalized gaps, report round trips, tamper rejection, explicitly
+non-monotonic observations, a real two-size RTR-004 recalibration, a real
+one-step TRN-003 training report, source-router immutability, documentation,
+and the executable example.
 Cross-layer trajectory metrics, first-divergence depth, route serialization,
 persistent registry evaluation, model-integrated counterfactual execution,
 confidence intervals, CPU/MPS runtime peak memory, energy measurement,
@@ -440,4 +540,7 @@ distributed aggregation, production hardware baselines, and statistical
 benchmark comparison remain future work. EVAL-006 deliberately does not define
 which behavior artifact should be fingerprinted, compare metric magnitudes,
 persist reports, parallelize trials, or attempt exhaustive evaluation beyond
-the caller-approved bound.
+the caller-approved bound. EVAL-007 does not collect production datasets,
+train a conventional jointly initialized MoE, define statistical confidence
+intervals, render plots, choose sample schedules, or claim that its synthetic
+acceptance fixture establishes the router-subset research hypothesis.

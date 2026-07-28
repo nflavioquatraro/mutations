@@ -80,6 +80,10 @@ standalone weighted top-2 strategy primitives:
 - deterministic bounded evaluation of the empty registry, every package
   subset, and every installation order, with optional read-only behavior
   fingerprints and explicit order-sensitivity reports;
+- deterministic router-data scaling reports comparing strict append-only,
+  router-only recalibration, and a matched local partial MoE across nested
+  replay subsets and held-out specialization-interior, boundary, and mixed
+  strata;
 - opt-in sparse anchored top-1 execution for configured routed MLPs;
 - deterministic overflow-to-anchor fallback with no token dropping;
 - bounded privacy-safe route telemetry and exact route-agreement metrics;
@@ -179,6 +183,7 @@ python examples/verify_stability_margins.py
 python examples/verify_pair_utilities.py
 python examples/verify_top1_top2_oracle.py
 python examples/evaluate_registry_strategies.py
+python examples/evaluate_router_data_scaling.py
 python examples/verify_routed_top1.py
 python examples/verify_registry_lifecycle.py
 python examples/verify_package_hub.py
