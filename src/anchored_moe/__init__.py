@@ -150,6 +150,8 @@ from anchored_moe.routers import (
     distill_frozen_router,
 )
 from anchored_moe.training import (
+    AuxiliaryLoadBalancingError,
+    AuxiliaryLoadBalancingLoss,
     ExpertObjectiveConfig,
     ExpertObjectiveError,
     ExpertObjectiveReport,
@@ -162,6 +164,7 @@ from anchored_moe.training import (
     IndependentExpertTrainingReport,
     IndependentExpertTrainingRun,
     LocalMiniMoEExpertBinding,
+    LocalMiniMoEObjectiveReport,
     LocalMiniMoETrainer,
     LocalMiniMoETrainingConfig,
     LocalMiniMoETrainingReport,
@@ -186,6 +189,8 @@ __all__ = [
     "AnchoredTop2Dispatcher",
     "AnchoredTop1Selection",
     "AppendOnlyRouterHeads",
+    "AuxiliaryLoadBalancingError",
+    "AuxiliaryLoadBalancingLoss",
     "CapacityDecision",
     "CombinationPolicy",
     "COMPOSITION_FORMAT_VERSION",
@@ -233,6 +238,7 @@ __all__ = [
     "IndependentExpertTrainingReport",
     "IndependentExpertTrainingRun",
     "LocalMiniMoEExpertBinding",
+    "LocalMiniMoEObjectiveReport",
     "LocalMiniMoETrainer",
     "LocalMiniMoETrainingConfig",
     "LocalMiniMoETrainingReport",

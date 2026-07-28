@@ -99,6 +99,7 @@ standalone weighted top-2 strategy primitives:
   and failure-safe anchor-route restoration;
 - deterministic two-expert local mini-MoE training with package-owned affine
   router heads, score-softmax activation mixing, exact optimizer isolation,
+  optional token-masked auxiliary load balancing, auditable objective reports,
   and success/failure-safe anchor-route restoration;
 - optional token-masked replay KL against precomputed immutable-anchor logits
   and normalized expert-initialization weight-drift regularization;
@@ -120,7 +121,7 @@ standalone weighted top-2 strategy primitives:
 Automatic model mutation during installation, capacity estimation, fallback
 beyond a selected pair, online replay-teacher execution,
 local mixtures larger than two experts, post-hoc mixture-aware refinement,
-local balancing, model-integrated and
+model-integrated and
 package-driven top-2 execution, persistent registry storage, Hub transfer, and
 anchor-weight bundling are intentionally not implemented yet. Learned
 mixture-head package binding and model-integrated oracle weight sweeps also
@@ -209,6 +210,14 @@ The notebooks default to deterministic local Qwen3 smoke models and require no
 network access.
 
 ## Design documents
+
+The documentation contract tracks resolved configuration and exact fallback
+behavior (CORE-001 and CORE-004), every executable notebook workflow (NB-001,
+NB-002, NB-003, NB-004, NB-005, NB-006, and NB-007), and theory-README
+coverage (DOC-002). DOC-003 keeps those feature IDs, public configuration
+names, implementation modules, equations, citations, and tracker statuses
+synchronized through automated structural checks plus explicit semantic
+review.
 
 - [Architecture blueprint](./anchored-plugin-moe-architecture.md)
 - [Feature implementation plan](./feature-implementation-plan.md)

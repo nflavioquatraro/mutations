@@ -1,5 +1,10 @@
 """Expert training strategies with mechanical parameter isolation."""
 
+from anchored_moe.training.balancing import (
+    AuxiliaryLoadBalancingError,
+    AuxiliaryLoadBalancingLoss,
+    LocalMiniMoEObjectiveReport,
+)
 from anchored_moe.training.expert_trainer import (
     ForcedExpertBinding,
     ForcedPathExpertTrainer,
@@ -30,6 +35,8 @@ from anchored_moe.training.objectives import (
 )
 
 __all__ = [
+    "AuxiliaryLoadBalancingError",
+    "AuxiliaryLoadBalancingLoss",
     "ForcedExpertBinding",
     "ForcedPathExpertTrainer",
     "ForcedPathTrainingError",
@@ -38,6 +45,7 @@ __all__ = [
     "IndependentExpertTrainingReport",
     "IndependentExpertTrainingRun",
     "LocalMiniMoEExpertBinding",
+    "LocalMiniMoEObjectiveReport",
     "LocalMiniMoETrainer",
     "LocalMiniMoETrainingConfig",
     "LocalMiniMoETrainingReport",

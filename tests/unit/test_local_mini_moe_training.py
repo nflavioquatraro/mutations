@@ -59,15 +59,19 @@ def _components(
 
 def test_config_round_trip_is_strict() -> None:
     config = LocalMiniMoETrainingConfig(
+        load_balancing_weight=0.05,
         mix_temperature=0.75,
         router_bias_epsilon=0.02,
     )
 
     assert LocalMiniMoETrainingConfig.from_dict(config.to_dict()) == config
+    assert config.load_balancing_enabled
     with pytest.raises(ValueError, match="exactly two"):
         LocalMiniMoETrainingConfig.from_dict(
             {**config.to_dict(), "expert_count": 3}
         )
+    with pytest.raises(ValueError, match="non-negative"):
+        LocalMiniMoETrainingConfig(load_balancing_weight=-0.1)
 
 
 def test_preparation_attaches_exact_pair_and_optimizer_state(
@@ -88,6 +92,7 @@ def test_preparation_attaches_exact_pair_and_optimizer_state(
     assert topology.expert_ids == ("code:0", "code:1")
     assert topology.router_head_keys == ((3, "code:0"), (3, "code:1"))
     assert wrapper.routing_mode == "local_mini_moe"
+    assert not wrapper._capture_local_mixture_weights
     assert tuple(wrapper.experts) == tuple(
         binding.expert for binding in bindings
     )

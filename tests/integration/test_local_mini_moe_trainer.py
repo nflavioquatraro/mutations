@@ -18,6 +18,7 @@ from anchored_moe import (
     IdentityRouterFeatureExtractor,
     LocalMiniMoEExpertBinding,
     LocalMiniMoETrainer,
+    LocalMiniMoETrainingConfig,
     RoutedMLP,
 )
 from anchored_moe.backends import Qwen3Backend
@@ -71,6 +72,7 @@ def _trainer(
     output_dir: Path,
     dataset: Dataset,
     max_steps: int = 2,
+    config: LocalMiniMoETrainingConfig | None = None,
 ) -> tuple[
     LocalMiniMoETrainer,
     RoutedMLP,
@@ -105,6 +107,7 @@ def _trainer(
         expert_bindings=bindings,
         router_feature_extractor=IdentityRouterFeatureExtractor(16),
         router_heads=heads,
+        config=config,
         train_dataset=dataset,
     )
     return trainer, wrapper, experts, heads
@@ -141,6 +144,9 @@ def test_joint_training_updates_both_experts_and_restores_exact_anchor(
     assert trainer.training_report is not None
     assert trainer.training_report.global_step == 2
     assert trainer.training_report.training_loss > 0
+    assert trainer.training_report.final_objectives.load_balancing_loss == 0
+    assert trainer.last_objective_report is not None
+    assert trainer.last_objective_report.load_balancing_loss == 0
     with pytest.raises(FrozenInstanceError):
         trainer.training_report.global_step = 3  # type: ignore[misc]
     for expert, initial in zip(experts, expert_before, strict=True):
@@ -167,6 +173,45 @@ def test_joint_training_updates_both_experts_and_restores_exact_anchor(
     assert model_after.keys() == anchor_before.keys()
     for name, tensor in anchor_before.items():
         assert torch.equal(model_after[name], tensor)
+
+
+def test_enabled_balancing_reports_weighted_loss_without_changing_ownership(
+    tiny_qwen3_model: Qwen3ForCausalLM,
+    tmp_path: Path,
+) -> None:
+    trainer, wrapper, experts, heads = _trainer(
+        tiny_qwen3_model,
+        output_dir=tmp_path / "balanced",
+        dataset=LocalMixtureDataset(),
+        max_steps=1,
+        config=LocalMiniMoETrainingConfig(load_balancing_weight=0.1),
+    )
+    expected_trainable_ids = {
+        id(parameter)
+        for module in [*experts, heads]
+        for parameter in module.parameters()
+        if parameter.requires_grad
+    }
+    actual_trainable_ids = {
+        id(parameter)
+        for parameter in tiny_qwen3_model.parameters()
+        if parameter.requires_grad
+    }
+    assert actual_trainable_ids == expected_trainable_ids
+    assert wrapper._capture_local_mixture_weights
+
+    trainer.train()
+
+    report = trainer.training_report
+    assert report is not None
+    assert report.final_objectives.load_balancing_loss > 0
+    assert report.final_objectives.total_loss == pytest.approx(
+        report.final_objectives.specialization_loss
+        + 0.1 * report.final_objectives.load_balancing_loss
+    )
+    assert wrapper.routing_mode == "forced_anchor"
+    assert not wrapper._capture_local_mixture_weights
+    assert wrapper._local_mixture_weights is None
 
 
 def test_training_failure_restores_anchor_and_freezes_artifacts(

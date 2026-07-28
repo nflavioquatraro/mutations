@@ -1,7 +1,7 @@
 # Source documentation standard
 
-This document operationalizes DOC-001 for implementation reviews. The
-normative architectural requirements remain in
+This document operationalizes DOC-001, DOC-002, and DOC-003 for implementation
+reviews. The normative architectural requirements remain in
 [`feature-implementation-plan.md`](../feature-implementation-plan.md).
 
 ## Public API
@@ -33,8 +33,23 @@ links to the relevant framework or model-family documentation.
 
 ## Review checks
 
-- Public symbols have meaningful docstrings.
-- Feature identifiers and configuration names match the tracker and README.
+- Tracker feature identifiers are unique, dependencies resolve, status values
+  are valid, and every active or completed row has a dated update.
+- Public exports resolve uniquely and callable public symbols have meaningful
+  docstrings.
+- Implemented-strategy tables map tracker IDs to public configuration or API
+  names, source modules, and the exact tracker status.
+- Every active, implemented, or validated feature ID appears in the root,
+  subpackage, or standards documentation outside the tracker itself.
 - Freezing, fallback, ordering, and compatibility behavior have nearby comments.
-- Every feature-bearing source subpackage has a theory README.
+- Every feature-bearing source subpackage has a theory README containing the
+  complete DOC-002 section contract.
+- Paper-derived source containing an arXiv reference also records a References
+  section and explicit differences from the cited method.
 - Tests exercise the documented acceptance behavior.
+
+The test suite enforces the structural checks above. Reviewers remain
+responsible for semantic synchronization that cannot be proven by text
+matching: equations must describe the implemented tensor operations, public
+configuration names must retain the documented meaning, citations must
+actually motivate the algorithm, and recorded deviations must be complete.

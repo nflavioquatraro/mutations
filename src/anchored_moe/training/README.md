@@ -13,11 +13,15 @@ an independently trained latent expert set: two or more complete expert paths
 receive their own Trainer inputs and execute sequentially against the same
 immutable anchor. TRN-003 jointly trains exactly two package-local experts and
 their affine router heads through a differentiable score-softmax mixture.
+BAL-003 optionally regularizes those package-local router probabilities with
+a token-masked auxiliary load-balancing loss while both experts continue to
+execute.
 TRN-005 adds independently weighted replay KL against
 precomputed immutable-anchor logits and parameter drift from
 expert-initialization snapshots. Training does not own data partitioning,
 package export, global router fitting, replay-logit generation, post-hoc
-mixture refinement, balancing, or process-level parallel expert dispatch.
+mixture refinement, inference-time capacity balancing, or process-level
+parallel expert dispatch.
 
 ## Implemented strategies
 
@@ -26,6 +30,7 @@ mixture refinement, balancing, or process-level parallel expert dispatch.
 | TRN-001 | `ForcedExpertBinding`, `prepare_forced_path_training`, `ForcedPathExpertTrainer` | `expert_trainer.py` | Validated |
 | TRN-002 | `IndependentExpertTrainingRun`, `train_independent_expert_set`, immutable run/set reports | `independent.py` | Validated |
 | TRN-003 | `LocalMiniMoETrainingConfig`, `LocalMiniMoEExpertBinding`, `LocalMiniMoETrainer`, immutable topology/run reports | `mini_moe.py` | Validated |
+| BAL-003 | `load_balancing_weight`, `AuxiliaryLoadBalancingLoss`, `LocalMiniMoEObjectiveReport` | `balancing.py`, `mini_moe.py` | Validated |
 | TRN-005 | `ExpertObjectiveConfig`, `ReplayKLPreservation`, `ExpertWeightDrift`, `ExpertObjectiveReport` | `objectives.py`, `expert_trainer.py` | Validated |
 
 `ForcedPathTrainingReport` records the resolved layer topology and exact
@@ -156,6 +161,48 @@ Zero affine weights receive deterministic biases
 anchor-copy expert symmetry without randomness; both softmax weights remain
 strictly positive, so both experts receive gradients.
 
+For BAL-003, let \(m_t\ge0\) be an optional token weight, usually the attention
+mask, and let \(N=2\) package-local experts. The mean router probability and
+hard preferred-assignment fraction at layer \(\ell\) are
+
+\[
+P_{\ell,i}
+=
+\frac{\sum_t m_t\alpha_{\ell,t,i}}{\sum_t m_t},
+\qquad
+f_{\ell,i}
+=
+\frac{\sum_t m_t
+\mathbb{1}[\operatorname{argmax}_j\alpha_{\ell,t,j}=i]}{\sum_t m_t}.
+\]
+
+The per-layer auxiliary loss is
+
+\[
+\mathcal L_{\mathrm{balance},\ell}
+=
+N\sum_{i=1}^{N}f_{\ell,i}P_{\ell,i},
+\]
+
+and the trainer averages it over converted layers:
+
+\[
+\mathcal L
+=
+\mathcal L_{\mathrm{CLM}}
++
+\lambda_{\mathrm{balance}}
+\frac{1}{|C|}
+\sum_{\ell\in C}\mathcal L_{\mathrm{balance},\ell}.
+\]
+
+Hard assignment fractions are detached, while gradients flow through mean
+probabilities. A balanced distribution has loss one and complete two-expert
+collapse approaches two. An all-zero token mask contributes differentiable
+zero. Stable first-index tie-breaking makes the measurement deterministic.
+The objective changes training pressure only: both local experts still execute
+for every token.
+
 For forced-path logits \(z_{\ell,t}\), precomputed immutable-anchor logits
 \(z^A_{\ell,t}\), replay temperature \(T\), and non-negative token weights
 \(m_t\), preservation is
@@ -278,10 +325,14 @@ Local mini-MoE execution:
    expert order.
 6. Attach both experts to every converted wrapper in `local_mini_moe` mode.
 7. Execute both full-token expert paths and combine them with COM-001.
-8. Reassert route objects and parameter identities before the one supported
+8. When `load_balancing_weight` is positive, retain the graph-connected
+   mixture weights from exactly one model forward, compute BAL-003 per layer
+   with the attention mask, average layers, and release the observations.
+9. Reassert route objects and parameter identities before the one supported
    Trainer run.
-9. On success or failure, clear gradients, freeze package artifacts, and
-   restore every wrapper to exact `forced_anchor` execution.
+10. On success or failure, clear gradients, freeze package artifacts, release
+    any retained observations, and restore every wrapper to exact
+    `forced_anchor` execution.
 
 TRN-005 objective execution:
 
@@ -321,7 +372,17 @@ TRN-005 objective execution:
 - Only the affine heads and expert-declared optimizer subsets train. The router
   feature transformation remains frozen.
 - Both local experts execute for every specialization token. Anchor abstention,
-  capacity fallback, and load balancing do not run inside local training.
+  capacity fallback, and inference load balancing do not run inside local
+  training.
+- BAL-003 is disabled exactly when `load_balancing_weight` is zero; the
+  original TRN-003 path then retains no mixture-probability tensor.
+- When BAL-003 is enabled, every converted layer must expose one
+  graph-connected pair-probability tensor for the same model forward.
+- Layer losses are averaged, so the coefficient does not depend on the number
+  of converted layers. Padding is excluded through a non-negative attention
+  mask when one is supplied.
+- BAL-003 changes no trainable parameter identity and does not serialize
+  assignments, probabilities, or objective state.
 - Opposite deterministic biases break initial symmetry without changing
   affine weights.
 - `LocalMiniMoETrainer` is one-shot. Successful and failed runs detach the
@@ -380,8 +441,10 @@ shared in-process model is not concurrently mutated.
 registers both experts, the shared frozen feature extractor, and the affine
 head bank before Accelerate device preparation. The standard model loss,
 optimizer, scheduler, accumulation, clipping, callbacks, and data pipeline are
-unchanged. Cleanup happens in `train()`'s `finally` block, so data-loading and
-optimizer failures cannot leave a routed model active.
+unchanged. Its `compute_loss()` override adds BAL-003 only when configured and
+records detached loss components without adding model state. Cleanup happens
+in `train()`'s `finally` block, so data-loading and optimizer failures cannot
+leave a routed model active.
 
 When replay KL is enabled, the trainer extends Hugging Face's resolved dataset
 signature columns with only the configured teacher and mask keys. Standard
@@ -480,6 +543,7 @@ trainer = LocalMiniMoETrainer(
     router_feature_extractor=IdentityRouterFeatureExtractor(hidden_size),
     router_heads=fresh_two_expert_heads,
     config=LocalMiniMoETrainingConfig(
+        load_balancing_weight=0.01,
         mix_temperature=1.0,
         router_bias_epsilon=1e-3,
     ),
@@ -490,7 +554,7 @@ trainer = LocalMiniMoETrainer(
     train_dataset=dataset,
 )
 trainer.train()
-print(trainer.training_report)
+print(trainer.training_report.final_objectives)
 ```
 
 See `examples/verify_forced_path_training.py` for a deterministic offline
@@ -502,7 +566,8 @@ boundary consumed by the same Trainer.
 partitions with distinct seeds and verifies expert updates, exact anchor
 restoration, route cleanup, and final freezing.
 `examples/verify_local_mini_moe.py` jointly trains two local experts and their
-router, then verifies exact anchor restoration and final freezing. See
+router with BAL-003 enabled, then verifies finite objective composition, exact
+optimizer ownership, exact anchor restoration, and final freezing. See
 `examples/train_expert_package.py` and
 `notebooks/02_train_expert_package.ipynb` for the NB-003 export boundary.
 
@@ -528,12 +593,18 @@ router, then verifies exact anchor restoration and final freezing. See
 - [Explicit Inductive Bias for Transfer Learning with Convolutional Networks](https://arxiv.org/abs/1802.01483)
   motivates start-point parameter regularization. This implementation applies
   it only to expert parameters and normalizes by scalar parameter count.
+- [Switch Transformers: Scaling to Trillion Parameter Models with Simple and Efficient Sparsity](https://arxiv.org/abs/2101.03961)
+  motivates the product of preferred-assignment fractions and mean router
+  probabilities. BAL-003 applies it per layer to a dense two-expert local
+  mixture, supports token masks, and averages layers; hard assignments measure
+  load but do not control execution.
 
 TRN-001 through TRN-003 are framework infrastructure and introduce no
 paper-derived training algorithm. TRN-003 implements the package-local
 score-softmax strategy specified by the repository architecture blueprint.
 TRN-005 adapts the referenced distillation and L2-SP objectives with the
-differences stated above.
+differences stated above. BAL-003 adapts the Switch auxiliary objective with
+the dense-execution, masking, and layer-averaging differences stated above.
 
 ## Tests and known limitations
 
@@ -568,13 +639,21 @@ ownership, real two-step causal-language-model optimization, immutable
 reports, byte-exact anchor restoration, complete gradient clearing and
 freezing, and failure-safe cleanup after data loading raises.
 
+BAL-003 tests cover analytical balanced and collapsed cases, token masking,
+zero-token differentiable fallback, invalid probability rejection, router
+gradient flow, weighted Trainer loss composition, unchanged optimizer
+ownership, detached objective reports, observation cleanup, byte-exact anchor
+preservation, and the executable local mini-MoE example.
+
 NB-003 records training-dataset and base-checkpoint provenance but does not
 serialize per-example teacher logits or generate them online. Precomputed
 full-vocabulary logits can also be storage-intensive; compact teacher targets
 are not implemented. Online teacher execution, dataset streaming,
 automatic data partitioning, concurrent in-process expert training,
 cross-expert diversity objectives, local expert counts other than two, local
-capacity or balancing, TRN-005 objectives inside TRN-003, post-hoc
+capacity, inference-time balancing, TRN-005 objectives inside TRN-003, post-hoc
 mixture-aware refinement, transactional expert-weight rollback, expert-only
-optimizer checkpoint resume, mixed-precision, multi-device, and distributed
-acceptance tests remain future work.
+optimizer checkpoint resume, gradient-checkpointing acceptance for captured
+router probabilities, mixed-precision, multi-device, and distributed
+acceptance tests remain future work. BAL-003 measures preferred load but does
+not save computation because TRN-003 always executes both local experts.

@@ -11,7 +11,7 @@ package lifecycle.
 
 | Feature ID | Configuration | Module | Status |
 |---|---|---|---|
-| CORE-002 | Backend interface | `base.py` | Validated |
+| CORE-002 | `ModelBackend` interface | `base.py` | Validated |
 | CORE-003 | `backend: qwen3` | `qwen3.py` | Validated |
 | CORE-005 | `AnchoredMoEForCausalLM` conversion | `../modeling.py` | Validated |
 

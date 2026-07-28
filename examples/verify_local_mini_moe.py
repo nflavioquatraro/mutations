@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from math import isclose
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -77,6 +78,7 @@ def main() -> None:
     dataset = [
         {
             "input_ids": (tokens := torch.tensor(row)),
+            "attention_mask": torch.ones_like(tokens),
             "labels": tokens.clone(),
         }
         for row in ((1, 3, 5, 7), (2, 4, 6, 8))
@@ -102,9 +104,22 @@ def main() -> None:
             expert_bindings=bindings,
             router_feature_extractor=IdentityRouterFeatureExtractor(16),
             router_heads=heads,
-            config=LocalMiniMoETrainingConfig(),
+            config=LocalMiniMoETrainingConfig(
+                load_balancing_weight=0.05,
+            ),
             train_dataset=dataset,
         )
+        expected_trainable_ids = {
+            id(parameter)
+            for module in [*experts, heads]
+            for parameter in module.parameters()
+            if parameter.requires_grad
+        }
+        assert expected_trainable_ids == {
+            id(parameter)
+            for parameter in model.parameters()
+            if parameter.requires_grad
+        }
         trainer.train()
 
     expert_changed = tuple(
@@ -131,12 +146,22 @@ def main() -> None:
     assert anchor_exact
     assert wrapper.routing_mode == "forced_anchor"
     assert trainer.training_report is not None
+    objectives = trainer.training_report.final_objectives
+    assert objectives.load_balancing_loss > 0
+    assert isclose(
+        objectives.total_loss,
+        objectives.specialization_loss
+        + 0.05 * objectives.load_balancing_loss,
+        rel_tol=1e-6,
+        abs_tol=1e-6,
+    )
 
     print(
-        "TRN-003 local mini-MoE validation passed: "
+        "TRN-003/BAL-003 local mini-MoE validation passed: "
         f"experts={trainer.training_report.topology.expert_ids}, "
         f"steps={trainer.training_report.global_step}, "
         f"expert_changed={expert_changed}, router_trained={router_trained}, "
+        f"load_balancing_loss={objectives.load_balancing_loss:.6f}, "
         f"anchor_exact={anchor_exact}"
     )
 

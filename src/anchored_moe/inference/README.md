@@ -38,7 +38,7 @@ materialization boundary while restoring a saved checkpoint.
 | PKG-007 | `synchronize_anchored_top1_registry` | `composition.py`, `modeling.py` | Validated |
 | TRN-001 | `RoutedMLP.configure_forced_expert` | `modeling.py` | Validated |
 | CORE-005 | `AnchoredMoEForCausalLM.synchronize_registry` | `modeling.py` | Validated |
-| CORE-006 | synchronized composition save/reload | `modeling.py`, `registry/composition.py` | Validated |
+| CORE-006 | `save_pretrained` / `from_pretrained` composition reload | `modeling.py`, `registry/composition.py` | Validated |
 
 ## Mathematical formulation
 

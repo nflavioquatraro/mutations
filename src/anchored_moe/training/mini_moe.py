@@ -6,9 +6,10 @@ every converted layer, and COM-001 score-softmax combines their activations.
 The anchor, shared backbone, router feature transformation, incumbent experts,
 and registry state remain frozen.
 
-The first implementation deliberately fixes the local set size to two. This
-keeps the selected expert set constant, so gradients reach both router scores
-without a discrete top-k boundary or a load-balancing objective.
+The implementation deliberately fixes the local set size to two. This keeps
+the selected expert set constant, so gradients reach both router scores
+without a discrete top-k boundary. BAL-003 can optionally regularize the
+resulting mixture probabilities without changing which experts execute.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from dataclasses import dataclass
 from typing import Any, ClassVar
 
 import torch
-from torch import nn
+from torch import Tensor, nn
 from transformers import Trainer, TrainingArguments
 from transformers.trainer_utils import SaveStrategy, TrainOutput
 
@@ -29,6 +30,10 @@ from anchored_moe.modeling import RoutedMLP
 from anchored_moe.policies.combination import ScoreSoftmaxCombination
 from anchored_moe.routers.base import RouterFeatureExtractor
 from anchored_moe.routers.heads import AppendOnlyRouterHeads
+from anchored_moe.training.balancing import (
+    AuxiliaryLoadBalancingLoss,
+    LocalMiniMoEObjectiveReport,
+)
 from anchored_moe.training.expert_trainer import ForcedPathTrainingError
 
 
@@ -43,6 +48,9 @@ class LocalMiniMoETrainingConfig:
             Positive deterministic symmetry-breaking magnitude. At every
             layer, the first router head starts at ``+epsilon`` and the second
             at ``-epsilon`` while all affine weights remain zero.
+        load_balancing_weight:
+            Non-negative coefficient for BAL-003. Zero preserves the original
+            TRN-003 loss and does not retain router probabilities.
     """
 
     strategy: ClassVar[str] = "local_mini_moe_top2"
@@ -51,6 +59,7 @@ class LocalMiniMoETrainingConfig:
 
     mix_temperature: float = 1.0
     router_bias_epsilon: float = 1e-3
+    load_balancing_weight: float = 0.0
 
     def __post_init__(self) -> None:
         """Normalize finite positive hyperparameters."""
@@ -65,6 +74,23 @@ class LocalMiniMoETrainingConfig:
             ):
                 raise ValueError(f"{field_name} must be finite and positive.")
             object.__setattr__(self, field_name, float(value))
+        value = self.load_balancing_weight
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or float(value) < 0
+        ):
+            raise ValueError(
+                "load_balancing_weight must be finite and non-negative."
+            )
+        object.__setattr__(self, "load_balancing_weight", float(value))
+
+    @property
+    def load_balancing_enabled(self) -> bool:
+        """Return whether BAL-003 contributes to the training loss."""
+
+        return self.load_balancing_weight > 0
 
     def to_dict(self) -> dict[str, Any]:
         """Return the complete JSON-compatible public configuration."""
@@ -72,6 +98,7 @@ class LocalMiniMoETrainingConfig:
         return {
             "combination": self.combination,
             "expert_count": self.expert_count,
+            "load_balancing_weight": self.load_balancing_weight,
             "mix_temperature": self.mix_temperature,
             "router_bias_epsilon": self.router_bias_epsilon,
             "strategy": self.strategy,
@@ -86,6 +113,7 @@ class LocalMiniMoETrainingConfig:
         expected = {
             "combination",
             "expert_count",
+            "load_balancing_weight",
             "mix_temperature",
             "router_bias_epsilon",
             "strategy",
@@ -99,6 +127,7 @@ class LocalMiniMoETrainingConfig:
         if value["combination"] != cls.combination:
             raise ValueError("Unsupported local mini-MoE combination policy.")
         return cls(
+            load_balancing_weight=value["load_balancing_weight"],
             mix_temperature=value["mix_temperature"],
             router_bias_epsilon=value["router_bias_epsilon"],
         )
@@ -178,11 +207,25 @@ class LocalMiniMoETrainingTopology:
 
 @dataclass(frozen=True)
 class LocalMiniMoETrainingReport:
-    """Immutable outcome of one completed local mini-MoE Trainer run."""
+    """Immutable outcome of one completed local mini-MoE Trainer run.
+
+    Attributes:
+        topology:
+            Prepared layer, expert, router-head, configuration, and exact
+            optimizer ownership metadata.
+        global_step:
+            Positive number of completed optimizer steps.
+        training_loss:
+            Finite aggregate loss reported by Hugging Face Trainer.
+        final_objectives:
+            Detached specialization, BAL-003, and weighted total losses from
+            the final model forward.
+    """
 
     topology: LocalMiniMoETrainingTopology
     global_step: int
     training_loss: float
+    final_objectives: LocalMiniMoEObjectiveReport
 
     def __post_init__(self) -> None:
         """Validate positive progress and finite aggregate loss."""
@@ -201,6 +244,13 @@ class LocalMiniMoETrainingReport:
             or not math.isfinite(self.training_loss)
         ):
             raise ValueError("training_loss must be finite.")
+        if not isinstance(
+            self.final_objectives,
+            LocalMiniMoEObjectiveReport,
+        ):
+            raise TypeError(
+                "final_objectives must be LocalMiniMoEObjectiveReport."
+            )
         object.__setattr__(self, "training_loss", float(self.training_loss))
 
 
@@ -273,6 +323,9 @@ def prepare_local_mini_moe_training(
                     for expert_id in expert_ids
                 },
                 combination_policy=combination,
+                capture_mixture_weights=(
+                    resolved_config.load_balancing_enabled
+                ),
             )
 
         expected_ids = _expected_trainable_parameter_ids(
@@ -327,6 +380,8 @@ class LocalMiniMoETrainer(Trainer):
     Full-model saving, Hub push, model reinitialization, and checkpoint resume
     are rejected. Trained experts and affine heads remain caller-owned and can
     be exported through their existing safetensors package APIs.
+    ``last_objective_report`` exposes detached loss components from the latest
+    forward; a successful ``training_report`` retains the final report.
     """
 
     def __init__(
@@ -373,6 +428,12 @@ class LocalMiniMoETrainer(Trainer):
         self.router_heads = router_heads
         self.topology = topology
         self.training_report: LocalMiniMoETrainingReport | None = None
+        self.last_objective_report: LocalMiniMoEObjectiveReport | None = None
+        self._load_balancing = (
+            AuxiliaryLoadBalancingLoss()
+            if topology.config.load_balancing_enabled
+            else None
+        )
         self._wrappers = wrappers
         self._training_consumed = False
         self._expected_trainable_parameter_ids = frozenset(
@@ -452,10 +513,87 @@ class LocalMiniMoETrainer(Trainer):
                 topology=self.topology,
                 global_step=output.global_step,
                 training_loss=output.training_loss,
+                final_objectives=self._require_objective_report(),
             )
             return output
         finally:
             self._cleanup()
+
+    def compute_loss(
+        self,
+        model: nn.Module,
+        inputs: dict[str, Tensor | Any],
+        return_outputs: bool = False,
+        num_items_in_batch: Tensor | int | None = None,
+    ) -> Tensor | tuple[Tensor, Any]:
+        """Add optional BAL-003 regularization to the ordinary model loss.
+
+        Every enabled routed layer captures the graph-connected COM-001
+        probabilities from exactly this model forward. The objective is
+        evaluated independently per layer and averaged, so changing the
+        converted-layer count does not silently rescale its coefficient.
+        ``attention_mask`` supplies optional token weights and remains in the
+        model input unchanged.
+        """
+
+        if not isinstance(inputs, dict):
+            raise TypeError("inputs must be a dictionary.")
+        for wrapper in self._wrappers.values():
+            wrapper._clear_local_mixture_weights()
+
+        try:
+            specialization_loss, outputs = super().compute_loss(
+                model,
+                inputs,
+                return_outputs=True,
+                num_items_in_batch=num_items_in_batch,
+            )
+            if not isinstance(specialization_loss, Tensor):
+                raise ForcedPathTrainingError(
+                    "The base Trainer loss must be a Tensor."
+                )
+
+            zero = specialization_loss.new_zeros(())
+            load_balancing_loss = zero
+            if self._load_balancing is not None:
+                token_weights = inputs.get("attention_mask")
+                layer_losses = tuple(
+                    self._load_balancing(
+                        wrapper._take_local_mixture_weights(),
+                        token_weights=token_weights,
+                    )
+                    for wrapper in self._wrappers.values()
+                )
+                if not layer_losses:
+                    raise ForcedPathTrainingError(
+                        "BAL-003 requires at least one converted routed layer."
+                    )
+                if not all(loss.requires_grad for loss in layer_losses):
+                    raise ForcedPathTrainingError(
+                        "BAL-003 router probabilities must retain gradients."
+                    )
+                load_balancing_loss = torch.stack(layer_losses).mean()
+
+            total_loss = (
+                specialization_loss
+                + self.topology.config.load_balancing_weight
+                * load_balancing_loss
+            )
+            self.last_objective_report = LocalMiniMoEObjectiveReport(
+                specialization_loss=float(
+                    specialization_loss.detach().float().cpu().item()
+                ),
+                load_balancing_loss=float(
+                    load_balancing_loss.detach().float().cpu().item()
+                ),
+                total_loss=float(total_loss.detach().float().cpu().item()),
+            )
+            return (total_loss, outputs) if return_outputs else total_loss
+        finally:
+            # Also clear after disabled runs and exceptions so no graph can
+            # leak across Trainer steps or outlive cleanup.
+            for wrapper in self._wrappers.values():
+                wrapper._clear_local_mixture_weights()
 
     def save_model(
         self,
@@ -468,6 +606,18 @@ class LocalMiniMoETrainer(Trainer):
             "LocalMiniMoETrainer does not save the immutable anchor; export "
             "the trained experts and router heads explicitly."
         )
+
+    def _require_objective_report(self) -> LocalMiniMoEObjectiveReport:
+        """Return the final finite objective report after a successful run."""
+
+        if not isinstance(
+            self.last_objective_report,
+            LocalMiniMoEObjectiveReport,
+        ):
+            raise ForcedPathTrainingError(
+                "Local mini-MoE training completed without objective metrics."
+            )
+        return self.last_objective_report
 
     def _cleanup(self) -> None:
         """Detach local routes, clear gradients, and freeze owned artifacts."""

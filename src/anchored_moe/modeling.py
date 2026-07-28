@@ -79,6 +79,8 @@ class RoutedMLP(nn.Module):
         self.experts = nn.ModuleList()
         self._dispatcher: AnchoredTop1Dispatcher | None = None
         self._local_combination: ScoreSoftmaxCombination | None = None
+        self._capture_local_mixture_weights = False
+        self._local_mixture_weights: Tensor | None = None
         self._route_telemetry: RouteTelemetry | None = None
 
     @property
@@ -202,6 +204,7 @@ class RoutedMLP(nn.Module):
         router_heads: RouterScoreBank,
         experts: Mapping[str, Expert],
         combination_policy: ScoreSoftmaxCombination,
+        capture_mixture_weights: bool = False,
     ) -> None:
         """Attach the differentiable two-expert TRN-003 training path.
 
@@ -212,8 +215,10 @@ class RoutedMLP(nn.Module):
 
         This method accepts exactly two experts so the selected set is fixed:
         score-softmax remains differentiable without a discrete top-k boundary
-        or a load-balancing objective. General local top-k training is outside
-        the first TRN-003 implementation.
+        or a discrete dispatch boundary. ``capture_mixture_weights`` retains
+        the latest differentiable pair weights for BAL-003's training-only
+        auxiliary objective. General local top-k training remains outside this
+        topology.
         """
 
         if self.routing_mode != "forced_anchor":
@@ -240,6 +245,8 @@ class RoutedMLP(nn.Module):
             raise TypeError(
                 "combination_policy must be ScoreSoftmaxCombination."
             )
+        if not isinstance(capture_mixture_weights, bool):
+            raise TypeError("capture_mixture_weights must be a boolean.")
         if not isinstance(experts, Mapping) or not all(
             isinstance(expert_id, str) and isinstance(expert, Expert)
             for expert_id, expert in experts.items()
@@ -268,8 +275,26 @@ class RoutedMLP(nn.Module):
         self.experts = nn.ModuleList(ordered_experts)
         self._dispatcher = None
         self._local_combination = combination_policy
+        self._capture_local_mixture_weights = capture_mixture_weights
+        self._local_mixture_weights = None
         self._route_telemetry = None
         self.routing_mode = "local_mini_moe"
+
+    def _clear_local_mixture_weights(self) -> None:
+        """Release any BAL-003 observation retained by the latest forward."""
+
+        self._local_mixture_weights = None
+
+    def _take_local_mixture_weights(self) -> Tensor:
+        """Consume the differentiable BAL-003 weights from one model forward."""
+
+        weights = self._local_mixture_weights
+        self._local_mixture_weights = None
+        if not isinstance(weights, Tensor):
+            raise RuntimeError(
+                "The local mini-MoE forward did not capture mixture weights."
+            )
+        return weights
 
     def replace_anchored_top1(
         self,
@@ -316,6 +341,8 @@ class RoutedMLP(nn.Module):
         self.experts = nn.ModuleList()
         self._dispatcher = None
         self._local_combination = None
+        self._capture_local_mixture_weights = False
+        self._local_mixture_weights = None
         self._route_telemetry = None
         self.routing_mode = "forced_anchor"
 
@@ -385,6 +412,8 @@ class RoutedMLP(nn.Module):
         self.experts = nn.ModuleList(ordered_experts)
         self._dispatcher = dispatcher
         self._local_combination = None
+        self._capture_local_mixture_weights = False
+        self._local_mixture_weights = None
         self._route_telemetry = route_telemetry
         self.routing_mode = "anchored_top1"
 
@@ -429,10 +458,16 @@ class RoutedMLP(nn.Module):
             # The inserted axis follows all token axes and precedes the MLP
             # output axis, matching COM-001's pair-shaped tensor contract.
             pair_outputs = torch.stack(selected_outputs, dim=-2)
-            return self._local_combination(
+            combination = self._local_combination(
                 pair_outputs,
                 selected_scores=selected_scores,
-            ).output
+            )
+            if self._capture_local_mixture_weights:
+                # Retain the graph-connected probabilities only until the
+                # trainer consumes them for the same forward. The default
+                # TRN-003 path does not retain this tensor.
+                self._local_mixture_weights = combination.weights
+            return combination.output
 
         if (
             self.layer_index is None
