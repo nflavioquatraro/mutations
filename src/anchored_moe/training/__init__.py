@@ -18,6 +18,14 @@ from anchored_moe.training.independent import (
     IndependentExpertTrainingRun,
     train_independent_expert_set,
 )
+from anchored_moe.training.loss_free import (
+    LOSS_FREE_BIAS_FORMAT_VERSION,
+    LossFreeBiasBalancer,
+    LossFreeBiasBalancingError,
+    LossFreeBiasConfig,
+    LossFreeBiasedScores,
+    LossFreeBiasUpdateReport,
+)
 from anchored_moe.training.mini_moe import (
     LocalMiniMoEExpertBinding,
     LocalMiniMoETrainer,
@@ -49,6 +57,12 @@ __all__ = [
     "IndependentExpertSetTrainingReport",
     "IndependentExpertTrainingReport",
     "IndependentExpertTrainingRun",
+    "LOSS_FREE_BIAS_FORMAT_VERSION",
+    "LossFreeBiasBalancer",
+    "LossFreeBiasBalancingError",
+    "LossFreeBiasConfig",
+    "LossFreeBiasedScores",
+    "LossFreeBiasUpdateReport",
     "LocalMiniMoEExpertBinding",
     "LocalMiniMoEObjectiveReport",
     "LocalMiniMoETrainer",

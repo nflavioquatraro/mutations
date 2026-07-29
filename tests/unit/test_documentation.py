@@ -190,6 +190,12 @@ from anchored_moe.training import (
     IndependentExpertSetTrainingReport,
     IndependentExpertTrainingReport,
     IndependentExpertTrainingRun,
+    LOSS_FREE_BIAS_FORMAT_VERSION,
+    LossFreeBiasBalancer,
+    LossFreeBiasBalancingError,
+    LossFreeBiasConfig,
+    LossFreeBiasedScores,
+    LossFreeBiasUpdateReport,
     LocalMiniMoEExpertBinding,
     LocalMiniMoEObjectiveReport,
     LocalMiniMoETrainer,
@@ -541,6 +547,11 @@ def test_current_public_symbols_have_docstrings() -> None:
         IndependentExpertSetTrainingReport,
         IndependentExpertTrainingReport,
         IndependentExpertTrainingRun,
+        LossFreeBiasBalancer,
+        LossFreeBiasBalancingError,
+        LossFreeBiasConfig,
+        LossFreeBiasedScores,
+        LossFreeBiasUpdateReport,
         LocalMiniMoEExpertBinding,
         LocalMiniMoEObjectiveReport,
         LocalMiniMoETrainer,
@@ -566,5 +577,6 @@ def test_current_public_symbols_have_docstrings() -> None:
     assert EXPERT_PAYLOAD_BINDING_FORMAT_VERSION == 1
     assert BLOCK_SPARSE_DELTA_FORMAT_VERSION == 1
     assert COMPOSITION_FORMAT_VERSION == 1
+    assert LOSS_FREE_BIAS_FORMAT_VERSION == 1
     assert REGISTRY_ROUTER_VERSION_FORMAT_VERSION == 1
     assert all(inspect.getdoc(symbol) for symbol in public_symbols)

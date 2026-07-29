@@ -122,6 +122,9 @@ standalone weighted top-2 strategy primitives:
   router heads, score-softmax activation mixing, exact optimizer isolation,
   optional token-masked auxiliary load balancing, auditable objective reports,
   and success/failure-safe anchor-route restoration;
+- gradient-free specialist selection biases updated from completed-batch
+  sparse loads, with an exact fixed-zero anchor, separate raw combination
+  scores, immutable diagnostics, and strict safetensors persistence (BAL-004);
 - provenance-validated mixture-aware refinement that links a completed
   two-expert independent-training report to joint expert-and-router updates
   through the same local mini-MoE runtime;
@@ -214,6 +217,7 @@ python examples/export_reload_lifecycle.py
 python examples/verify_forced_path_training.py
 python examples/verify_independent_expert_set.py
 python examples/verify_local_mini_moe.py
+python examples/verify_loss_free_bias_balancing.py
 python examples/verify_mixture_aware_refinement.py
 python examples/train_expert_package.py
 python examples/fit_router.py
