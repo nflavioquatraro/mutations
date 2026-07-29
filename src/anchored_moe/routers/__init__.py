@@ -20,6 +20,13 @@ from anchored_moe.routers.logical import (
     LogicalAppendOnlyRouter,
     compile_logical_router,
 )
+from anchored_moe.routers.shortlisting import (
+    PromptCandidateShortlist,
+    PromptShortlistedLogicalRouter,
+    PromptShortlistedScores,
+    PromptShortlistingError,
+    PromptTopMShortlister,
+)
 from anchored_moe.routers.stabilized import (
     HardRouteDistillationConfig,
     LayerRouterDistillationReport,
@@ -48,6 +55,11 @@ __all__ = [
     "IdentityRouterFeatureExtractor",
     "LayerRouterDistillationReport",
     "LogicalAppendOnlyRouter",
+    "PromptCandidateShortlist",
+    "PromptShortlistedLogicalRouter",
+    "PromptShortlistedScores",
+    "PromptShortlistingError",
+    "PromptTopMShortlister",
     "RouterDistillationError",
     "RouterDistillationReport",
     "RouterFeatureExtractor",

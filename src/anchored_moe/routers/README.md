@@ -12,6 +12,9 @@ installed affine columns against aligned anchor-relative utility replay data.
 RTR-005 composes one package-level logical router with one logical local router
 per package and evaluates local scores only for token rows already assigned to
 that package.
+RTR-006 selects a stable prompt-level top-M candidate set from externally
+supplied retrieval scores and evaluates only those logical-router columns for
+each prompt while preserving the full token-policy candidate shape.
 RTR-007 distills the anchored hard assignments of any immutable teacher score
 bank into a deterministic affine student and freezes it for deployment.
 RTR-008 applies an explicit switching margin to adjacent-layer anchored top-1
@@ -33,6 +36,7 @@ capacity, and registry features.
 | RTR-003 | `router_architecture: logical_append_only_columns` | `base.py`, `logical.py` | Validated |
 | RTR-004 | `recalibration: router_only_global` | `calibration/global_recalibration.py` | Validated |
 | RTR-005 | `router_architecture: hierarchical_package_local` | `hierarchical.py` | Validated |
+| RTR-006 | `strategy: prompt_top_m`, `max_candidates` | `shortlisting.py` | Validated |
 | RTR-007 | `strategy: hard_route_distillation` | `stabilized.py` | Validated |
 | RTR-008 | `strategy: cross_layer_top1_stickiness`, `switch_margin` | `stickiness.py` | Validated |
 
@@ -44,6 +48,9 @@ package-head-to-registry-runtime boundary explicit.
 `HierarchicalRouterScoreBank` composes copied `LogicalAppendOnlyRouter`
 instances and returns `HierarchicalLocalScores` groups whose flattened row
 indices make selected-package-only scoring auditable.
+`PromptTopMShortlister` creates detached prompt-level shortlist metadata, and
+`PromptShortlistedLogicalRouter` owns a frozen storage-independent RTR-003
+copy that reconstructs complete candidate-aligned token scores.
 
 ## Mathematical formulation
 
@@ -150,6 +157,39 @@ costs only the \(K_{c_t}\) columns belonging to the selected package. Anchor
 rows belong to no \(I_{\ell,p}\) and execute no local router. RTR-005 returns
 strictly increasing flattened row indices with every \(L_{\ell,p}\), so the
 policy can reconstruct the original token-leading shape exactly.
+
+For RTR-006, an external retriever supplies finite prompt-level evidence
+
+\[
+\Pi(x)\in\mathbb{R}^{B\times K}.
+\]
+
+Stable descending ranking selects
+
+\[
+C_b(x)=\operatorname{TopM}_k\Pi_{b,k}(x),
+\qquad
+M'=\min(M,K).
+\]
+
+For token position \(t\), RTR-006 evaluates an RTR-003 affine column only when
+\(k\in C_b(x)\), then reconstructs
+
+\[
+\widetilde g_{\ell,b,t,k}
+=
+\begin{cases}
+g_{\ell,k}(h_{\ell,b,t}), & k\in C_b(x),\\
+f_{\min}, & k\notin C_b(x),
+\end{cases}
+\]
+
+where \(f_{\min}=\operatorname{finfo}(\mathrm{dtype}).\mathrm{min}<0\).
+The mask is finite so existing policies retain their finite-score validation,
+and it is below the permanent anchor score \(g_{\ell,0}=0\). The returned
+shape remains \(B\times S\times K\), while prompt-column evaluations fall from
+\(BK\) to \(BM'\). A retrieval miss therefore falls back to the anchor unless
+another shortlisted specialist has positive token evidence.
 
 RTR-004 uses the fixed-zero anchor during offline fitting. For replay utility
 matrix \(A_\ell\), it selects the anchor-first best-route class from
@@ -298,6 +338,23 @@ Hierarchical package/local scoring:
 6. Score only the matching local router and return finite scores plus strictly
    increasing flattened row indices.
 
+Prompt-level candidate shortlisting:
+
+1. Require finite external retrieval scores with shape `(B, K)` and exact
+   candidate-ID alignment.
+2. Select `min(max_candidates, K)` candidates per prompt using stable
+   descending ranking, so exact ties retain registry order.
+3. Detach and copy the selected indices and retrieval scores into immutable
+   audit metadata.
+4. Copy the source RTR-003 router into a buffer-only deployment wrapper with
+   no source-storage aliases.
+5. For each layer-local column, gather only prompt rows whose shortlist
+   contains that candidate and evaluate only those features.
+6. Reconstruct the complete token-leading candidate tensor with the finite
+   below-anchor mask for every unselected prompt-column pair.
+7. Pass the result to an existing anchored token policy without changing that
+   policy or the dispatch interface.
+
 Global recalibration:
 
 1. Convert a frozen logical router to storage-independent affine heads.
@@ -378,6 +435,19 @@ Cross-layer top-1 stickiness:
   one package-local score bank.
 - RTR-005 does not choose packages or experts, compare local scores with the
   anchor, execute experts, or persist a new hierarchy artifact.
+- RTR-006 requires the shortlist candidate IDs to exactly equal the target
+  layer's expert order; registry drift is rejected rather than realigned.
+- Prompt retrieval scores are external, detached, and never optimized by
+  RTR-006. Negative retrieval evidence may still enter the bounded shortlist.
+- Prompt dimension zero aligns with feature dimension zero. Token-leading
+  dimensions are otherwise arbitrary and remain unchanged.
+- Unselected columns are never evaluated for their prompt rows and always
+  contain the finite dtype minimum, which cannot defeat the zero anchor.
+- The shortlisted wrapper copies its RTR-003 source, owns no trainable
+  parameters, and preserves feature gradients through evaluated columns.
+- RTR-006 chooses candidates once per supplied prompt batch; it owns no hidden
+  request state and does not automatically reuse a shortlist during
+  autoregressive generation.
 - Hard-route distillation never changes the teacher, feature bank, anchor,
   experts, or model.
 - The teacher must be frozen, in evaluation mode, on CPU, and produce finite
@@ -438,6 +508,11 @@ standalone registry-specific version; it does not change the package format.
 logical banks. Package and local affine heads retain their existing
 safetensors formats; callers rebuild the hierarchy explicitly after package
 and registry validation.
+`prompt_shortlisted_logical_columns` is also an in-memory wrapper. It accepts
+external prompt retrieval scores and token features but introduces no package
+payload, retriever format, hidden generation cache, or model configuration.
+The result's full expert dimension is directly consumable by existing
+selection policies and standalone dispatchers.
 RTR-007 returns the same `LogicalAppendOnlyRouter` runtime contract, so
 `RoutedMLP` needs no distillation-specific dispatch path. This initial slice
 does not add a report-bearing persistence format or automatic activation.
@@ -457,6 +532,8 @@ from anchored_moe import (
     HardRouteDistillationConfig,
     IdentityRouterFeatureExtractor,
     HierarchicalRouterScoreBank,
+    PromptShortlistedLogicalRouter,
+    PromptTopMShortlister,
     compile_logical_router,
     distill_frozen_router,
     recalibrate_global_router,
@@ -513,6 +590,16 @@ hierarchical = HierarchicalRouterScoreBank(
     },
 )
 package_scores = hierarchical.score_packages(features, layer_index=18)
+
+shortlist = PromptTopMShortlister(max_candidates=4)(
+    prompt_retrieval_scores,
+    candidate_ids=logical_router.expert_ids_for_layer(18),
+)
+shortlisted_scores = PromptShortlistedLogicalRouter(logical_router)(
+    features,
+    shortlist=shortlist,
+    layer_index=18,
+)
 ```
 
 See `examples/verify_affine_router.py` for RTR-002 deterministic scoring,
@@ -529,6 +616,9 @@ adjacent-layer sequencing, margin retention, auditable switching, and
 buffer-only logical-router immutability.
 See `examples/verify_hierarchical_routing.py` for RTR-005 package scoring,
 selected-row local scoring, exact anchor omission, and POL-004 reconstruction.
+See `examples/verify_prompt_shortlisting.py` for RTR-006 stable top-M
+retrieval, selected-prompt-only affine scoring, full masked reconstruction,
+and unchanged anchored top-1 fallback.
 
 `AnchoredMoEConfig` continues to reject non-anchor selection policies. INF-001
 allows router objects to be attached explicitly to one `RoutedMLP`; package
@@ -558,6 +648,10 @@ anchored classification objective.
 RTR-005 is also framework infrastructure. It composes the blueprint's
 two-stage hierarchy from existing affine banks without adopting a separate
 paper-derived fitting algorithm.
+RTR-006 is framework infrastructure implementing the blueprint's explicit
+prompt-shortlisted routing boundary. The external retrieval scores are treated
+as inputs, so this initial slice adds no paper-derived retrieval or fitting
+algorithm.
 RTR-007 adopts StableMoE's two-stage distill-then-freeze principle. It differs
 by distilling fixed-zero-anchor assignments from an arbitrary immutable
 composed teacher over offline CAL-001 features. It does not reproduce the
@@ -585,8 +679,11 @@ retention, current-score gradients, cross-layer expert-ID realignment,
 absent-expert fallback, explicit sequence boundaries, stateless repeated
 calls, audit masks, rectangular hierarchical topology, source-storage
 independence, package/local identity validation, selected-row-only local
-scoring, anchor-row omission, and `RoutedMLP` plus package-synchronization
-integration.
+scoring, anchor-row omission, stable prompt top-M ties, empty and undersized
+candidate sets, detached shortlist metadata, selected-prompt-only logical
+scoring, finite mask reconstruction, exact expert-order validation, source
+storage independence, feature gradients, anchored fallback, and `RoutedMLP`
+plus package-synchronization integration.
 
 The current router implementation has no learned projection or head removal.
 RTR-003 uses shape-stable per-column affine evaluation to guarantee exact
@@ -611,8 +708,13 @@ implemented.
 RTR-005 currently requires rectangular layer coverage and at least two local
 experts per package. Ragged package topologies, package-local router
 serialization as one artifact, automatic construction from registry
-manifests, distributed package routing, and prompt-level shortlisting remain
-separate work.
+manifests, and distributed package routing remain separate work.
+RTR-006 consumes precomputed retrieval scores and requires one rectangular
+candidate order across the scored layer. Learned prompt encoders, retrieval
+training, package-level expansion into local experts, variable-width/ragged
+shortlists, shortlist serialization, automatic generation-time reuse,
+expert-weight memory paging, registry/model attachment, and product-key
+retrieval remain separate work.
 Standalone anchor comparison and top-1 selection are implemented by POL-001;
 INF-001 explicitly attaches them for routed-layer dispatch,
 PKG-007 validates serialized router ownership against expert payload bindings,

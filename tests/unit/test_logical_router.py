@@ -169,6 +169,38 @@ def test_logical_router_moves_buffers_and_preserves_feature_gradients() -> None:
     assert all(value.dtype == torch.float64 for value in logical.buffers())
 
 
+def test_logical_router_scores_only_requested_candidate_columns() -> None:
+    logical = compile_logical_router(_independent_bank())
+    features = torch.randn(2, 3)
+    complete = logical(features, layer_index=2)
+
+    selected = logical.score_candidates(
+        features,
+        candidate_indices=(1, 0),
+        layer_index=2,
+    )
+    empty = logical.score_candidates(
+        features,
+        candidate_indices=(),
+        layer_index=2,
+    )
+
+    assert torch.equal(selected, complete[:, [1, 0]])
+    assert empty.shape == (2, 0)
+    with pytest.raises(ValueError, match="duplicates"):
+        logical.score_candidates(
+            features,
+            candidate_indices=(0, 0),
+            layer_index=2,
+        )
+    with pytest.raises(ValueError, match="must be in"):
+        logical.score_candidates(
+            features,
+            candidate_indices=(2,),
+            layer_index=2,
+        )
+
+
 def test_logical_router_rejects_invalid_heads_features_and_layers() -> None:
     logical = LogicalAppendOnlyRouter(3)
     head = _head(

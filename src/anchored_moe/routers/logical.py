@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
@@ -45,8 +47,21 @@ class _FrozenAffineColumns(nn.Module):
         operations while retaining one logical matrix as registered state.
         """
 
+        return self.score_candidates(
+            features,
+            candidate_indices=range(self.weight.shape[0]),
+        )
+
+    def score_candidates(
+        self,
+        features: Tensor,
+        *,
+        candidate_indices: Sequence[int],
+    ) -> Tensor:
+        """Score only requested rows while preserving their supplied order."""
+
         calibrated_columns = []
-        for index in range(self.weight.shape[0]):
+        for index in candidate_indices:
             raw_score = F.linear(
                 features,
                 self.weight[index : index + 1],
@@ -55,6 +70,8 @@ class _FrozenAffineColumns(nn.Module):
             calibrated_columns.append(
                 raw_score / self.temperature[index] - self.threshold[index]
             )
+        if not calibrated_columns:
+            return features.new_empty(features.shape[:-1] + (0,))
         return torch.stack(calibrated_columns, dim=-1)
 
 
@@ -258,6 +275,42 @@ class LogicalAppendOnlyRouter(RouterScoreBank):
             LookupError: If no columns are compiled for the requested layer.
         """
 
+        layer = self._validated_layer(features, layer_index=layer_index)
+        return layer(features)
+
+    def score_candidates(
+        self,
+        features: Tensor,
+        *,
+        candidate_indices: Sequence[int],
+        layer_index: int,
+    ) -> Tensor:
+        """Score only selected layer-local columns in caller-supplied order.
+
+        This compact scoring primitive supports RTR-006 prompt shortlisting.
+        It deliberately returns only the requested columns; the shortlisting
+        wrapper reconstructs the complete candidate-aligned tensor needed by
+        existing selection policies.
+        """
+
+        layer = self._validated_layer(features, layer_index=layer_index)
+        normalized_indices = _normalize_candidate_indices(
+            candidate_indices,
+            candidate_count=layer.weight.shape[0],
+        )
+        return layer.score_candidates(
+            features,
+            candidate_indices=normalized_indices,
+        )
+
+    def _validated_layer(
+        self,
+        features: Tensor,
+        *,
+        layer_index: int,
+    ) -> _FrozenAffineColumns:
+        """Return one compatible compiled layer after shared validation."""
+
         _validate_features(features, feature_size=self.feature_size)
         normalized_layer = _validate_layer_index(layer_index)
         layer_key = str(normalized_layer)
@@ -277,7 +330,7 @@ class LogicalAppendOnlyRouter(RouterScoreBank):
                 "features device does not match the logical router: "
                 f"{features.device} != {layer.weight.device}."
             )
-        return layer(features)
+        return layer
 
     def extra_repr(self) -> str:
         """Describe feature width, compiled column count, and layer count."""
@@ -350,3 +403,35 @@ def _validate_layer_index(layer_index: int) -> int:
     if layer_index < 0:
         raise ValueError("layer_index must be non-negative.")
     return layer_index
+
+
+def _normalize_candidate_indices(
+    candidate_indices: Sequence[int],
+    *,
+    candidate_count: int,
+) -> tuple[int, ...]:
+    """Return unique in-range candidate indices without changing order."""
+
+    if isinstance(candidate_indices, (str, bytes)) or not isinstance(
+        candidate_indices,
+        Sequence,
+    ):
+        raise TypeError("candidate_indices must be a sequence of integers.")
+    normalized: list[int] = []
+    seen: set[int] = set()
+    for candidate_index in candidate_indices:
+        if isinstance(candidate_index, bool) or not isinstance(
+            candidate_index,
+            int,
+        ):
+            raise TypeError("candidate_indices must contain only integers.")
+        if candidate_index < 0 or candidate_index >= candidate_count:
+            raise ValueError(
+                "candidate_indices entries must be in "
+                f"[0, {candidate_count})."
+            )
+        if candidate_index in seen:
+            raise ValueError("candidate_indices must not contain duplicates.")
+        seen.add(candidate_index)
+        normalized.append(candidate_index)
+    return tuple(normalized)

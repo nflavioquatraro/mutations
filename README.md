@@ -27,6 +27,9 @@ standalone weighted top-2 strategy primitives:
   strict, deterministic safetensors serialization;
 - a frozen registry-level logical router that compiles independent heads into
   layer-local append-only matrices while preserving incumbent scores exactly;
+- deterministic prompt-level top-M shortlisting from external retrieval
+  scores, with selected-prompt-only logical column evaluation, complete
+  candidate-aligned masked scores, and unchanged anchored token policies;
 - frozen hierarchical package/local routing with a fixed-zero package gate,
   selected-package-only local scoring, unconditional stable local top-2, and
   dispatch-compatible routes that cannot mix experts across packages;
@@ -152,9 +155,10 @@ activation during registry changes remain separate tracked features.
 Teacher-score distribution distillation, top-2/adaptive distillation,
 top-2/adaptive or autoregressive route hysteresis, arbitrary-\(k\)
 capacity/combination/dispatch, automatic model-level sticky-route propagation,
-frozen-route expert training, ragged hierarchical topologies, prompt-level
-shortlisting, and configuration-driven hierarchical model attachment also
-remain separate work.
+frozen-route expert training, ragged hierarchical topologies, prompt-retriever
+training, automatic shortlist propagation through generation, and
+configuration-driven hierarchical or shortlisted model attachment also remain
+separate work.
 
 ## Development setup
 
