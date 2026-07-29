@@ -10,6 +10,7 @@ import torch
 from torch import Tensor, nn
 
 from anchored_moe.experts.base import AnchorRelativeExpert
+from anchored_moe.experts.low_rank import PEFTLoRAExpert
 from anchored_moe.policies.capacity import (
     AdaptiveToAnchorCapacity,
     CapacityDecision,
@@ -31,6 +32,7 @@ from anchored_moe.policies.selection import (
     Top2SelectionPolicy,
     Top2RouteDecision,
 )
+from anchored_moe.policies.parameter_merging import LoRAParameterSpaceMerge
 
 
 @dataclass(frozen=True)
@@ -217,6 +219,82 @@ class AnchorDeltaDispatchResult:
             raise ValueError("output and delta_weights must share one dtype.")
         if self.output.device != self.delta_weights.device:
             raise ValueError("output and delta_weights must share one device.")
+
+
+@dataclass(frozen=True)
+class ParameterMergeDispatchResult:
+    """Output and route metadata from COM-005 LoRA parameter merging.
+
+    ``merge_weights`` has the capacity pair shape. Anchor rows contain
+    ``[0, 0]``, degraded top-1 rows contain ``[1, 0]``, and top-2 rows contain
+    the exact frozen COM-003 coefficients applied in selected expert order.
+    """
+
+    output: Tensor
+    selected_routes: Top2RouteDecision
+    capacity: Top2CapacityDecision
+    merge_weights: Tensor
+
+    def __post_init__(self) -> None:
+        """Validate output, selection, capacity, and coefficient alignment."""
+
+        if not isinstance(self.output, Tensor) or not self.output.is_floating_point():
+            raise TypeError("output must be a floating-point torch.Tensor.")
+        if not isinstance(self.selected_routes, Top2RouteDecision):
+            raise TypeError("selected_routes must be a Top2RouteDecision.")
+        if not isinstance(self.capacity, Top2CapacityDecision):
+            raise TypeError("capacity must be a Top2CapacityDecision.")
+        if self.capacity.expert_ids != self.selected_routes.expert_ids:
+            raise ValueError("Selected and effective routes must share expert_ids.")
+        token_shape = self.capacity.route_arity.shape
+        if not isinstance(self.merge_weights, Tensor):
+            raise TypeError("merge_weights must be a torch.Tensor.")
+        if self.merge_weights.shape != token_shape + (2,):
+            raise ValueError("merge_weights must have the capacity pair shape.")
+        if self.output.shape[: len(token_shape)] != token_shape:
+            raise ValueError("output must preserve the capacity token shape.")
+        if (
+            self.output.dtype != self.merge_weights.dtype
+            or self.output.device != self.merge_weights.device
+        ):
+            raise ValueError(
+                "output and merge_weights must share one dtype and device."
+            )
+        if (
+            not self.merge_weights.is_floating_point()
+            or not torch.isfinite(self.merge_weights).all().item()
+            or torch.any(self.merge_weights < 0).item()
+        ):
+            raise ValueError(
+                "merge_weights must be finite non-negative floating-point values."
+            )
+        flat_arity = self.capacity.route_arity.reshape(-1)
+        flat_weights = self.merge_weights.reshape(-1, 2)
+        if not torch.equal(
+            flat_weights[flat_arity == 0],
+            torch.zeros_like(flat_weights[flat_arity == 0]),
+        ):
+            raise ValueError("Anchor rows must have merge weights [0, 0].")
+        if (flat_arity == 1).any().item():
+            expected_top1 = flat_weights.new_tensor([1.0, 0.0]).expand(
+                int((flat_arity == 1).sum().item()),
+                2,
+            )
+            if not torch.equal(flat_weights[flat_arity == 1], expected_top1):
+                raise ValueError("Top-1 rows must have merge weights [1, 0].")
+        if (flat_arity == 2).any().item():
+            sums = flat_weights[flat_arity == 2].sum(dim=-1)
+            tolerance = max(
+                1e-6,
+                8 * torch.finfo(self.merge_weights.dtype).eps,
+            )
+            if not torch.allclose(
+                sums,
+                torch.ones_like(sums),
+                rtol=0.0,
+                atol=tolerance,
+            ):
+                raise ValueError("Top-2 merge weights must sum to one.")
 
 
 class AnchoredTop1Dispatcher:
@@ -805,6 +883,256 @@ class AnchoredTop2Dispatcher:
             expert_availability=expert_availability,
             module_args=module_args,
             module_kwargs=module_kwargs,
+        )
+
+
+class AnchoredLoRAParameterMergeDispatcher:
+    r"""Select two LoRA experts and execute their merged effective parameters.
+
+    The dispatcher composes an existing pair selector and BAL-002 capacity
+    policy with COM-005. It supports exactly two installed PEFT/LoRA experts:
+
+    - anchor routes execute the live anchor directly;
+    - degraded top-1 routes use one unit-weight effective LoRA delta;
+    - top-2 routes use frozen COM-003 coefficients in selected order.
+
+    The selected expert modules are never called. Instead,
+    :class:`LoRAParameterSpaceMerge` applies their effective projection deltas
+    to the live anchor through a correctness-first per-token functional
+    execution. No token is dropped and no registered parameter is mutated.
+    """
+
+    def __init__(
+        self,
+        *,
+        merge_policy: LoRAParameterSpaceMerge,
+        selection_policy: Top2SelectionPolicy | None = None,
+        capacity_policy: Top2ToTop1Capacity | None = None,
+    ) -> None:
+        """Create the pair-only COM-005 inference runtime."""
+
+        if not isinstance(merge_policy, LoRAParameterSpaceMerge):
+            raise TypeError("merge_policy must be LoRAParameterSpaceMerge.")
+        self.merge_policy = merge_policy
+        self.selection_policy = selection_policy or AnchorVetoTop2Selection()
+        self.capacity_policy = capacity_policy or Top2ToTop1Capacity()
+        if not isinstance(self.selection_policy, Top2SelectionPolicy):
+            raise TypeError(
+                "selection_policy must implement Top2SelectionPolicy."
+            )
+        if not isinstance(self.capacity_policy, Top2ToTop1Capacity):
+            raise TypeError("capacity_policy must be Top2ToTop1Capacity.")
+
+    def dispatch(
+        self,
+        hidden_states: Tensor,
+        *,
+        expert_scores: Tensor,
+        expert_ids: Sequence[str],
+        anchor_mlp: nn.Module,
+        experts: Sequence[PEFTLoRAExpert],
+        expert_availability: Tensor | None = None,
+        module_args: Sequence[Any] = (),
+        module_kwargs: dict[str, Any] | None = None,
+    ) -> ParameterMergeDispatchResult:
+        """Select, capacity-check, merge effective deltas, and reconstruct."""
+
+        _validate_dispatch_inputs(
+            hidden_states=hidden_states,
+            expert_scores=expert_scores,
+            expert_ids=expert_ids,
+            anchor_mlp=anchor_mlp,
+            experts=experts,
+            module_args=module_args,
+            module_kwargs=module_kwargs,
+        )
+        normalized_ids = tuple(expert_ids)
+        normalized_experts = tuple(experts)
+        if len(normalized_experts) != 2:
+            raise ValueError(
+                "COM-005 routed execution requires exactly two experts."
+            )
+        if not all(
+            isinstance(expert, PEFTLoRAExpert)
+            for expert in normalized_experts
+        ):
+            raise TypeError(
+                "COM-005 routed execution requires PEFTLoRAExpert objects."
+            )
+        if expert_scores.dtype != hidden_states.dtype:
+            raise ValueError(
+                "expert_scores and hidden_states must share one dtype."
+            )
+        self.merge_policy.validate_compatibility(
+            anchor_mlp,
+            normalized_experts,
+        )
+
+        selected_routes = self.selection_policy(
+            expert_scores,
+            expert_ids=normalized_ids,
+        )
+        _validate_top2_selection_result(
+            selected_routes,
+            expert_scores=expert_scores,
+            expert_ids=normalized_ids,
+        )
+        capacity = self.capacity_policy(
+            selected_routes,
+            expert_availability=expert_availability,
+        )
+        _validate_top2_capacity_result(capacity, selected_routes)
+
+        token_shape = selected_routes.selected_indices.shape[:-1]
+        token_count = capacity.route_arity.numel()
+        if token_count == 0:
+            raise ValueError("Cannot dispatch an input with zero tokens.")
+        flat_hidden = hidden_states.reshape(token_count, hidden_states.shape[-1])
+        flat_effective = capacity.effective_indices.reshape(token_count, 2)
+        flat_scores = capacity.effective_scores.reshape(token_count, 2)
+        flat_arity = capacity.route_arity.reshape(token_count)
+        forwarded_kwargs = {} if module_kwargs is None else dict(module_kwargs)
+
+        executed: list[tuple[Tensor, Tensor]] = []
+        flat_merge_weights = expert_scores.new_zeros((token_count, 2))
+        output_tail: tuple[int, ...] | None = None
+        output_dtype: torch.dtype | None = None
+        output_device: torch.device | None = None
+
+        top2_groups: list[tuple[Tensor, tuple[int, int], Tensor]] = []
+        for first_index, second_index in ((1, 2), (2, 1)):
+            top2_indices = torch.nonzero(
+                (flat_arity == 2)
+                & (flat_effective[:, 0] == first_index)
+                & (flat_effective[:, 1] == second_index),
+                as_tuple=False,
+            ).flatten()
+            if top2_indices.numel():
+                approved_scores = torch.index_select(
+                    flat_scores,
+                    0,
+                    top2_indices,
+                )
+                # Validate frozen-head dtype/device and numerical behavior
+                # before the first anchor or merged candidate executes.
+                pair_weights = self.merge_policy.pair_weights(approved_scores)
+                top2_groups.append(
+                    (
+                        top2_indices,
+                        (first_index, second_index),
+                        pair_weights,
+                    )
+                )
+
+        anchor_indices = torch.nonzero(flat_arity == 0, as_tuple=False).flatten()
+        if anchor_indices.numel():
+            anchor_output = anchor_mlp(
+                torch.index_select(flat_hidden, 0, anchor_indices),
+                *module_args,
+                **forwarded_kwargs,
+            )
+            output_tail, output_dtype, output_device = _validate_candidate_output(
+                anchor_output,
+                expected_tokens=anchor_indices.numel(),
+                expected_tail=output_tail,
+                expected_dtype=output_dtype,
+                expected_device=output_device,
+            )
+            executed.append((anchor_indices, anchor_output))
+
+        for candidate_index, expert in enumerate(normalized_experts, start=1):
+            top1_indices = torch.nonzero(
+                (flat_arity == 1) & (flat_effective[:, 0] == candidate_index),
+                as_tuple=False,
+            ).flatten()
+            if not top1_indices.numel():
+                continue
+            top1_weights = expert_scores.new_ones((top1_indices.numel(), 1))
+            merged = self.merge_policy.merge(
+                torch.index_select(flat_hidden, 0, top1_indices),
+                anchor_mlp=anchor_mlp,
+                experts=(expert,),
+                weights=top1_weights,
+                module_args=module_args,
+                module_kwargs=forwarded_kwargs,
+            )
+            output_tail, output_dtype, output_device = _validate_candidate_output(
+                merged.output,
+                expected_tokens=top1_indices.numel(),
+                expected_tail=output_tail,
+                expected_dtype=output_dtype,
+                expected_device=output_device,
+            )
+            executed.append((top1_indices, merged.output))
+            full_top1_weights = expert_scores.new_tensor([1.0, 0.0]).expand(
+                top1_indices.numel(),
+                2,
+            )
+            flat_merge_weights = torch.index_copy(
+                flat_merge_weights,
+                0,
+                top1_indices,
+                full_top1_weights,
+            )
+
+        for top2_indices, selected_pair, pair_weights in top2_groups:
+            first_index, second_index = selected_pair
+            merged = self.merge_policy.merge(
+                torch.index_select(flat_hidden, 0, top2_indices),
+                anchor_mlp=anchor_mlp,
+                experts=(
+                    normalized_experts[first_index - 1],
+                    normalized_experts[second_index - 1],
+                ),
+                weights=pair_weights,
+                module_args=module_args,
+                module_kwargs=forwarded_kwargs,
+            )
+            output_tail, output_dtype, output_device = _validate_candidate_output(
+                merged.output,
+                expected_tokens=top2_indices.numel(),
+                expected_tail=output_tail,
+                expected_dtype=output_dtype,
+                expected_device=output_device,
+            )
+            executed.append((top2_indices, merged.output))
+            flat_merge_weights = torch.index_copy(
+                flat_merge_weights,
+                0,
+                top2_indices,
+                pair_weights,
+            )
+
+        executed_token_count = sum(int(indices.numel()) for indices, _ in executed)
+        if executed_token_count != token_count:
+            raise RuntimeError(
+                "Capacity-approved parameter-merge routes were not completely "
+                "executed."
+            )
+        if output_tail is None or output_dtype is None or output_device is None:
+            raise RuntimeError("COM-005 execution produced no candidate output.")
+        if output_dtype != expert_scores.dtype or output_device != expert_scores.device:
+            raise ValueError(
+                "Merged outputs and router scores must share dtype and device."
+            )
+
+        flat_output = torch.empty(
+            (token_count, *output_tail),
+            dtype=output_dtype,
+            device=output_device,
+        )
+        for token_indices, candidate_output in executed:
+            flat_output = torch.index_copy(
+                flat_output,
+                0,
+                token_indices,
+                candidate_output,
+            )
+        return ParameterMergeDispatchResult(
+            output=flat_output.reshape(*token_shape, *output_tail),
+            selected_routes=selected_routes,
+            capacity=capacity,
+            merge_weights=flat_merge_weights.reshape(*token_shape, 2),
         )
 
 

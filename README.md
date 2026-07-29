@@ -60,6 +60,9 @@ standalone weighted top-2 strategy primitives:
   and deterministic mixture-threshold behavior;
 - explicit always-on-anchor execution with sparse top-1 or adaptive top-2
   PEFT/LoRA deltas, exact dense fallback, and capacity-aware degradation;
+- correctness-first pairwise parameter-space merging of effective PEFT/LoRA
+  projection deltas with frozen learned weights, exact zero-update fallback,
+  and explicit Qwen3 routed-layer execution (COM-005);
 - confidence-gated dynamic-\(k\) selection with stable specialist ranking,
   explicit per-token compute bounds, and auditable variable route arity;
 - immutable package-declared expert compatibility groups and deterministic
@@ -187,6 +190,7 @@ python examples/verify_full_mlp_expert.py
 python examples/verify_lora_expert.py
 python examples/verify_block_sparse_expert.py
 python examples/verify_always_on_anchor_deltas.py
+python examples/verify_parameter_space_merge.py
 python examples/verify_affine_router.py
 python examples/verify_logical_router.py
 python examples/verify_hierarchical_routing.py

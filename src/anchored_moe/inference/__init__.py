@@ -6,12 +6,14 @@ from anchored_moe.inference.composition import (
     synchronize_anchored_top1_registry,
 )
 from anchored_moe.inference.dispatch import (
+    AnchoredLoRAParameterMergeDispatcher,
     AlwaysOnAnchorDeltaDispatcher,
     AnchorDeltaDispatchResult,
     AnchoredTop1Dispatcher,
     AnchoredTop2Dispatcher,
     Top1DispatchResult,
     Top2DispatchResult,
+    ParameterMergeDispatchResult,
 )
 from anchored_moe.inference.telemetry import (
     RouteRecord,
@@ -21,10 +23,12 @@ from anchored_moe.inference.telemetry import (
 
 __all__ = [
     "AlwaysOnAnchorDeltaDispatcher",
+    "AnchoredLoRAParameterMergeDispatcher",
     "AnchorDeltaDispatchResult",
     "AnchoredTop1Dispatcher",
     "AnchoredTop2Dispatcher",
     "PackageMaterializationError",
+    "ParameterMergeDispatchResult",
     "RegistryCompositionReport",
     "RouteRecord",
     "RouteSummary",

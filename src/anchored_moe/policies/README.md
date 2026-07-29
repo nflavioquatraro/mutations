@@ -15,7 +15,9 @@ combines an approved specialist pair with score-softmax weights, COM-002
 supplies equal-weight and normalized-positive-evidence baselines, and COM-003
 uses a separately fitted frozen affine head to produce mixture weights without
 changing pair selection. COM-004 keeps the dense anchor active and adds zero,
-one, or two selected anchor-relative expert deltas. BAL-001 rewrites
+one, or two selected anchor-relative expert deltas. COM-005 instead merges
+one or two selected PEFT/LoRA experts' effective projection parameters before
+one logical MLP execution. BAL-001 rewrites
 unavailable top-1 experts to the anchor. BAL-002 consumes an approved top-2
 pair and degrades it deterministically to its available survivor or the
 anchor; the same availability semantics apply to adaptive COM-004 routes.
@@ -41,6 +43,7 @@ evaluation features.
 | COM-002 | `combination.policy: normalized_positive_evidence` | `combination.py` | Validated |
 | COM-003 | `combination.policy: learned_mixture_weight` | `learned_combination.py` | Validated |
 | COM-004 | `combination.policy: always_on_anchor_deltas` | `combination.py` | Validated |
+| COM-005 | `combination.policy: parameter_space_lora_merge` | `parameter_merging.py` | Validated |
 | BAL-001 | `capacity.overflow: anchor` | `capacity.py` | Validated |
 | BAL-002 | `capacity.degradation: top2_to_top1` | `capacity.py` | Validated |
 
@@ -86,6 +89,10 @@ through the same result contract. The head's standalone safetensors artifact
 contains only finite coefficients and strict format metadata.
 `AlwaysOnAnchorDeltaCombination` consumes one complete anchor activation plus
 pair-shaped delta slots and returns `AnchorDeltaCombinationResult`.
+`LoRAParameterSpaceMerge` consumes one or two compatible
+`PEFTLoRAExpert` objects plus normalized per-token coefficients and returns
+`ParameterSpaceMergeResult`. Unlike `CombinationPolicy`, it combines
+parameters before execution rather than consuming already executed outputs.
 
 ## Mathematical formulation
 
@@ -365,6 +372,20 @@ Top-2 delta weights use score softmax; a top-1 survivor uses \([1,0]\), and an
 anchor route uses \([0,0]\). Anchor routes select the original anchor
 activation rather than relying on addition with zero.
 
+For COM-005, LoRA expert \(k\) contributes the effective projection update
+\(\Delta W_k=s_kB_kA_k\). For a capacity-approved ordered pair \(i,j\), the
+frozen COM-003 head supplies \(\alpha_t\) and the reference executor uses
+
+\[
+W_t=W+\alpha_{t,i}\Delta W_i+\alpha_{t,j}\Delta W_j.
+\]
+
+Every targeted projection in the nonlinear MLP receives its corresponding
+token-dependent \(W_t\) before the MLP executes. The implementation never
+interpolates \(A\) and \(B\) separately, because doing so introduces unwanted
+cross terms. Parameter-space merging is intentionally not assumed equal to
+COM-003 activation-space interpolation.
+
 For selected route \(r_t\) and availability
 \(C_{t,k}\in\{\mathrm{false},\mathrm{true}\}\), BAL-001 computes
 
@@ -521,6 +542,19 @@ Always-on anchor-delta combination:
 6. Add the weighted deltas to the anchor for active routes.
 7. Select the unchanged anchor activation for arity-zero routes.
 
+Parameter-space LoRA merging:
+
+1. Require one or two selected `PEFTLoRAExpert` objects.
+2. Resolve every effective LoRA update \(sBA\) in canonical module-name order.
+3. Require identical resolved projection topology and byte-equal private/live
+   anchor weights and biases.
+4. Use unit weight for a capacity-degraded top-1 route or the frozen COM-003
+   head for an ordered top-2 score pair.
+5. Construct live-anchor projection overrides independently for each token.
+6. Execute the live anchor with `torch.func.functional_call`; never mutate
+   registered parameters.
+7. Return exact applied weights and projection names with the merged output.
+
 Capacity fallback:
 
 1. Treat omitted availability as all experts available.
@@ -611,6 +645,15 @@ Top-2 capacity degradation:
 - COM-004 anchor rows return the already-computed dense activation exactly.
 - COM-004 top-1 weights are \([1,0]\); top-2 weights are non-negative and sum
   to one; inactive delta slots must be exactly zero.
+- COM-005 accepts only one or two selected PEFT/LoRA experts over matching
+  floating-point `torch.nn.Linear` projections.
+- COM-005 validates every selected expert's private base exactly against the
+  live anchor before execution.
+- COM-005 merges graph-connected effective \(sBA\) matrices, not LoRA factors.
+- COM-005 uses a frozen COM-003 head only for top-2 routes; a degraded top-1
+  route receives unit weight and an anchor route receives no merge.
+- A globally zero adapter set returns exact batched-anchor values while a
+  straight-through functional graph preserves LoRA and hidden-state gradients.
 - Adaptive availability fallback never activates an unrequested specialist,
   never searches beyond the retained pair, and returns to the anchor when no
   requested expert is available.
@@ -637,6 +680,8 @@ The policies operate on ordinary PyTorch tensors and do not depend on a
 specific Transformers model family. INF-001 integrates top-1 with `RoutedMLP`
 after `configure_anchored_top1()`, while COM-004 integrates adaptive or top-1
 delta execution after `configure_always_on_anchor_deltas()`.
+COM-005 integrates a pair-only Qwen3-compatible reference runtime through
+`RoutedMLP.configure_parameter_space_lora_merge()`.
 
 `AnchoredMoEConfig` continues to reject
 `selection.policy: anchored_top1`, `selection.policy: anchor_veto_top2`,
@@ -671,6 +716,7 @@ from anchored_moe import (
     EqualWeightCombination,
     HierarchicalPackageTop1LocalTop2Selection,
     LearnedMixtureWeightCombination,
+    LoRAParameterSpaceMerge,
     MixtureCompatibilityIndex,
     NormalizedPositiveEvidenceCombination,
     OverflowToAnchorCapacity,
@@ -749,6 +795,7 @@ delta_mixture = AlwaysOnAnchorDeltaCombination(mix_temperature=1.0)(
     selected_scores=effective_delta_scores,
     route_arity=effective_delta_arity,
 )
+parameter_merger = LoRAParameterSpaceMerge(fitted_mixture_head)
 
 hierarchical_policy = HierarchicalPackageTop1LocalTop2Selection()
 package_routes = hierarchical_policy.select_packages(
@@ -772,7 +819,8 @@ The public strategy names are `anchored_top1`, `anchor_veto_top2`,
 `adaptive_top1_top2`, `hierarchical_package_top1_local_top2`,
 `global_compatibility_top2`, `dynamic_k`,
 `score_softmax`, `equal_weight`, `normalized_positive_evidence`,
-`learned_mixture_weight`, `always_on_anchor_deltas`, and
+`learned_mixture_weight`, `always_on_anchor_deltas`,
+`parameter_space_lora_merge`, and
 `top2_to_top1`. See
 `examples/verify_anchored_top1.py`, `examples/verify_anchor_veto_top2.py`,
 `examples/verify_compatibility_top2.py`,
@@ -786,6 +834,8 @@ See `examples/verify_learned_mixture_weights.py` for COM-003 fitting,
 buffer-only deployment, activation combination, and safe reload.
 See `examples/verify_always_on_anchor_deltas.py` for COM-004 anchor, top-1,
 and adaptive top-2 LoRA-delta execution.
+See `examples/verify_parameter_space_merge.py` for COM-005 effective-matrix
+merging and tiny routed-layer execution.
 
 ## References
 
@@ -822,11 +872,20 @@ and adaptive top-2 LoRA-delta execution.
   motivates separating shared computation from routed specialist computation.
   COM-004 differs by retaining one pretrained dense MLP as an immutable
   always-on anchor and adding independently trained plug-in deltas.
+- [Soft Merging of Experts with Adaptive Routing](https://arxiv.org/abs/2306.03745)
+  motivates constructing one input-dependent expert in parameter space.
+- [X-LoRA: Mixture of Low-Rank Adapter Experts](https://arxiv.org/abs/2402.07148)
+  motivates layerwise token-dependent composition of frozen LoRA experts.
+  COM-005 differs from both methods by using an already fitted frozen COM-003
+  head, exactly one selected pair, and a per-token functional correctness
+  backend rather than SMEAR training or X-LoRA's scaling network.
 
 POL-001, POL-002, POL-003, POL-004, POL-005, COM-001, COM-002, COM-003,
 BAL-001, and BAL-002 are framework infrastructure and do not derive a training
 or optimization algorithm from a paper. COM-004 and POL-006 are
-paper-motivated, with project-specific differences documented above.
+paper-motivated, with project-specific differences documented above. COM-005
+is SMEAR/X-LoRA-inspired with the narrower reference-runtime differences
+documented above.
 
 ## Tests and known limitations
 
@@ -864,6 +923,15 @@ expert calls, score/hidden/expert gradients, zero-update LoRA deltas, and a
 tiny Qwen3 routed-layer integration. Package-driven delta attachment,
 telemetry, native delta-only PEFT kernels, and arbitrary-\(k\) combination
 remain future work.
+
+COM-005 tests cover the effective \(sBA\) equation, token-dependent learned
+weights, unit-weight endpoints, exact zero-update anchor fallback, gradients
+to scores, hidden states, and both experts' LoRA factors, private-base drift,
+malformed weights and expert counts, anchor/top-1/top-2 dispatch, ranked weight
+alignment, frozen-head registration, immutable live anchor state, and tiny
+Qwen3 `RoutedMLP` execution. Full-MLP merging, more than two experts,
+package-driven LoRA attachment, static merged artifacts, fused kernels,
+performance claims, and distributed execution remain unsupported.
 
 BAL-002 tests cover both-available retention, first- and second-ranked
 survivors, promotion into effective slot zero, neither-available anchor

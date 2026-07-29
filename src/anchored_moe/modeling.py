@@ -17,7 +17,9 @@ from transformers import (
 from anchored_moe.backends.base import ConversionReport, ModelBackend
 from anchored_moe.configuration import AnchoredMoEConfig
 from anchored_moe.experts.base import AnchorRelativeExpert, Expert
+from anchored_moe.experts.low_rank import PEFTLoRAExpert
 from anchored_moe.inference.dispatch import (
+    AnchoredLoRAParameterMergeDispatcher,
     AlwaysOnAnchorDeltaDispatcher,
     AnchoredTop1Dispatcher,
 )
@@ -25,14 +27,17 @@ from anchored_moe.inference.telemetry import RouteTelemetry
 from anchored_moe.policies.capacity import (
     AdaptiveToAnchorCapacity,
     OverflowToAnchorCapacity,
+    Top2ToTop1Capacity,
 )
 from anchored_moe.policies.combination import (
     AlwaysOnAnchorDeltaCombination,
     ScoreSoftmaxCombination,
 )
+from anchored_moe.policies.parameter_merging import LoRAParameterSpaceMerge
 from anchored_moe.policies.selection import (
     AdaptiveTop1Top2Selection,
     AnchoredTop1Selection,
+    Top2SelectionPolicy,
 )
 from anchored_moe.registry.package import ExpertPackage, PackageIdentity
 from anchored_moe.registry.composition import (
@@ -92,6 +97,10 @@ class RoutedMLP(nn.Module):
         self.experts = nn.ModuleList()
         self._dispatcher: AnchoredTop1Dispatcher | None = None
         self._delta_dispatcher: AlwaysOnAnchorDeltaDispatcher | None = None
+        self._parameter_merge_dispatcher: (
+            AnchoredLoRAParameterMergeDispatcher | None
+        ) = None
+        self._parameter_merge_head: nn.Module | None = None
         self._local_combination: ScoreSoftmaxCombination | None = None
         self._capture_local_mixture_weights = False
         self._local_mixture_weights: Tensor | None = None
@@ -207,6 +216,8 @@ class RoutedMLP(nn.Module):
         self.experts = nn.ModuleList([expert])
         self._dispatcher = None
         self._delta_dispatcher = None
+        self._parameter_merge_dispatcher = None
+        self._parameter_merge_head = None
         self._local_combination = None
         self._route_telemetry = None
         self.routing_mode = "forced_expert"
@@ -289,11 +300,106 @@ class RoutedMLP(nn.Module):
         )
         self._dispatcher = None
         self._delta_dispatcher = dispatcher
+        self._parameter_merge_dispatcher = None
+        self._parameter_merge_head = None
         self._local_combination = None
         self._capture_local_mixture_weights = False
         self._local_mixture_weights = None
         self._route_telemetry = None
         self.routing_mode = "always_on_anchor_deltas"
+
+    def configure_parameter_space_lora_merge(
+        self,
+        *,
+        layer_index: int,
+        router_feature_extractor: RouterFeatureExtractor,
+        router_heads: RouterScoreBank,
+        experts: Mapping[str, PEFTLoRAExpert],
+        merge_policy: LoRAParameterSpaceMerge,
+        selection_policy: Top2SelectionPolicy | None = None,
+        capacity_policy: Top2ToTop1Capacity | None = None,
+    ) -> None:
+        """Attach pair-only COM-005 parameter-space LoRA execution.
+
+        Exactly two router-ordered PEFT/LoRA experts share one immutable live
+        anchor MLP. Anchor-veto top-2 selection and BAL-002 capacity are the
+        defaults; the supplied merge policy owns one frozen COM-003 head.
+        Configuration is one-shot from exact ``forced_anchor`` mode.
+
+        Package-driven LoRA materialization, arbitrary expert counts, and
+        fused kernels remain outside this reference runtime.
+        """
+
+        if self.routing_mode != "forced_anchor":
+            raise RuntimeError(
+                "Parameter-space LoRA merging requires forced_anchor mode."
+            )
+        if (
+            isinstance(layer_index, bool)
+            or not isinstance(layer_index, int)
+            or layer_index < 0
+        ):
+            raise ValueError("layer_index must be a non-negative integer.")
+        if not isinstance(router_feature_extractor, RouterFeatureExtractor):
+            raise TypeError(
+                "router_feature_extractor must be a RouterFeatureExtractor."
+            )
+        if not isinstance(router_heads, RouterScoreBank):
+            raise TypeError("router_heads must implement RouterScoreBank.")
+        if router_feature_extractor.output_size != router_heads.feature_size:
+            raise ValueError(
+                "Router feature output size must match the score bank."
+            )
+        if not isinstance(merge_policy, LoRAParameterSpaceMerge):
+            raise TypeError("merge_policy must be LoRAParameterSpaceMerge.")
+        if not isinstance(experts, Mapping) or not all(
+            isinstance(expert_id, str)
+            and isinstance(expert, PEFTLoRAExpert)
+            for expert_id, expert in experts.items()
+        ):
+            raise TypeError(
+                "experts must map string IDs to PEFTLoRAExpert modules."
+            )
+        expert_ids = router_heads.expert_ids_for_layer(layer_index)
+        if len(expert_ids) != 2:
+            raise ValueError(
+                "Parameter-space LoRA merging requires exactly two router "
+                "experts."
+            )
+        if set(experts) != set(expert_ids) or len(experts) != 2:
+            raise ValueError(
+                "Attached expert IDs must exactly match the two router scores: "
+                f"{tuple(experts)} != {expert_ids}."
+            )
+        ordered_experts = tuple(experts[expert_id] for expert_id in expert_ids)
+        merge_policy.validate_compatibility(
+            self.anchor_mlp,
+            ordered_experts,
+        )
+
+        dispatcher = AnchoredLoRAParameterMergeDispatcher(
+            merge_policy=merge_policy,
+            selection_policy=selection_policy,
+            capacity_policy=capacity_policy,
+        )
+        router_feature_extractor.requires_grad_(False)
+        router_heads.requires_grad_(False)
+        self.layer_index = layer_index
+        self.expert_ids = expert_ids
+        self.router_feature_extractor = router_feature_extractor
+        self.router_heads = router_heads
+        self.experts = nn.ModuleList(ordered_experts)
+        self._dispatcher = None
+        self._delta_dispatcher = None
+        self._parameter_merge_dispatcher = dispatcher
+        # Register the buffer-only COM-003 head so ordinary .to(...) and
+        # state traversal keep it aligned with this routed layer.
+        self._parameter_merge_head = merge_policy.head
+        self._local_combination = None
+        self._capture_local_mixture_weights = False
+        self._local_mixture_weights = None
+        self._route_telemetry = None
+        self.routing_mode = "parameter_space_lora_merge"
 
     def configure_local_mini_moe(
         self,
@@ -374,6 +480,8 @@ class RoutedMLP(nn.Module):
         self.experts = nn.ModuleList(ordered_experts)
         self._dispatcher = None
         self._delta_dispatcher = None
+        self._parameter_merge_dispatcher = None
+        self._parameter_merge_head = None
         self._local_combination = combination_policy
         self._capture_local_mixture_weights = capture_mixture_weights
         self._local_mixture_weights = None
@@ -441,6 +549,8 @@ class RoutedMLP(nn.Module):
         self.experts = nn.ModuleList()
         self._dispatcher = None
         self._delta_dispatcher = None
+        self._parameter_merge_dispatcher = None
+        self._parameter_merge_head = None
         self._local_combination = None
         self._capture_local_mixture_weights = False
         self._local_mixture_weights = None
@@ -513,6 +623,8 @@ class RoutedMLP(nn.Module):
         self.experts = nn.ModuleList(ordered_experts)
         self._dispatcher = dispatcher
         self._delta_dispatcher = None
+        self._parameter_merge_dispatcher = None
+        self._parameter_merge_head = None
         self._local_combination = None
         self._capture_local_mixture_weights = False
         self._local_mixture_weights = None
@@ -570,6 +682,36 @@ class RoutedMLP(nn.Module):
                 # TRN-003 path does not retain this tensor.
                 self._local_mixture_weights = combination.weights
             return combination.output
+
+        if self.routing_mode == "parameter_space_lora_merge":
+            if (
+                self.layer_index is None
+                or self.router_feature_extractor is None
+                or self.router_heads is None
+                or self._parameter_merge_dispatcher is None
+                or self._parameter_merge_head is None
+                or len(self.experts) != 2
+            ):
+                raise RuntimeError(
+                    "RoutedMLP parameter-space LoRA runtime is incomplete."
+                )
+            expert_availability = kwargs.pop("expert_availability", None)
+            features = self.router_feature_extractor(hidden_states)
+            expert_scores = self.router_heads(
+                features,
+                layer_index=self.layer_index,
+            )
+            result = self._parameter_merge_dispatcher.dispatch(
+                hidden_states,
+                expert_scores=expert_scores,
+                expert_ids=self.expert_ids,
+                anchor_mlp=self.anchor_mlp,
+                experts=tuple(self.experts),
+                expert_availability=expert_availability,
+                module_args=args,
+                module_kwargs=kwargs,
+            )
+            return result.output
 
         if self.routing_mode == "always_on_anchor_deltas":
             if (

@@ -24,6 +24,9 @@ that pair through the unchanged INF-002 capacity and combination path.
 COM-004 provides a separate explicit `RoutedMLP` mode in which the live anchor
 executes for every token and sparse POL-001 or POL-003 routes add
 anchor-relative expert deltas.
+COM-005 provides another explicit pair-only mode in which POL-002 and BAL-002
+choose zero, one, or two PEFT/LoRA experts and a frozen COM-003 head supplies
+top-2 weights before effective projection parameters are merged.
 
 It does not install packages implicitly, estimate serving capacity, attach
 top-2 dispatch to `RoutedMLP`, construct compatibility metadata, or manage
@@ -41,6 +44,7 @@ materialization boundary while restoring a saved checkpoint.
 | INF-001 | `AnchoredTop1Dispatcher`, `RoutedMLP.configure_anchored_top1` | `dispatch.py`, `modeling.py` | Validated |
 | INF-002, BAL-002 | `AnchoredTop2Dispatcher`, `Top2DispatchResult` | `dispatch.py` | Validated |
 | COM-004 | `AlwaysOnAnchorDeltaDispatcher`, `RoutedMLP.configure_always_on_anchor_deltas` | `dispatch.py`, `modeling.py` | Validated |
+| COM-005 | `AnchoredLoRAParameterMergeDispatcher`, `RoutedMLP.configure_parameter_space_lora_merge` | `dispatch.py`, `modeling.py` | Validated |
 | EVAL-002 | `RouteTelemetry`, `RouteRecord`, `RouteSummary` | `telemetry.py` | Validated |
 | PKG-007 | `synchronize_anchored_top1_registry` | `composition.py`, `modeling.py` | Validated |
 | TRN-001 | `RoutedMLP.configure_forced_expert` | `modeling.py` | Validated |
@@ -113,6 +117,20 @@ For arity zero, the implementation returns the original \(A(h_t)\) values
 without delta arithmetic. Arity one uses coefficient one; arity two uses
 score-softmax weights. `AnchorDeltaDispatchResult` exposes the original
 selection, packed capacity decision, and complete pair-shaped delta weights.
+
+For COM-005, one targeted anchor projection \(W\) and selected LoRA updates
+\(\Delta W_k=s_kB_kA_k\) produce
+
+\[
+W_t=W+\sum_{s=1}^{a'_t}\alpha_{t,s}\Delta W_{c'_{t,s}}.
+\]
+
+Arity zero executes the unchanged anchor, arity one uses coefficient one, and
+arity two uses the frozen COM-003 head. The nonlinear MLP executes after every
+targeted projection receives its token-dependent effective weight, so this is
+not equivalent in general to INF-002 activation interpolation.
+`ParameterMergeDispatchResult.merge_weights` uses the same pair-shaped audit
+convention as `Top2DispatchResult`.
 
 Telemetry records selected candidate indices, effective candidate indices,
 selected scores, and overflow flags:
@@ -193,6 +211,19 @@ Always-on anchor-delta dispatch:
 7. Apply COM-004 with zero, unit, or score-softmax delta weights.
 8. Return exact anchor rows plus auditable route, capacity, and weight data.
 
+Parameter-space LoRA dispatch:
+
+1. Require exactly two router-ordered `PEFTLoRAExpert` objects.
+2. Apply POL-002 and BAL-002 before reading or executing expert state.
+3. Batch effective anchor rows through the unchanged live anchor.
+4. Give degraded top-1 rows unit weight.
+5. Apply the frozen COM-003 head to each ordered top-2 score pair.
+6. Group rows by effective expert or pair order.
+7. Validate resolved linear projections and exact private/live anchor bases.
+8. Execute per-token functional projection overrides and reconstruct token
+   order with `torch.index_copy`.
+9. Return original routes, capacity metadata, and pair-shaped merge weights.
+
 `RoutedMLP` remains in exact `forced_anchor` mode until
 `configure_anchored_top1()` is called explicitly. An empty configured expert
 set constructs an empty score dimension and dispatches every token to the
@@ -249,6 +280,15 @@ Registry synchronization:
 - COM-004 supports POL-001 and POL-003; arbitrary-\(k\) execution is excluded.
 - COM-004 requires `AnchorRelativeExpert` objects and never interprets a
   complete replacement expert as a delta.
+- COM-005 requires exactly two PEFT/LoRA experts and identical resolved linear
+  projection topology over the exact live anchor state.
+- COM-005 preserves selected order: the first COM-003 coefficient always
+  applies to effective slot zero, even when candidate two outranks candidate
+  one.
+- COM-005 does not execute selected expert modules or mutate registered anchor
+  and expert tensors.
+- COM-005's reference runtime uses one functional anchor call per merged token;
+  it makes no fused-kernel or latency claim.
 - The feature extractor and `RouterScoreBank` are frozen at inference
   attachment.
 - Existing expert gradient flags are preserved.
@@ -284,6 +324,10 @@ combination is linear in the selected activation size.
 COM-004 executes the anchor for all \(N\) tokens plus zero, one, or two sparse
 delta experts per token. The current PEFT representation still executes its
 private frozen base inside each selected complete expert.
+COM-005 executes anchor-only rows as one batch, then performs one logical
+anchor MLP evaluation per merged token with token-dependent projection
+overrides. It materializes effective dense \(sBA\) matrices and prioritizes
+correctness over serving efficiency.
 
 ## Hugging Face integration
 
@@ -308,6 +352,13 @@ COM-004 uses the same Qwen3 wrapper through the explicit
 `configure_always_on_anchor_deltas()` API. It accepts `AnchorRelativeExpert`
 objects, POL-001 or POL-003, and model-family-neutral router features and
 scores. It is not selected by `AnchoredMoEConfig` or package materialization.
+
+COM-005 uses `configure_parameter_space_lora_merge()` with exactly two
+`PEFTLoRAExpert` objects, one `LoRAParameterSpaceMerge`, and ordinary router
+features and heads. The frozen COM-003 head is registered by `RoutedMLP`, so
+normal PyTorch device and dtype movement keeps it aligned. Package
+materialization and declarative `AnchoredMoEConfig` selection remain
+unsupported.
 
 CORE-005 wraps the native causal LM in a `PreTrainedModel` facade. Its
 `forward()` and `generate()` delegate to that native implementation, while
@@ -388,6 +439,20 @@ routed_mlp.configure_always_on_anchor_deltas(
 output = routed_mlp(hidden_states, expert_availability=availability)
 ```
 
+Parameter-space LoRA merging:
+
+```python
+merge_policy = LoRAParameterSpaceMerge(fitted_mixture_head)
+routed_mlp.configure_parameter_space_lora_merge(
+    layer_index=3,
+    router_feature_extractor=features,
+    router_heads=heads,
+    experts={"code:0": code_lora, "code:1": second_code_lora},
+    merge_policy=merge_policy,
+)
+output = routed_mlp(hidden_states, expert_availability=availability)
+```
+
 Compatibility-aware top-2 uses the same dispatcher:
 
 ```python
@@ -426,6 +491,7 @@ See `examples/verify_routed_top1.py`, `examples/verify_top2_dispatch.py`,
 `examples/verify_combination_baselines.py`,
 `examples/verify_learned_mixture_weights.py`, and
 `examples/verify_always_on_anchor_deltas.py`,
+`examples/verify_parameter_space_merge.py`,
 `examples/verify_hierarchical_routing.py`, and
 `examples/verify_package_runtime.py` for deterministic offline examples. The
 last uses `AnchoredMoEForCausalLM` for the complete public top-1 composition
@@ -454,10 +520,18 @@ exact rollback.
   motivates shared-plus-routed expert computation. COM-004 retains a
   pretrained immutable dense anchor and adds independently trained plug-in
   deltas instead of jointly training shared and routed experts.
+- [PyTorch `functional_call` documentation](https://docs.pytorch.org/docs/stable/generated/torch.func.functional_call.html)
+  defines mutation-free module execution with COM-005's token-dependent
+  projection overrides.
+- [Soft Merging of Experts with Adaptive Routing](https://arxiv.org/abs/2306.03745)
+  and [X-LoRA: Mixture of Low-Rank Adapter Experts](https://arxiv.org/abs/2402.07148)
+  motivate parameter-space and token-dependent low-rank composition. COM-005
+  uses an already fitted frozen pair-weight head and a correctness-first
+  functional backend rather than either paper's training procedure.
 
 INF-001, INF-002, BAL-002, and EVAL-002 are framework infrastructure and do
-not derive a training or optimization algorithm from a paper. COM-004 is
-paper-motivated with the difference documented above.
+not derive a training or optimization algorithm from a paper. COM-004 and
+COM-005 are paper-motivated with their differences documented above.
 
 ## Tests and known limitations
 
@@ -489,6 +563,13 @@ routes, top-1 overflow, sparse expert call counts, delta and score gradients,
 LoRA zero-delta equality, immutable anchor parameters, public result
 invariants, and tiny-Qwen3 `RoutedMLP` execution.
 
+COM-005 acceptance covers the effective LoRA matrix equation, learned
+token-dependent weights, unit endpoints, exact zero-update fallback,
+score/hidden/adapter gradients, base and topology validation,
+anchor/top-1/top-2 capacity behavior, ranked coefficient alignment, public
+result invariants, frozen-head registration, immutable anchor state, and
+tiny-Qwen3 `RoutedMLP` execution.
+
 The initial implementation groups each candidate with a separate mask scan.
 Optimized batched dispatch, token-aligned auxiliary MLP arguments, capacity
 estimation, fallback beyond the selected pair, live-model checkpoint hash
@@ -497,4 +578,6 @@ automatic install hooks, model-level configuration, multi-device
 materialization, top-2 telemetry, `RoutedMLP`
 replacement-top-2 integration, package-driven top-2 or delta attachment,
 native delta-only PEFT kernels, and arbitrary-\(k\) delta execution remain
-unsupported.
+unsupported. COM-005 additionally excludes full-MLP or cross-package merging,
+more than two experts, package attachment, static merged artifacts, fused
+kernels, performance guarantees, and distributed execution.

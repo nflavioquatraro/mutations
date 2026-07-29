@@ -33,12 +33,14 @@ from pathlib import Path
 from typing import Any, Final
 
 import peft
+import torch
 from peft import (
     LoraConfig,
     get_peft_model_state_dict,
     inject_adapter_in_model,
     set_peft_model_state_dict,
 )
+from peft.tuners.lora.layer import LoraLayer
 from safetensors import safe_open
 from safetensors.torch import load_file, save_file
 from torch import Tensor, nn
@@ -54,6 +56,76 @@ _SERIALIZATION_FORMAT: Final = "anchored_moe.peft_lora.v1"
 _SAFETENSORS_SUFFIX: Final = ".safetensors"
 _METADATA_KEY: Final = "anchored_moe"
 _ADAPTER_NAME: Final = "default"
+
+
+@dataclass(frozen=True)
+class LoRAProjectionDelta:
+    """One resolved effective LoRA update and its private frozen base.
+
+    Attributes:
+        module_name:
+            Fully qualified projection name relative to the expert MLP.
+        base_weight:
+            Private frozen base weight with shape ``(out_features, in_features)``.
+        base_bias:
+            Private frozen base bias with shape ``(out_features,)``, or ``None``.
+        delta_weight:
+            Graph-connected effective LoRA update ``s * B @ A`` with the same
+            shape, dtype, and device as ``base_weight``.
+
+    The tensors are live views of one expert execution graph. Callers must not
+    mutate them. COM-005 uses this contract to validate the private base
+    against the live immutable anchor before constructing parameter overrides.
+    """
+
+    module_name: str
+    base_weight: Tensor
+    base_bias: Tensor | None
+    delta_weight: Tensor
+
+    def __post_init__(self) -> None:
+        """Validate projection identity, tensor shapes, and numerical state."""
+
+        if (
+            not isinstance(self.module_name, str)
+            or not self.module_name
+            or self.module_name != self.module_name.strip()
+        ):
+            raise ValueError("module_name must be a non-empty normalized string.")
+        if not isinstance(self.base_weight, Tensor):
+            raise TypeError("base_weight must be a torch.Tensor.")
+        if not self.base_weight.is_floating_point() or self.base_weight.ndim != 2:
+            raise ValueError("base_weight must be a floating-point matrix.")
+        if self.base_bias is not None:
+            if not isinstance(self.base_bias, Tensor):
+                raise TypeError("base_bias must be a torch.Tensor or None.")
+            if (
+                not self.base_bias.is_floating_point()
+                or self.base_bias.shape != (self.base_weight.shape[0],)
+            ):
+                raise ValueError(
+                    "base_bias must be a floating-point output-sized vector."
+                )
+            if (
+                self.base_bias.dtype != self.base_weight.dtype
+                or self.base_bias.device != self.base_weight.device
+            ):
+                raise ValueError(
+                    "base_bias and base_weight must share one dtype and device."
+                )
+        if not isinstance(self.delta_weight, Tensor):
+            raise TypeError("delta_weight must be a torch.Tensor.")
+        if self.delta_weight.shape != self.base_weight.shape:
+            raise ValueError("delta_weight must match base_weight shape.")
+        if (
+            self.delta_weight.dtype != self.base_weight.dtype
+            or self.delta_weight.device != self.base_weight.device
+        ):
+            raise ValueError(
+                "delta_weight and base_weight must share one dtype and device."
+            )
+        if not torch.isfinite(self.delta_weight).all().item():
+            raise ValueError("delta_weight must contain only finite values.")
 
 
 @dataclass(frozen=True)
@@ -462,6 +534,52 @@ class PEFTLoRAExpert(AnchorRelativeExpert):
                 "anchor_output and expert output must share one device."
             )
         return expert_output - anchor_output
+
+    def projection_deltas(self) -> tuple[LoRAProjectionDelta, ...]:
+        r"""Return canonical graph-connected effective projection updates.
+
+        Each returned update is ``s * B @ A`` rather than an interpolation of
+        the individual LoRA factors. This distinction is essential for
+        COM-005: mixing factors separately would introduce cross terms
+        ``B_i A_j`` that are absent from
+        ``alpha_i B_i A_i + alpha_j B_j A_j``.
+
+        Returns:
+            One :class:`LoRAProjectionDelta` for every resolved targeted
+            floating-point ``torch.nn.Linear``, ordered by full module name.
+
+        Raises:
+            RuntimeError:
+                If the injected PEFT topology is not the supported single
+                default-adapter linear topology.
+        """
+
+        resolved: list[LoRAProjectionDelta] = []
+        for module_name, module in self.expert_mlp.named_modules():
+            if not isinstance(module, LoraLayer):
+                continue
+            if _ADAPTER_NAME not in module.lora_A or _ADAPTER_NAME not in module.lora_B:
+                raise RuntimeError(
+                    f"LoRA projection {module_name!r} lacks the default adapter."
+                )
+            base_layer = module.get_base_layer()
+            if not isinstance(base_layer, nn.Linear):
+                raise RuntimeError(
+                    "COM-005 supports only LoRA adapters targeting "
+                    f"torch.nn.Linear; {module_name!r} targets "
+                    f"{type(base_layer).__qualname__}."
+                )
+            resolved.append(
+                LoRAProjectionDelta(
+                    module_name=module_name,
+                    base_weight=base_layer.weight,
+                    base_bias=base_layer.bias,
+                    delta_weight=module.get_delta_weight(_ADAPTER_NAME),
+                )
+            )
+        if not resolved:
+            raise RuntimeError("PEFT/LoRA expert has no resolved projections.")
+        return tuple(sorted(resolved, key=lambda item: item.module_name))
 
     def save_safetensors(
         self,

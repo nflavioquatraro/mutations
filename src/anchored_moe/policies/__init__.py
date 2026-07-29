@@ -22,6 +22,11 @@ from anchored_moe.policies.learned_combination import (
     LearnedMixtureWeightCombination,
     LearnedMixtureWeightHead,
 )
+from anchored_moe.policies.parameter_merging import (
+    LoRAParameterSpaceMerge,
+    ParameterSpaceMergeError,
+    ParameterSpaceMergeResult,
+)
 from anchored_moe.policies.hierarchical import (
     HierarchicalPackageTop1LocalTop2Selection,
     HierarchicalRouteDecision,
@@ -63,8 +68,11 @@ __all__ = [
     "LearnedMixtureSerializationError",
     "LearnedMixtureWeightCombination",
     "LearnedMixtureWeightHead",
+    "LoRAParameterSpaceMerge",
     "NormalizedPositiveEvidenceCombination",
     "OverflowToAnchorCapacity",
+    "ParameterSpaceMergeError",
+    "ParameterSpaceMergeResult",
     "RouteDecision",
     "ScoreSoftmaxCombination",
     "SelectionPolicy",

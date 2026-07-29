@@ -31,6 +31,8 @@ parameterization declare the exact subset owned by an optimizer.
 `FullMLPExpert` owns one complete trainable copy. `PEFTLoRAExpert` owns a
 private frozen copy with PEFT-injected adapter tensors and implements the
 `AnchorRelativeExpert` delta contract used by COM-004.
+It also exposes canonical graph-connected effective projection updates
+through `projection_deltas()` for COM-005 without changing its payload format.
 `BlockSparseDeltaExpert` owns compact fixed-shape block tensors and a resolved
 immutable mask over private frozen linear projections.
 
@@ -123,6 +125,12 @@ Given an already-computed live-anchor activation, EXP-002 exposes
 At zero-update initialization this delta is exactly zero in the validated
 Qwen3 execution path. The existing complete-output and safetensors contracts
 remain unchanged.
+
+COM-005 consumes the effective matrix
+\(\Delta W_{\ell,k}=sB_{\ell,k}A_{\ell,k}\) directly. For selected experts
+\(i,j\), it forms
+\(\alpha_i\Delta W_{\ell,i}+\alpha_j\Delta W_{\ell,j}\); it never interpolates
+the individual factors because that would create cross terms.
 
 For an EXP-003 target projection
 \(W\in\mathbb{R}^{d_\text{out}\times d_\text{in}}\), choose block dimensions
@@ -251,6 +259,12 @@ Block-sparse construction and serialization:
   anchor; the caller supplies its activation.
 - `PEFTLoRAExpert.forward_delta()` preserves the existing private-copy
   representation and therefore still pays for that private base computation.
+- `PEFTLoRAExpert.projection_deltas()` returns live graph-connected \(sBA\)
+  matrices plus private base weights and biases in canonical module order.
+  Callers must not mutate those tensors.
+- COM-005 accepts only LoRA adapters over floating-point `torch.nn.Linear`
+  projections and validates every private base exactly against the live
+  anchor before parameter merging.
 - EXP-003 target suffixes resolve to exactly one `nn.Linear` each. Ambiguous,
   missing, repeated, non-linear, or non-floating targets fail before the live
   anchor is frozen.
@@ -364,6 +378,10 @@ execution under COM-004. See
   COM-004.
 - [Hugging Face PEFT LoRA documentation](https://huggingface.co/docs/peft/main/conceptual_guides/lora)
   defines adapter injection, scaling, and adapter-only state conventions.
+- [Soft Merging of Experts with Adaptive Routing](https://arxiv.org/abs/2306.03745)
+  and [X-LoRA](https://arxiv.org/abs/2402.07148) motivate COM-005's downstream
+  effective-parameter composition. EXP-002 remains a standalone LoRA
+  representation and does not implement either training procedure.
 - [FIPS PUB 180-4: Secure Hash Standard](https://doi.org/10.6028/NIST.FIPS.180-4)
   defines SHA-256, which EXP-003 uses only to rank canonical block coordinates
   reproducibly. It does not use the digest as a payload signature or a source
@@ -408,3 +426,6 @@ the private frozen base, block-sparse package export/materialization, mixed
 parameterization packages, non-default LoRA initialization, learned or ragged
 sparse masks, fused sparse kernels, performance validation, and distributed
 materialization remain future work.
+COM-005 adds reference-only pair merging over the exposed effective matrices;
+arbitrary expert counts, fused dynamic-weight kernels, and static merged
+artifacts remain outside EXP-002.
