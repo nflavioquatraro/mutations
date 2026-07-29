@@ -22,10 +22,20 @@ from anchored_moe.routers.stabilized import (
     RouterDistillationReport,
     distill_frozen_router,
 )
+from anchored_moe.routers.stickiness import (
+    CrossLayerStickinessConfig,
+    CrossLayerStickinessError,
+    CrossLayerStickinessResult,
+    CrossLayerTop1Stickiness,
+)
 
 __all__ = [
     "AffineRouterHead",
     "AppendOnlyRouterHeads",
+    "CrossLayerStickinessConfig",
+    "CrossLayerStickinessError",
+    "CrossLayerStickinessResult",
+    "CrossLayerTop1Stickiness",
     "HardRouteDistillationConfig",
     "IdentityRouterFeatureExtractor",
     "LayerRouterDistillationReport",

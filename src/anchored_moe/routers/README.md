@@ -11,12 +11,15 @@ RTR-004 creates a new frozen logical router by jointly recalibrating all
 installed affine columns against aligned anchor-relative utility replay data.
 RTR-007 distills the anchored hard assignments of any immutable teacher score
 bank into a deterministic affine student and freezes it for deployment.
+RTR-008 applies an explicit switching margin to adjacent-layer anchored top-1
+decisions without retaining request state inside the router or model.
 
-This subpackage does not choose between the anchor and experts, execute an MLP,
-combine expert outputs, fit calibration parameters, cache features, enforce
-capacity, or install and remove packages. Those responsibilities remain with
-selection, modeling, combination, calibration, capacity, and registry
-features.
+Except for RTR-008's explicit stabilization of a caller-supplied top-1
+decision, this subpackage does not choose between the anchor and experts. It
+does not execute an MLP, combine expert outputs, fit calibration parameters,
+cache features, enforce capacity, or install and remove packages. Those
+responsibilities remain with selection, modeling, combination, calibration,
+capacity, and registry features.
 
 ## Implemented strategies
 
@@ -27,6 +30,7 @@ features.
 | RTR-003 | `router_architecture: logical_append_only_columns` | `base.py`, `logical.py` | Validated |
 | RTR-004 | `recalibration: router_only_global` | `calibration/global_recalibration.py` | Validated |
 | RTR-007 | `strategy: hard_route_distillation` | `stabilized.py` | Validated |
+| RTR-008 | `strategy: cross_layer_top1_stickiness`, `switch_margin` | `stickiness.py` | Validated |
 
 `RouterFeatureExtractor`, `RouterHead`, and `RouterScoreBank` are
 model-family-neutral extension interfaces. `IdentityRouterFeatureExtractor`,
@@ -163,6 +167,26 @@ This initial strategy distills assignments, not teacher score magnitudes.
 Its acceptance metric is hard-route agreement on the exact reference bank
 rather than score equality.
 
+RTR-008 consumes ordinary anchored top-1 baseline route \(b_\ell\), the
+previous route \(p\) aligned by expert ID to the current layer, current
+candidate scores \(s_\ell(c)\), and a non-negative switch margin \(m\). The
+anchor remains candidate zero with \(s_\ell(0)=0\). For \(m>0\),
+
+\[
+r_\ell =
+\begin{cases}
+b_\ell, & p\text{ is unavailable},\\
+b_\ell, & s_\ell(b_\ell)-s_\ell(p)>m,\\
+p, & \text{otherwise}.
+\end{cases}
+\]
+
+The comparison uses current-layer evidence for both candidates; a stale
+previous-layer score is never compared across layer-specific calibration
+spaces. The strict inequality creates a closed dead band: an exact margin tie
+retains the incumbent. The explicit \(m=0\) mode bypasses stabilization and is
+exactly POL-001, including anchor-first and append-order ties.
+
 ## Algorithms
 
 Identity feature extraction:
@@ -251,6 +275,20 @@ Hard-route distillation:
    score, assignment, feature-bank, configuration, loss, and agreement
    metadata in an immutable report.
 
+Cross-layer top-1 stickiness:
+
+1. Compute the current layer's ordinary POL-001 anchored top-1 baseline.
+2. Treat `previous_routes=None` as an explicit sequence boundary and return
+   the baseline unchanged.
+3. Align previous expert candidates to current score columns by stable expert
+   ID; preserve anchor index zero and mark absent experts unavailable.
+4. If the margin is zero, return the baseline exactly.
+5. Otherwise gather the current score of the aligned incumbent and retain it
+   unless the current baseline winner exceeds it by strictly more than the
+   configured margin.
+6. Return current-score-aligned effective routes plus availability, retention,
+   fallback, stabilization, and switch masks without storing the result.
+
 ## Assumptions and invariants
 
 - Router input is the pre-MLP hidden state.
@@ -290,6 +328,16 @@ Hard-route distillation:
   and preserves teacher expert order within every layer.
 - The report binds the result to exact feature-bank metadata and hashed teacher
   scores and assignments, but not to raw prompts.
+- Cross-layer stickiness accepts only a previous top-1 decision with the same
+  token shape and device as the current scores.
+- Previous expert IDs are realigned to current order; an absent expert cannot
+  be retained and falls back to ordinary current-layer selection.
+- The permanent anchor is always available and retains score zero.
+- A zero switch margin is bit-exact ordinary anchored top-1 selection.
+- A positive switch margin changes only discrete route choice; selected scores
+  remain current-layer values and preserve gradients to selected evidence.
+- The stabilizer owns no tensors, parameters, mutable route cache, request
+  identity, or generation lifecycle.
 - Logical compilation rejects non-finite state even before serialization.
 - Router payloads contain no executable Python content.
 - Router tensor payloads are finite, floating-point, and schema-validated.
@@ -328,6 +376,10 @@ standalone registry-specific version; it does not change the package format.
 RTR-007 returns the same `LogicalAppendOnlyRouter` runtime contract, so
 `RoutedMLP` needs no distillation-specific dispatch path. This initial slice
 does not add a report-bearing persistence format or automatic activation.
+RTR-008 operates on `RouteDecision` values outside the Hugging Face model
+forward. This keeps batch and generation boundaries explicit and avoids
+thread-unsafe hidden state. Model-level propagation of previous routes is not
+introduced by this slice.
 
 ## Configuration and examples
 
@@ -335,6 +387,8 @@ does not add a report-bearing persistence format or automatic activation.
 from anchored_moe import (
     AffineRouterHead,
     AppendOnlyRouterHeads,
+    CrossLayerStickinessConfig,
+    CrossLayerTop1Stickiness,
     HardRouteDistillationConfig,
     IdentityRouterFeatureExtractor,
     compile_logical_router,
@@ -374,6 +428,16 @@ distilled, distillation_report = distill_frozen_router(
         l2_weight=1e-4,
     ),
 )
+
+stabilizer = CrossLayerTop1Stickiness(
+    CrossLayerStickinessConfig(switch_margin=0.1)
+)
+sticky_result = stabilizer(
+    logical_router(next_features, layer_index=20),
+    expert_ids=logical_router.expert_ids_for_layer(20),
+    previous_routes=previous_layer_routes,
+)
+previous_layer_routes = sticky_result.routes
 ```
 
 See `examples/verify_affine_router.py` for RTR-002 deterministic scoring,
@@ -385,6 +449,9 @@ See `examples/verify_registry_router_versions.py` for RTR-004 fitting and
 PKG-005 persistence without model downloads.
 See `examples/verify_router_distillation.py` for RTR-007 deterministic hard
 assignment fitting, exact replay agreement, and frozen deployment state.
+See `examples/verify_cross_layer_stickiness.py` for RTR-008 explicit
+adjacent-layer sequencing, margin retention, auditable switching, and
+buffer-only logical-router immutability.
 
 `AnchoredMoEConfig` continues to reject non-anchor selection policies. INF-001
 allows router objects to be attached explicitly to one `RoutedMLP`; package
@@ -416,6 +483,10 @@ by distilling fixed-zero-anchor assignments from an arbitrary immutable
 composed teacher over offline CAL-001 features. It does not reproduce the
 paper's jointly learned balanced routing objective or its later expert-training
 stage.
+RTR-008 adopts only StableMoE's goal of reducing route fluctuation. Its
+switching-margin algorithm is project-specific: it uses current calibrated
+evidence and an explicit previous route, and does not learn, distill, balance,
+or persist a router.
 
 ## Tests and known limitations
 
@@ -429,7 +500,10 @@ compiled state, dtype migration, exact RTR-002 score parity, exact incumbent
 score preservation, hard-route teacher labeling, anchor-first ties,
 deterministic student state, report schema round trips, teacher immutability,
 student storage independence, exact replay agreement, invalid teacher
-rejection, and `RoutedMLP` plus package-synchronization integration.
+rejection, zero-margin POL-001 equivalence, strict-margin anchor/expert
+retention, current-score gradients, cross-layer expert-ID realignment,
+absent-expert fallback, explicit sequence boundaries, stateless repeated
+calls, audit masks, and `RoutedMLP` plus package-synchronization integration.
 
 The current router implementation has no learned projection or head removal.
 RTR-003 uses shape-stable per-column affine evaluation to guarantee exact
@@ -444,9 +518,13 @@ parameters. CAL-006 independently refines newly calibrated affine parameters
 against scores from an immutable incumbent `RouterScoreBank`; it returns
 package-owned RTR-002 heads and does not mutate the RTR-003 logical router.
 RTR-007 currently supports anchored hard top-1 assignments only. Teacher-score
-distribution distillation, top-2/adaptive targets, cross-layer hysteresis,
-frozen-route expert training, production-scale streaming, accelerator fitting,
-and report-bearing registry persistence remain separate work.
+distribution distillation, top-2/adaptive distillation, frozen-route expert
+training, production-scale streaming, accelerator fitting, and report-bearing
+registry persistence remain separate work. RTR-008 supports adjacent-layer
+anchored top-1 decisions only. Top-2/adaptive stickiness, autoregressive
+token-to-token hysteresis, automatic model-level route propagation,
+capacity-aware incumbent invalidation, and persistent route state are not
+implemented.
 Standalone anchor comparison and top-1 selection are implemented by POL-001;
 INF-001 explicitly attaches them for routed-layer dispatch,
 PKG-007 validates serialized router ownership against expert payload bindings,

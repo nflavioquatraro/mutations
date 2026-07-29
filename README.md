@@ -33,6 +33,9 @@ standalone weighted top-2 strategy primitives:
 - deterministic anchored hard-route distillation from an immutable teacher
   score bank into a storage-independent frozen logical deployment router, with
   hashed assignments and exact replay-agreement reports;
+- explicit stateless cross-layer anchored top-1 stickiness with deterministic
+  switching margins, expert-ID realignment, and auditable retention and switch
+  masks;
 - standalone safetensors registry-router versions with exact snapshot,
   feature-space, report, expert-order, and tensor-digest validation plus
   explicit stale-safe activation;
@@ -144,7 +147,8 @@ slots or rollback records. Pair-aware top-2 global recalibration, embedding
 registry-router histories in composition checkpoints, and automatic router
 activation during registry changes remain separate tracked features.
 Teacher-score distribution distillation, top-2/adaptive distillation,
-cross-layer route hysteresis, arbitrary-\(k\) capacity/combination/dispatch,
+top-2/adaptive or autoregressive route hysteresis, arbitrary-\(k\)
+capacity/combination/dispatch, automatic model-level sticky-route propagation,
 and frozen-route expert training also remain separate work.
 
 ## Development setup
@@ -170,6 +174,7 @@ python examples/verify_always_on_anchor_deltas.py
 python examples/verify_affine_router.py
 python examples/verify_logical_router.py
 python examples/verify_router_distillation.py
+python examples/verify_cross_layer_stickiness.py
 python examples/verify_anchored_top1.py
 python examples/verify_anchor_veto_top2.py
 python examples/verify_compatibility_top2.py
