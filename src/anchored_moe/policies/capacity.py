@@ -7,7 +7,11 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 
-from anchored_moe.policies.selection import RouteDecision, Top2RouteDecision
+from anchored_moe.policies.selection import (
+    AdaptiveRouteDecision,
+    RouteDecision,
+    Top2RouteDecision,
+)
 
 
 @dataclass(frozen=True)
@@ -407,6 +411,118 @@ class Top2ToTop1Capacity:
             effective_indices=effective_indices,
             effective_scores=effective_scores,
             route_arity=route_arity,
+            expert_ids=routes.expert_ids,
+            overflow_mask=overflow_mask,
+        )
+
+
+class AdaptiveToAnchorCapacity:
+    """Degrade adaptive top-1/top-2 routes under explicit availability.
+
+    POL-003 already declares whether each token requests zero, one, or two
+    ranked specialists. This BAL-002-compatible policy checks only those
+    requested slots, packs surviving specialists from the left, and falls back
+    to the always-available anchor when none survive. It never activates an
+    unrequested expert or searches beyond the retained pair.
+    """
+
+    policy_name = "adaptive_to_anchor"
+
+    def __call__(
+        self,
+        routes: AdaptiveRouteDecision,
+        *,
+        expert_availability: Tensor | None = None,
+    ) -> Top2CapacityDecision:
+        """Return capacity-approved pair slots for adaptive selection."""
+
+        if not isinstance(routes, AdaptiveRouteDecision):
+            raise TypeError("routes must be an AdaptiveRouteDecision.")
+        expert_count = len(routes.expert_ids)
+        token_shape = routes.route_arity.shape
+        expected_shape = token_shape + (expert_count,)
+        if expert_availability is not None:
+            if not isinstance(expert_availability, Tensor):
+                raise TypeError("expert_availability must be a torch.Tensor.")
+            if expert_availability.dtype != torch.bool:
+                raise TypeError("expert_availability must use torch.bool.")
+            if expert_availability.shape != expected_shape:
+                raise ValueError(
+                    "expert_availability must have route token shape plus one "
+                    f"expert dimension: {tuple(expert_availability.shape)} != "
+                    f"{tuple(expected_shape)}."
+                )
+            if expert_availability.device != routes.ranked_indices.device:
+                raise ValueError(
+                    "expert_availability and routes must share one device."
+                )
+
+        slot_indices = torch.arange(
+            2,
+            dtype=torch.long,
+            device=routes.route_arity.device,
+        )
+        requested_slots = slot_indices < routes.route_arity.unsqueeze(-1)
+        if expert_count == 0:
+            selected_available = torch.zeros_like(
+                routes.ranked_indices,
+                dtype=torch.bool,
+            )
+        elif expert_availability is None:
+            selected_available = torch.ones_like(
+                routes.ranked_indices,
+                dtype=torch.bool,
+            )
+        else:
+            selected_available = torch.gather(
+                expert_availability,
+                dim=-1,
+                index=(routes.ranked_indices - 1).clamp_min(0),
+            )
+
+        active_slots = requested_slots & selected_available
+        overflow_mask = requested_slots & ~selected_available
+        first_active = active_slots[..., 0]
+        second_active = active_slots[..., 1]
+        any_active = first_active | second_active
+        both_active = first_active & second_active
+
+        effective_indices = torch.zeros_like(routes.ranked_indices)
+        effective_scores = torch.zeros_like(routes.ranked_scores)
+        first_survivor_indices = torch.where(
+            first_active,
+            routes.ranked_indices[..., 0],
+            routes.ranked_indices[..., 1],
+        )
+        first_survivor_scores = torch.where(
+            first_active,
+            routes.ranked_scores[..., 0],
+            routes.ranked_scores[..., 1],
+        )
+        effective_indices[..., 0] = torch.where(
+            any_active,
+            first_survivor_indices,
+            0,
+        )
+        effective_scores[..., 0] = torch.where(
+            any_active,
+            first_survivor_scores,
+            0.0,
+        )
+        effective_indices[..., 1] = torch.where(
+            both_active,
+            routes.ranked_indices[..., 1],
+            0,
+        )
+        effective_scores[..., 1] = torch.where(
+            both_active,
+            routes.ranked_scores[..., 1],
+            0.0,
+        )
+        return Top2CapacityDecision(
+            effective_indices=effective_indices,
+            effective_scores=effective_scores,
+            route_arity=active_slots.sum(dim=-1, dtype=torch.long),
             expert_ids=routes.expert_ids,
             overflow_mask=overflow_mask,
         )

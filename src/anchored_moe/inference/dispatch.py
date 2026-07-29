@@ -9,17 +9,22 @@ from typing import Any
 import torch
 from torch import Tensor, nn
 
+from anchored_moe.experts.base import AnchorRelativeExpert
 from anchored_moe.policies.capacity import (
+    AdaptiveToAnchorCapacity,
     CapacityDecision,
     OverflowToAnchorCapacity,
     Top2CapacityDecision,
     Top2ToTop1Capacity,
 )
 from anchored_moe.policies.combination import (
+    AlwaysOnAnchorDeltaCombination,
     CombinationPolicy,
     ScoreSoftmaxCombination,
 )
 from anchored_moe.policies.selection import (
+    AdaptiveRouteDecision,
+    AdaptiveTop1Top2Selection,
     AnchorVetoTop2Selection,
     AnchoredTop1Selection,
     RouteDecision,
@@ -168,6 +173,50 @@ class Top2DispatchResult:
                 raise ValueError(
                     "approved specialist mixture weights must sum to one."
                 )
+
+
+@dataclass(frozen=True)
+class AnchorDeltaDispatchResult:
+    """Output and route metadata from always-on-anchor delta execution.
+
+    The live anchor executes for every token. ``capacity`` records the
+    effective zero-, one-, or two-delta route after availability fallback, and
+    ``delta_weights`` records the exact specialist coefficients applied to the
+    anchor activation.
+    """
+
+    output: Tensor
+    selected_routes: RouteDecision | AdaptiveRouteDecision
+    capacity: Top2CapacityDecision
+    delta_weights: Tensor
+
+    def __post_init__(self) -> None:
+        """Validate output, route, capacity, and pair-weight alignment."""
+
+        if not isinstance(self.output, Tensor) or not self.output.is_floating_point():
+            raise TypeError("output must be a floating-point torch.Tensor.")
+        if not isinstance(
+            self.selected_routes,
+            (RouteDecision, AdaptiveRouteDecision),
+        ):
+            raise TypeError(
+                "selected_routes must be RouteDecision or AdaptiveRouteDecision."
+            )
+        if not isinstance(self.capacity, Top2CapacityDecision):
+            raise TypeError("capacity must be a Top2CapacityDecision.")
+        if self.capacity.expert_ids != self.selected_routes.expert_ids:
+            raise ValueError("Selected and effective routes must share expert_ids.")
+        token_shape = self.capacity.route_arity.shape
+        if not isinstance(self.delta_weights, Tensor):
+            raise TypeError("delta_weights must be a torch.Tensor.")
+        if self.delta_weights.shape != token_shape + (2,):
+            raise ValueError("delta_weights must have the capacity pair shape.")
+        if self.output.shape[: len(token_shape)] != token_shape:
+            raise ValueError("output must preserve the capacity token shape.")
+        if self.output.dtype != self.delta_weights.dtype:
+            raise ValueError("output and delta_weights must share one dtype.")
+        if self.output.device != self.delta_weights.device:
+            raise ValueError("output and delta_weights must share one device.")
 
 
 class AnchoredTop1Dispatcher:
@@ -706,6 +755,267 @@ class AnchoredTop2Dispatcher:
             selected_routes=selected_routes,
             capacity=capacity,
             mixture_weights=mixture_weights,
+        )
+
+
+class AlwaysOnAnchorDeltaDispatcher:
+    r"""Execute the anchor for every token and add sparse routed deltas.
+
+    COM-004 composes either anchored top-1 or adaptive top-1/top-2 selection
+    with availability fallback and
+    :class:`AlwaysOnAnchorDeltaCombination`. The anchor executes once over the
+    complete token batch. Each capacity-approved anchor-relative expert then
+    executes only its selected rows and receives the matching already-computed
+    anchor activation:
+
+    ``y = A(h) + sum_k alpha_k Delta_k(h)``.
+
+    No token is dropped. Anchor routes execute no expert and return the exact
+    anchor activation. Additional MLP arguments must be global or
+    broadcast-compatible because token-aligned auxiliary arguments are not
+    sparsely indexed.
+    """
+
+    def __init__(
+        self,
+        *,
+        selection_policy: (
+            AnchoredTop1Selection | AdaptiveTop1Top2Selection | None
+        ) = None,
+        combination_policy: AlwaysOnAnchorDeltaCombination | None = None,
+        top1_capacity_policy: OverflowToAnchorCapacity | None = None,
+        adaptive_capacity_policy: AdaptiveToAnchorCapacity | None = None,
+    ) -> None:
+        """Create an always-on delta runtime from composable policies."""
+
+        self.selection_policy = selection_policy or AdaptiveTop1Top2Selection()
+        self.combination_policy = (
+            combination_policy or AlwaysOnAnchorDeltaCombination()
+        )
+        self.top1_capacity_policy = (
+            top1_capacity_policy or OverflowToAnchorCapacity()
+        )
+        self.adaptive_capacity_policy = (
+            adaptive_capacity_policy or AdaptiveToAnchorCapacity()
+        )
+        if not isinstance(
+            self.selection_policy,
+            (AnchoredTop1Selection, AdaptiveTop1Top2Selection),
+        ):
+            raise TypeError(
+                "selection_policy must be AnchoredTop1Selection or "
+                "AdaptiveTop1Top2Selection."
+            )
+        if not isinstance(
+            self.combination_policy,
+            AlwaysOnAnchorDeltaCombination,
+        ):
+            raise TypeError(
+                "combination_policy must be AlwaysOnAnchorDeltaCombination."
+            )
+        if not isinstance(self.top1_capacity_policy, OverflowToAnchorCapacity):
+            raise TypeError(
+                "top1_capacity_policy must be OverflowToAnchorCapacity."
+            )
+        if not isinstance(
+            self.adaptive_capacity_policy,
+            AdaptiveToAnchorCapacity,
+        ):
+            raise TypeError(
+                "adaptive_capacity_policy must be AdaptiveToAnchorCapacity."
+            )
+
+    def dispatch(
+        self,
+        hidden_states: Tensor,
+        *,
+        expert_scores: Tensor,
+        expert_ids: Sequence[str],
+        anchor_mlp: nn.Module,
+        experts: Sequence[AnchorRelativeExpert],
+        expert_availability: Tensor | None = None,
+        module_args: Sequence[Any] = (),
+        module_kwargs: dict[str, Any] | None = None,
+    ) -> AnchorDeltaDispatchResult:
+        """Select deltas, execute sparse experts, and reconstruct outputs."""
+
+        _validate_dispatch_inputs(
+            hidden_states=hidden_states,
+            expert_scores=expert_scores,
+            expert_ids=expert_ids,
+            anchor_mlp=anchor_mlp,
+            experts=experts,
+            module_args=module_args,
+            module_kwargs=module_kwargs,
+        )
+        normalized_ids = tuple(expert_ids)
+        normalized_experts = tuple(experts)
+        if not all(
+            isinstance(expert, AnchorRelativeExpert)
+            for expert in normalized_experts
+        ):
+            raise TypeError(
+                "experts must implement the AnchorRelativeExpert interface."
+            )
+        if expert_scores.dtype != hidden_states.dtype:
+            raise ValueError(
+                "expert_scores and hidden_states must share one dtype for "
+                "delta combination."
+            )
+        forwarded_kwargs = {} if module_kwargs is None else dict(module_kwargs)
+        selected_routes = self.selection_policy(
+            expert_scores,
+            expert_ids=normalized_ids,
+        )
+        capacity = self._apply_capacity(
+            selected_routes,
+            expert_availability=expert_availability,
+        )
+
+        token_shape = capacity.route_arity.shape
+        token_count = capacity.route_arity.numel()
+        if token_count == 0:
+            raise ValueError("Cannot dispatch an input with zero tokens.")
+        hidden_size = hidden_states.shape[-1]
+        flat_hidden = hidden_states.reshape(token_count, hidden_size)
+        flat_effective = capacity.effective_indices.reshape(token_count, 2)
+
+        # The anchor is deliberately dense in COM-004: it executes once for
+        # every token, including tokens that also receive specialist deltas.
+        flat_anchor_output = anchor_mlp(
+            flat_hidden,
+            *module_args,
+            **forwarded_kwargs,
+        )
+        output_tail, output_dtype, output_device = _validate_candidate_output(
+            flat_anchor_output,
+            expected_tokens=token_count,
+            expected_tail=None,
+            expected_dtype=None,
+            expected_device=None,
+        )
+        if output_dtype != expert_scores.dtype:
+            raise ValueError(
+                "Anchor output and router scores must share one dtype."
+            )
+        if output_device != expert_scores.device:
+            raise ValueError(
+                "Anchor output and router scores must share one device."
+            )
+
+        flat_selected_deltas = flat_anchor_output.new_zeros(
+            (token_count * 2, *output_tail)
+        )
+        executed_slots = 0
+        for candidate_index, expert in enumerate(normalized_experts, start=1):
+            active_occurrences = torch.nonzero(
+                flat_effective == candidate_index,
+                as_tuple=False,
+            )
+            if active_occurrences.numel() == 0:
+                continue
+            token_indices = active_occurrences[:, 0]
+            pair_slots = active_occurrences[:, 1]
+            candidate_hidden = torch.index_select(
+                flat_hidden,
+                dim=0,
+                index=token_indices,
+            )
+            candidate_anchor = torch.index_select(
+                flat_anchor_output,
+                dim=0,
+                index=token_indices,
+            )
+            candidate_delta = expert.forward_delta(
+                candidate_hidden,
+                *module_args,
+                anchor_output=candidate_anchor,
+                **forwarded_kwargs,
+            )
+            _validate_candidate_output(
+                candidate_delta,
+                expected_tokens=token_indices.numel(),
+                expected_tail=output_tail,
+                expected_dtype=output_dtype,
+                expected_device=output_device,
+            )
+            pair_positions = token_indices * 2 + pair_slots
+            flat_selected_deltas = torch.index_copy(
+                flat_selected_deltas,
+                dim=0,
+                index=pair_positions,
+                source=candidate_delta,
+            )
+            executed_slots += int(pair_positions.numel())
+
+        expected_slots = int(capacity.route_arity.sum().item())
+        if executed_slots != expected_slots:
+            raise RuntimeError(
+                "Capacity-approved delta routes were not completely executed."
+            )
+        anchor_output = flat_anchor_output.reshape(*token_shape, *output_tail)
+        selected_deltas = flat_selected_deltas.reshape(
+            *token_shape,
+            2,
+            *output_tail,
+        )
+        combination = self.combination_policy(
+            anchor_output,
+            selected_deltas,
+            selected_scores=capacity.effective_scores,
+            route_arity=capacity.route_arity,
+        )
+        return AnchorDeltaDispatchResult(
+            output=combination.output,
+            selected_routes=selected_routes,
+            capacity=capacity,
+            delta_weights=combination.weights,
+        )
+
+    def _apply_capacity(
+        self,
+        routes: RouteDecision | AdaptiveRouteDecision,
+        *,
+        expert_availability: Tensor | None,
+    ) -> Top2CapacityDecision:
+        """Normalize top-1 and adaptive routes to one pair-shaped contract."""
+
+        if isinstance(routes, AdaptiveRouteDecision):
+            return self.adaptive_capacity_policy(
+                routes,
+                expert_availability=expert_availability,
+            )
+        if not isinstance(routes, RouteDecision):
+            raise TypeError(
+                "Delta selection must return RouteDecision or "
+                "AdaptiveRouteDecision."
+            )
+        top1_capacity = self.top1_capacity_policy(
+            routes,
+            expert_availability=expert_availability,
+        )
+        effective = top1_capacity.routes
+        effective_indices = torch.stack(
+            (effective.selected_indices, torch.zeros_like(effective.selected_indices)),
+            dim=-1,
+        )
+        effective_scores = torch.stack(
+            (effective.selected_scores, torch.zeros_like(effective.selected_scores)),
+            dim=-1,
+        )
+        overflow_mask = torch.stack(
+            (
+                top1_capacity.overflow_mask,
+                torch.zeros_like(top1_capacity.overflow_mask),
+            ),
+            dim=-1,
+        )
+        return Top2CapacityDecision(
+            effective_indices=effective_indices,
+            effective_scores=effective_scores,
+            route_arity=(effective.selected_indices != 0).to(dtype=torch.long),
+            expert_ids=effective.expert_ids,
+            overflow_mask=overflow_mask,
         )
 
 

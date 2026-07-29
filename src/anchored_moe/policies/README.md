@@ -12,9 +12,11 @@ specialist prefix under an explicit per-token maximum-expert budget. COM-001
 combines an approved specialist pair with score-softmax weights, COM-002
 supplies equal-weight and normalized-positive-evidence baselines, and COM-003
 uses a separately fitted frozen affine head to produce mixture weights without
-changing pair selection. BAL-001 rewrites unavailable top-1 experts to the
-anchor. BAL-002 consumes an approved top-2 pair and degrades it
-deterministically to its available survivor or the anchor.
+changing pair selection. COM-004 keeps the dense anchor active and adds zero,
+one, or two selected anchor-relative expert deltas. BAL-001 rewrites
+unavailable top-1 experts to the anchor. BAL-002 consumes an approved top-2
+pair and degrades it deterministically to its available survivor or the
+anchor; the same availability semantics apply to adaptive COM-004 routes.
 
 This subpackage does not extract router features, produce or fit expert scores,
 attach experts, execute MLPs, dispatch tokens, estimate serving capacity,
@@ -35,6 +37,7 @@ evaluation features.
 | COM-002 | `combination.policy: equal_weight` | `combination.py` | Validated |
 | COM-002 | `combination.policy: normalized_positive_evidence` | `combination.py` | Validated |
 | COM-003 | `combination.policy: learned_mixture_weight` | `learned_combination.py` | Validated |
+| COM-004 | `combination.policy: always_on_anchor_deltas` | `combination.py` | Validated |
 | BAL-001 | `capacity.overflow: anchor` | `capacity.py` | Validated |
 | BAL-002 | `capacity.degradation: top2_to_top1` | `capacity.py` | Validated |
 
@@ -50,8 +53,8 @@ per-token compute bound and whose active prefix varies by confidence.
 `CompatibilityConstrainedTop2Selection` binds one immutable
 `MixtureCompatibilityIndex` and also returns `Top2RouteDecision`. INF-001
 consumes the top-1 result, while INF-002 consumes either top-2 policy through
-the narrow interface. Adaptive and arbitrary-\(k\) sparse execution remain
-separate.
+the narrow interface. COM-004 consumes adaptive routes through its explicit
+delta dispatcher; arbitrary-\(k\) sparse execution remains separate.
 
 `OverflowToAnchorCapacity` consumes a `RouteDecision` and optional per-token
 expert availability. `CapacityDecision` exposes the effective routes and the
@@ -59,6 +62,8 @@ tokens that overflowed.
 `Top2ToTop1Capacity` consumes a `Top2RouteDecision`.
 `Top2CapacityDecision` exposes packed effective execution slots, route arity,
 and pair-shaped overflow metadata without changing the original decision.
+`AdaptiveToAnchorCapacity` provides the same packed contract for POL-003
+without activating specialists outside its retained pair.
 
 `CombinationPolicy` is the activation-combination interface.
 `ScoreSoftmaxCombination` consumes only already approved, already ordered
@@ -71,6 +76,8 @@ buffer-only affine map from an ordered selected-score pair to separate mixing
 logits. `LearnedMixtureWeightCombination` deploys its normalized weights
 through the same result contract. The head's standalone safetensors artifact
 contains only finite coefficients and strict format metadata.
+`AlwaysOnAnchorDeltaCombination` consumes one complete anchor activation plus
+pair-shaped delta slots and returns `AnchorDeltaCombinationResult`.
 
 ## Mathematical formulation
 
@@ -293,6 +300,24 @@ The fixed second logit makes the binary affine model identifiable. Pair order
 comes from the selection policy, so \(\alpha_{t,1}\) always applies to the
 first-ranked expert rather than to one global expert identity.
 
+For COM-004, let
+\(\Delta_{\ell,k}(h)=E_{\ell,k}(h)-A_\ell(h)\). After capacity handling,
+effective route arity \(a'_t\in\{0,1,2\}\) gives
+
+\[
+y_t =
+\begin{cases}
+A_\ell(h_t), & a'_t=0,\\
+A_\ell(h_t)+\Delta_{\ell,i}(h_t), & a'_t=1,\\
+A_\ell(h_t)+\alpha_i\Delta_{\ell,i}(h_t)
+              +\alpha_j\Delta_{\ell,j}(h_t), & a'_t=2.
+\end{cases}
+\]
+
+Top-2 delta weights use score softmax; a top-1 survivor uses \([1,0]\), and an
+anchor route uses \([0,0]\). Anchor routes select the original anchor
+activation rather than relying on addition with zero.
+
 For selected route \(r_t\) and availability
 \(C_{t,k}\in\{\mathrm{false},\mathrm{true}\}\), BAL-001 computes
 
@@ -424,6 +449,16 @@ Learned mixture-weight combination:
 4. Append a fixed-zero second logit and apply stable pair softmax.
 5. Broadcast, combine, and return output and exact deployed weights.
 
+Always-on anchor-delta combination:
+
+1. Require one complete anchor activation for every token.
+2. Require pair-shaped deltas, scores, and route arity zero, one, or two.
+3. Require every inactive delta slot to be exactly zero.
+4. Assign zero weights to anchor routes and \([1,0]\) to top-1 routes.
+5. Apply score softmax only to top-2 routes.
+6. Add the weighted deltas to the anchor for active routes.
+7. Select the unchanged anchor activation for arity-zero routes.
+
 Capacity fallback:
 
 1. Treat omitted availability as all experts available.
@@ -500,6 +535,13 @@ Top-2 capacity degradation:
   buffer-only head explicitly with ordinary PyTorch `.to(...)` semantics.
 - COM-003 does not infer oracle weights, execute counterfactual routes, or
   identify an optimal coefficient from one CAL-003 pair-loss observation.
+- COM-004 always executes the anchor and accepts only anchor-relative experts.
+- COM-004 anchor rows return the already-computed dense activation exactly.
+- COM-004 top-1 weights are \([1,0]\); top-2 weights are non-negative and sum
+  to one; inactive delta slots must be exactly zero.
+- Adaptive availability fallback never activates an unrequested specialist,
+  never searches beyond the retained pair, and returns to the anchor when no
+  requested expert is available.
 - All combination strategies preserve the shared activation/score dtype and
   device and return exact deployed weights.
 - Selection and combination do not execute expert modules.
@@ -520,8 +562,9 @@ Top-2 capacity degradation:
 ## Hugging Face integration
 
 The policies operate on ordinary PyTorch tensors and do not depend on a
-specific Transformers model family. INF-001 integrates them with `RoutedMLP`
-only after an explicit `configure_anchored_top1()` call.
+specific Transformers model family. INF-001 integrates top-1 with `RoutedMLP`
+after `configure_anchored_top1()`, while COM-004 integrates adaptive or top-1
+delta execution after `configure_always_on_anchor_deltas()`.
 
 `AnchoredMoEConfig` continues to reject
 `selection.policy: anchored_top1`, `selection.policy: anchor_veto_top2`,
@@ -543,6 +586,7 @@ an incomplete model-level configuration.
 ```python
 from anchored_moe import (
     AdaptiveTop1Top2Selection,
+    AlwaysOnAnchorDeltaCombination,
     AnchorVetoTop2Selection,
     AnchoredTop1Selection,
     CompatibilityConstrainedTop2Selection,
@@ -621,12 +665,18 @@ learned_mixture = LearnedMixtureWeightCombination(fitted_mixture_head)(
     pair_ordered_expert_outputs,
     selected_scores=approved_scores,
 )
+delta_mixture = AlwaysOnAnchorDeltaCombination(mix_temperature=1.0)(
+    anchor_output,
+    pair_ordered_deltas,
+    selected_scores=effective_delta_scores,
+    route_arity=effective_delta_arity,
+)
 ```
 
 The public strategy names are `anchored_top1`, `anchor_veto_top2`,
 `adaptive_top1_top2`, `global_compatibility_top2`, `dynamic_k`,
 `score_softmax`, `equal_weight`, `normalized_positive_evidence`,
-`learned_mixture_weight`, and
+`learned_mixture_weight`, `always_on_anchor_deltas`, and
 `top2_to_top1`. See
 `examples/verify_anchored_top1.py`, `examples/verify_anchor_veto_top2.py`,
 `examples/verify_compatibility_top2.py`,
@@ -635,6 +685,8 @@ The public strategy names are `anchored_top1`, `anchor_veto_top2`,
 `examples/verify_combination_baselines.py` for deterministic integration.
 See `examples/verify_learned_mixture_weights.py` for COM-003 fitting,
 buffer-only deployment, activation combination, and safe reload.
+See `examples/verify_always_on_anchor_deltas.py` for COM-004 anchor, top-1,
+and adaptive top-2 LoRA-delta execution.
 
 ## References
 
@@ -666,12 +718,15 @@ buffer-only deployment, activation combination, and safe reload.
   motivates token-dependent expert counts. POL-006 provides deterministic
   selection metadata and a fixed per-token cap rather than learning token
   importance or a compute-allocation objective.
+- [DeepSeekMoE: Towards Ultimate Expert Specialization in Mixture-of-Experts Language Models](https://arxiv.org/abs/2401.06066)
+  motivates separating shared computation from routed specialist computation.
+  COM-004 differs by retaining one pretrained dense MLP as an immutable
+  always-on anchor and adding independently trained plug-in deltas.
 
 POL-001, POL-002, POL-003, POL-005, COM-001, COM-002, COM-003, BAL-001, and
 BAL-002 are framework infrastructure and do not derive a training or
-optimization algorithm from a paper. POL-006 is paper-motivated, with its
-deterministic anchored threshold and per-token cap documented as
-project-specific differences.
+optimization algorithm from a paper. COM-004 and POL-006 are paper-motivated,
+with project-specific differences documented above.
 
 ## Tests and known limitations
 
@@ -703,6 +758,13 @@ executable example behavior. Package-manifest integration, model-level
 configuration, counterfactual weight-grid execution, pair-identity features,
 and accelerator/distributed fitting remain future work.
 
+COM-004 tests cover exact anchor fallback, top-1 and score-softmax top-2 delta
+weights, inactive-slot rejection, adaptive availability degradation, sparse
+expert calls, score/hidden/expert gradients, zero-update LoRA deltas, and a
+tiny Qwen3 routed-layer integration. Package-driven delta attachment,
+telemetry, native delta-only PEFT kernels, and arbitrary-\(k\) combination
+remain future work.
+
 BAL-002 tests cover both-available retention, first- and second-ranked
 survivors, promotion into effective slot zero, neither-available anchor
 fallback, anchor-veto preservation, pair-shaped overflow metadata, omitted
@@ -733,8 +795,9 @@ candidate execution.
 
 INF-001 executes effective top-1 routes, INF-002 executes capacity-adjusted
 standalone anchor-veto or compatibility-constrained routes, and EVAL-002
-records top-1 routes. Capacity estimation, fallback beyond the selected pair,
-adaptive or arbitrary-\(k\) sparse execution, arbitrary-\(k\) activation
+records top-1 routes. COM-004 executes adaptive sparse routes only for
+anchor-relative experts. Capacity estimation, fallback beyond the selected
+pair, arbitrary-\(k\) sparse execution, arbitrary-\(k\) activation
 combination and compatibility, top-2 telemetry, decision serialization,
-package attachment, `RoutedMLP` top-2 integration, and model-level routed
-strategy configuration remain future work.
+package attachment, `RoutedMLP` replacement-top-2 integration, and
+model-level routed strategy configuration remain future work.

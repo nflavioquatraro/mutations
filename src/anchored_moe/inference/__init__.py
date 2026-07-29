@@ -6,6 +6,8 @@ from anchored_moe.inference.composition import (
     synchronize_anchored_top1_registry,
 )
 from anchored_moe.inference.dispatch import (
+    AlwaysOnAnchorDeltaDispatcher,
+    AnchorDeltaDispatchResult,
     AnchoredTop1Dispatcher,
     AnchoredTop2Dispatcher,
     Top1DispatchResult,
@@ -18,6 +20,8 @@ from anchored_moe.inference.telemetry import (
 )
 
 __all__ = [
+    "AlwaysOnAnchorDeltaDispatcher",
+    "AnchorDeltaDispatchResult",
     "AnchoredTop1Dispatcher",
     "AnchoredTop2Dispatcher",
     "PackageMaterializationError",

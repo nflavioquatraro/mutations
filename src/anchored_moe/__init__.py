@@ -37,6 +37,7 @@ from anchored_moe.calibration import (
 )
 from anchored_moe.configuration import AnchoredMoEConfig, ResolvedStrategyConfig
 from anchored_moe.experts import (
+    AnchorRelativeExpert,
     Expert,
     ExpertSerializationError,
     FullMLPExpert,
@@ -69,6 +70,8 @@ from anchored_moe.evaluation import (
     measure_module_state_footprint,
 )
 from anchored_moe.inference import (
+    AlwaysOnAnchorDeltaDispatcher,
+    AnchorDeltaDispatchResult,
     AnchoredTop1Dispatcher,
     AnchoredTop2Dispatcher,
     PackageMaterializationError,
@@ -87,10 +90,13 @@ from anchored_moe.modeling import (
 )
 from anchored_moe.policies import (
     ActivationCombinationResult,
+    AdaptiveToAnchorCapacity,
     AdaptiveRouteDecision,
     AdaptiveTop1Top2Selection,
     AnchorVetoTop2Selection,
     AnchoredTop1Selection,
+    AlwaysOnAnchorDeltaCombination,
+    AnchorDeltaCombinationResult,
     CapacityDecision,
     CombinationPolicy,
     CompatibilityConstrainedTop2Selection,
@@ -192,15 +198,21 @@ __all__ = [
     "AffineRouterHead",
     "ActivationCombinationResult",
     "ActiveMLPMetrics",
+    "AdaptiveToAnchorCapacity",
     "AdaptiveRouteDecision",
     "AdaptiveTop1Top2Selection",
     "AnchorVetoTop2Selection",
+    "AnchorDeltaCombinationResult",
+    "AnchorDeltaDispatchResult",
+    "AnchorRelativeExpert",
     "AnchoredMoEConfig",
     "AnchoredModelError",
     "AnchoredMoEForCausalLM",
     "AnchoredTop1Dispatcher",
     "AnchoredTop2Dispatcher",
     "AnchoredTop1Selection",
+    "AlwaysOnAnchorDeltaCombination",
+    "AlwaysOnAnchorDeltaDispatcher",
     "AppendOnlyRouterHeads",
     "AuxiliaryLoadBalancingError",
     "AuxiliaryLoadBalancingLoss",

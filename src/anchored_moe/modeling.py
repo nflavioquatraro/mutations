@@ -16,11 +16,24 @@ from transformers import (
 
 from anchored_moe.backends.base import ConversionReport, ModelBackend
 from anchored_moe.configuration import AnchoredMoEConfig
-from anchored_moe.experts.base import Expert
-from anchored_moe.inference.dispatch import AnchoredTop1Dispatcher
+from anchored_moe.experts.base import AnchorRelativeExpert, Expert
+from anchored_moe.inference.dispatch import (
+    AlwaysOnAnchorDeltaDispatcher,
+    AnchoredTop1Dispatcher,
+)
 from anchored_moe.inference.telemetry import RouteTelemetry
-from anchored_moe.policies.capacity import OverflowToAnchorCapacity
-from anchored_moe.policies.combination import ScoreSoftmaxCombination
+from anchored_moe.policies.capacity import (
+    AdaptiveToAnchorCapacity,
+    OverflowToAnchorCapacity,
+)
+from anchored_moe.policies.combination import (
+    AlwaysOnAnchorDeltaCombination,
+    ScoreSoftmaxCombination,
+)
+from anchored_moe.policies.selection import (
+    AdaptiveTop1Top2Selection,
+    AnchoredTop1Selection,
+)
 from anchored_moe.registry.package import ExpertPackage, PackageIdentity
 from anchored_moe.registry.composition import (
     COMPOSITION_MANIFEST_FILENAME,
@@ -78,6 +91,7 @@ class RoutedMLP(nn.Module):
         self.router_heads: RouterScoreBank | None = None
         self.experts = nn.ModuleList()
         self._dispatcher: AnchoredTop1Dispatcher | None = None
+        self._delta_dispatcher: AlwaysOnAnchorDeltaDispatcher | None = None
         self._local_combination: ScoreSoftmaxCombination | None = None
         self._capture_local_mixture_weights = False
         self._local_mixture_weights: Tensor | None = None
@@ -192,9 +206,94 @@ class RoutedMLP(nn.Module):
         self.router_heads = None
         self.experts = nn.ModuleList([expert])
         self._dispatcher = None
+        self._delta_dispatcher = None
         self._local_combination = None
         self._route_telemetry = None
         self.routing_mode = "forced_expert"
+
+    def configure_always_on_anchor_deltas(
+        self,
+        *,
+        layer_index: int,
+        router_feature_extractor: RouterFeatureExtractor,
+        router_heads: RouterScoreBank,
+        experts: Mapping[str, AnchorRelativeExpert],
+        selection_policy: (
+            AnchoredTop1Selection | AdaptiveTop1Top2Selection | None
+        ) = None,
+        combination_policy: AlwaysOnAnchorDeltaCombination | None = None,
+        top1_capacity_policy: OverflowToAnchorCapacity | None = None,
+        adaptive_capacity_policy: AdaptiveToAnchorCapacity | None = None,
+    ) -> None:
+        """Attach COM-004 always-on-anchor delta execution.
+
+        The live anchor runs for every token. Attached experts must implement
+        :class:`AnchorRelativeExpert`; their complete-output behavior remains
+        available to existing training and replacement runtimes, while this
+        mode calls only :meth:`AnchorRelativeExpert.forward_delta`.
+
+        Selection defaults to POL-003 adaptive top-1/top-2. Callers may instead
+        supply POL-001 anchored top-1. Configuration is one-shot from exact
+        ``forced_anchor`` mode and does not change package installation state.
+        """
+
+        if self.routing_mode != "forced_anchor":
+            raise RuntimeError(
+                "Always-on delta execution requires forced_anchor mode."
+            )
+        if (
+            isinstance(layer_index, bool)
+            or not isinstance(layer_index, int)
+            or layer_index < 0
+        ):
+            raise ValueError("layer_index must be a non-negative integer.")
+        if not isinstance(router_feature_extractor, RouterFeatureExtractor):
+            raise TypeError(
+                "router_feature_extractor must be a RouterFeatureExtractor."
+            )
+        if not isinstance(router_heads, RouterScoreBank):
+            raise TypeError("router_heads must implement RouterScoreBank.")
+        if router_feature_extractor.output_size != router_heads.feature_size:
+            raise ValueError(
+                "Router feature output size must match the score bank."
+            )
+        if not isinstance(experts, Mapping) or not all(
+            isinstance(expert_id, str)
+            and isinstance(expert, AnchorRelativeExpert)
+            for expert_id, expert in experts.items()
+        ):
+            raise TypeError(
+                "experts must map string IDs to AnchorRelativeExpert modules."
+            )
+        expert_ids = router_heads.expert_ids_for_layer(layer_index)
+        if set(experts) != set(expert_ids) or len(experts) != len(expert_ids):
+            raise ValueError(
+                "Attached delta expert IDs must exactly match router scores at "
+                f"layer {layer_index}: {tuple(experts)} != {expert_ids}."
+            )
+
+        dispatcher = AlwaysOnAnchorDeltaDispatcher(
+            selection_policy=selection_policy,
+            combination_policy=combination_policy,
+            top1_capacity_policy=top1_capacity_policy,
+            adaptive_capacity_policy=adaptive_capacity_policy,
+        )
+        router_feature_extractor.requires_grad_(False)
+        router_heads.requires_grad_(False)
+        self.layer_index = layer_index
+        self.expert_ids = expert_ids
+        self.router_feature_extractor = router_feature_extractor
+        self.router_heads = router_heads
+        self.experts = nn.ModuleList(
+            [experts[expert_id] for expert_id in expert_ids]
+        )
+        self._dispatcher = None
+        self._delta_dispatcher = dispatcher
+        self._local_combination = None
+        self._capture_local_mixture_weights = False
+        self._local_mixture_weights = None
+        self._route_telemetry = None
+        self.routing_mode = "always_on_anchor_deltas"
 
     def configure_local_mini_moe(
         self,
@@ -274,6 +373,7 @@ class RoutedMLP(nn.Module):
         self.router_heads = router_heads
         self.experts = nn.ModuleList(ordered_experts)
         self._dispatcher = None
+        self._delta_dispatcher = None
         self._local_combination = combination_policy
         self._capture_local_mixture_weights = capture_mixture_weights
         self._local_mixture_weights = None
@@ -340,6 +440,7 @@ class RoutedMLP(nn.Module):
         self.router_heads = None
         self.experts = nn.ModuleList()
         self._dispatcher = None
+        self._delta_dispatcher = None
         self._local_combination = None
         self._capture_local_mixture_weights = False
         self._local_mixture_weights = None
@@ -411,6 +512,7 @@ class RoutedMLP(nn.Module):
         self.router_heads = router_heads
         self.experts = nn.ModuleList(ordered_experts)
         self._dispatcher = dispatcher
+        self._delta_dispatcher = None
         self._local_combination = None
         self._capture_local_mixture_weights = False
         self._local_mixture_weights = None
@@ -468,6 +570,39 @@ class RoutedMLP(nn.Module):
                 # TRN-003 path does not retain this tensor.
                 self._local_mixture_weights = combination.weights
             return combination.output
+
+        if self.routing_mode == "always_on_anchor_deltas":
+            if (
+                self.layer_index is None
+                or self.router_feature_extractor is None
+                or self.router_heads is None
+                or self._delta_dispatcher is None
+            ):
+                raise RuntimeError(
+                    "RoutedMLP always-on delta runtime is incomplete."
+                )
+            expert_availability = kwargs.pop("expert_availability", None)
+            features = self.router_feature_extractor(hidden_states)
+            if self.expert_ids:
+                expert_scores = self.router_heads(
+                    features,
+                    layer_index=self.layer_index,
+                )
+            else:
+                expert_scores = hidden_states.new_empty(
+                    hidden_states.shape[:-1] + (0,)
+                )
+            result = self._delta_dispatcher.dispatch(
+                hidden_states,
+                expert_scores=expert_scores,
+                expert_ids=self.expert_ids,
+                anchor_mlp=self.anchor_mlp,
+                experts=tuple(self.experts),
+                expert_availability=expert_availability,
+                module_args=args,
+                module_kwargs=kwargs,
+            )
+            return result.output
 
         if (
             self.layer_index is None

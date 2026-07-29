@@ -24,7 +24,8 @@ parameterization remains independently configurable.
 serialization contract. Its `set_trainable()` extension point lets each
 parameterization declare the exact subset owned by an optimizer.
 `FullMLPExpert` owns one complete trainable copy. `PEFTLoRAExpert` owns a
-private frozen copy with PEFT-injected adapter tensors.
+private frozen copy with PEFT-injected adapter tensors and implements the
+`AnchorRelativeExpert` delta contract used by COM-004.
 
 ## Mathematical formulation
 
@@ -106,6 +107,16 @@ serialization:
 The supplied live anchor and the reconstructed private base have equal initial
 values but disjoint storage. The private base is omitted from the payload.
 
+Given an already-computed live-anchor activation, EXP-002 exposes
+
+\[
+\Delta_{\ell,k}(h)=E_{\ell,k}(h)-A_\ell(h).
+\]
+
+At zero-update initialization this delta is exactly zero in the validated
+Qwen3 execution path. The existing complete-output and safetensors contracts
+remain unchanged.
+
 ## Algorithms
 
 Anchor-copy initialization:
@@ -149,6 +160,13 @@ PEFT/LoRA construction and serialization:
    shapes, and dtypes, restore through PEFT, and verify every tensor.
 8. Freeze the compatible live anchor only after complete load verification.
 
+Anchor-relative execution:
+
+1. Receive hidden states and the matching already-computed live-anchor output.
+2. Execute the complete private PEFT expert once.
+3. Require exact output shape, dtype, and device agreement.
+4. Subtract the supplied anchor activation and return only the delta.
+
 ## Assumptions and invariants
 
 - The runtime can deep-copy the anchor MLP.
@@ -169,6 +187,10 @@ PEFT/LoRA construction and serialization:
   targets fail before the supplied anchor is frozen.
 - The saved PEFT version is reproducibility metadata. A different runtime
   version is accepted only when the strict adapter schema remains compatible.
+- `AnchorRelativeExpert.forward_delta()` never executes or stores a live
+  anchor; the caller supplies its activation.
+- `PEFTLoRAExpert.forward_delta()` preserves the existing private-copy
+  representation and therefore still pays for that private base computation.
 
 ## Hugging Face integration
 
@@ -228,6 +250,8 @@ See `examples/verify_full_mlp_expert.py` for an offline Qwen3 example covering
 copy equality, gradient isolation, and tensor serialization. See
 `examples/verify_lora_expert.py` for zero-update equivalence, adapter-only
 optimization, immutable-anchor verification, and exact adapter reload. See
+`examples/verify_always_on_anchor_deltas.py` for anchor-relative LoRA
+execution under COM-004. See
 `examples/train_expert_package.py` for multi-layer training and package export.
 
 ## References
@@ -240,7 +264,8 @@ optimization, immutable-anchor verification, and exact adapter reload. See
 - [LoRA: Low-Rank Adaptation of Large Language Models](https://arxiv.org/abs/2106.09685)
   defines the frozen-weight low-rank update used by EXP-002. This
   implementation applies it to a private MLP copy so the expert returns a
-  complete replacement output; shared-anchor deltas remain COM-004.
+  complete replacement output and exposes its anchor-relative difference to
+  COM-004.
 - [Hugging Face PEFT LoRA documentation](https://huggingface.co/docs/peft/main/conceptual_guides/lora)
   defines adapter injection, scaling, and adapter-only state conventions.
 - The repository
@@ -262,12 +287,13 @@ EXP-002 acceptance additionally covers deterministic configuration, exact
 zero-update Qwen3 output, private base storage, adapter-only gradients,
 trainability toggling, failed-injection anchor safety, adapter-only
 safetensors contents, deterministic bytes, strict schema validation, exact
-reload, and real adapter-only forced-path Trainer optimization.
+reload, exact zero-update anchor-relative deltas, and real adapter-only
+forced-path Trainer optimization.
 
 INF-001 can explicitly attach an expert object to one `RoutedMLP`, TRN-001 can
 force one trainable expert at every converted layer, PKG-002 can
 activate its validated package descriptor in a registry, and PKG-007 can
 materialize explicitly bound full-MLP payloads across converted layers.
-PEFT/LoRA package export/materialization, shared-anchor delta execution, mixed
-parameterization packages, non-default LoRA initialization, and distributed
-materialization remain future work.
+PEFT/LoRA package export/materialization, native delta-only execution without
+the private frozen base, mixed parameterization packages, non-default LoRA
+initialization, and distributed materialization remain future work.

@@ -74,3 +74,35 @@ class Expert(nn.Module, ABC):
         overwrite: bool = False,
     ) -> None:
         """Serialize only expert tensors to a non-executable safetensors file."""
+
+
+class AnchorRelativeExpert(Expert, ABC):
+    r"""Expert that can expose its transformation relative to an anchor.
+
+    The ordinary :meth:`Expert.forward` contract remains a complete MLP
+    transformation ``E_k(h)`` so anchor-relative experts continue to work with
+    forced-path and replacement dispatch. COM-004 additionally requires
+
+    \[
+    \Delta_k(h) = E_k(h) - A(h),
+    \]
+
+    where ``anchor_output`` is the already computed live-anchor activation
+    ``A(h)`` for exactly the supplied hidden-state rows. Accepting that
+    activation explicitly prevents the delta interface from executing or
+    retaining another live anchor.
+
+    Implementations must preserve the shape, dtype, and device of
+    ``anchor_output`` and must not mutate it. The caller remains responsible
+    for proving that the expert and anchor are compatible.
+    """
+
+    @abstractmethod
+    def forward_delta(
+        self,
+        hidden_states: Tensor,
+        *args: Any,
+        anchor_output: Tensor,
+        **kwargs: Any,
+    ) -> Tensor:
+        """Return the expert's anchor-relative output for selected tokens."""

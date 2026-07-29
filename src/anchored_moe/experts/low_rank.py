@@ -17,8 +17,9 @@ Differences from the paper:
     LoRA is applied to a private frozen MLP copy so the object continues to
     return a complete specialist MLP output under the framework's existing
     top-1/top-2 expert interface. This avoids mutating the live anchor but
-    duplicates frozen base storage at runtime. Shared-anchor delta execution
-    is deliberately deferred to COM-004.
+    duplicates frozen base storage at runtime. COM-004 reuses that complete
+    output to expose an anchor-relative delta; it does not remove the private
+    base computation.
 """
 
 from __future__ import annotations
@@ -42,7 +43,11 @@ from safetensors import safe_open
 from safetensors.torch import load_file, save_file
 from torch import Tensor, nn
 
-from anchored_moe.experts.base import Expert, ExpertSerializationError
+from anchored_moe.experts.base import (
+    AnchorRelativeExpert,
+    Expert,
+    ExpertSerializationError,
+)
 
 
 _SERIALIZATION_FORMAT: Final = "anchored_moe.peft_lora.v1"
@@ -191,7 +196,7 @@ class LoRAExpertConfig:
         )
 
 
-class PEFTLoRAExpert(Expert):
+class PEFTLoRAExpert(AnchorRelativeExpert):
     r"""Complete MLP expert backed by PEFT LoRA adapter parameters.
 
     For immutable anchor MLP parameters ``W`` and low-rank factors ``A_k`` and
@@ -217,8 +222,9 @@ class PEFTLoRAExpert(Expert):
             parameters remain frozen in either mode.
 
     The expert returns a complete MLP output and therefore works with existing
-    forced-path and routed replacement execution. It is not a COM-004
-    delta-only expert.
+    forced-path and routed replacement execution. COM-004 uses
+    :meth:`forward_delta` to subtract an already computed live-anchor
+    activation without changing this representation or its payload format.
 
     References:
         Hu et al., "LoRA: Low-Rank Adaptation of Large Language Models."
@@ -421,6 +427,41 @@ class PEFTLoRAExpert(Expert):
         """Execute the complete private MLP plus its active LoRA update."""
 
         return self.expert_mlp(hidden_states, *args, **kwargs)
+
+    def forward_delta(
+        self,
+        hidden_states: Tensor,
+        *args: Any,
+        anchor_output: Tensor,
+        **kwargs: Any,
+    ) -> Tensor:
+        r"""Return ``E_k(h) - A(h)`` using the caller's live-anchor output.
+
+        The private frozen base is still executed as part of ``E_k`` because
+        EXP-002 injects PEFT into a complete copied MLP. Reusing the live
+        ``anchor_output`` avoids a second explicit anchor call and gives
+        COM-004 an exact zero delta at zero-adapter initialization. A future
+        native delta representation may avoid the private-base computation
+        without changing this public interface.
+        """
+
+        if not isinstance(anchor_output, Tensor):
+            raise TypeError("anchor_output must be a torch.Tensor.")
+        expert_output = self.expert_mlp(hidden_states, *args, **kwargs)
+        if expert_output.shape != anchor_output.shape:
+            raise ValueError(
+                "anchor_output must have the complete expert output shape: "
+                f"{tuple(anchor_output.shape)} != {tuple(expert_output.shape)}."
+            )
+        if expert_output.dtype != anchor_output.dtype:
+            raise ValueError(
+                "anchor_output and expert output must share one dtype."
+            )
+        if expert_output.device != anchor_output.device:
+            raise ValueError(
+                "anchor_output and expert output must share one device."
+            )
+        return expert_output - anchor_output
 
     def save_safetensors(
         self,

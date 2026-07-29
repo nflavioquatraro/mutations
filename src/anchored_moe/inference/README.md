@@ -18,6 +18,9 @@ learned frozen mixture weights. PKG-007 safely materializes
 top-1 runtime objects from active local packages. During that materialization,
 RTR-003 compiles package-owned independent affine heads into one frozen
 logical score bank per routed layer.
+COM-004 provides a separate explicit `RoutedMLP` mode in which the live anchor
+executes for every token and sparse POL-001 or POL-003 routes add
+anchor-relative expert deltas.
 
 It does not install packages implicitly, estimate serving capacity, attach
 top-2 dispatch to `RoutedMLP`, construct compatibility metadata, or manage
@@ -34,6 +37,7 @@ materialization boundary while restoring a saved checkpoint.
 |---|---|---|---|
 | INF-001 | `AnchoredTop1Dispatcher`, `RoutedMLP.configure_anchored_top1` | `dispatch.py`, `modeling.py` | Validated |
 | INF-002, BAL-002 | `AnchoredTop2Dispatcher`, `Top2DispatchResult` | `dispatch.py` | Validated |
+| COM-004 | `AlwaysOnAnchorDeltaDispatcher`, `RoutedMLP.configure_always_on_anchor_deltas` | `dispatch.py`, `modeling.py` | Validated |
 | EVAL-002 | `RouteTelemetry`, `RouteRecord`, `RouteSummary` | `telemetry.py` | Validated |
 | PKG-007 | `synchronize_anchored_top1_registry` | `composition.py`, `modeling.py` | Validated |
 | TRN-001 | `RoutedMLP.configure_forced_expert` | `modeling.py` | Validated |
@@ -94,6 +98,18 @@ regardless of its original rank. `Top2DispatchResult.mixture_weights` has
 shape \(D_1\times\cdots\times D_n\times2\): arity-two tokens contain
 \(\alpha_t\), arity-one tokens contain \([1,0]\), and anchor tokens contain
 \([0,0]\).
+
+COM-004 always computes \(A(h_t)\) and then applies capacity-approved
+anchor-relative deltas:
+
+\[
+y_t=A(h_t)+\sum_{s=1}^{a'_t}\alpha_{t,s}\Delta_{c'_{t,s}}(h_t).
+\]
+
+For arity zero, the implementation returns the original \(A(h_t)\) values
+without delta arithmetic. Arity one uses coefficient one; arity two uses
+score-softmax weights. `AnchorDeltaDispatchResult` exposes the original
+selection, packed capacity decision, and complete pair-shaped delta weights.
 
 Telemetry records selected candidate indices, effective candidate indices,
 selected scores, and overflow flags:
@@ -156,6 +172,18 @@ Pair-shaped top-2 dispatch:
 9. Reconstruct anchor, top-1, and combined outputs in original token order.
 10. Return original routes, capacity metadata, and full-shape weights.
 
+Always-on anchor-delta dispatch:
+
+1. Validate anchor-relative experts and POL-001 or POL-003 selection.
+2. Apply top-1 or adaptive availability fallback without expanding the
+   selected set.
+3. Execute the live anchor once over every token.
+4. Gather capacity-approved rows for each delta expert.
+5. Pass each expert the matching already-computed anchor activation.
+6. Reconstruct zero-padded pair-shaped deltas in original token order.
+7. Apply COM-004 with zero, unit, or score-softmax delta weights.
+8. Return exact anchor rows plus auditable route, capacity, and weight data.
+
 `RoutedMLP` remains in exact `forced_anchor` mode until
 `configure_anchored_top1()` is called explicitly. An empty configured expert
 set constructs an empty score dimension and dispatches every token to the
@@ -205,6 +233,11 @@ Registry synchronization:
 - INF-002 checks explicit availability but does not estimate capacity. Pair
   compatibility is enforced only by a configured compatibility-constrained
   policy; the dispatcher never infers it.
+- COM-004 executes the live anchor exactly once for every token and executes
+  only capacity-approved delta experts.
+- COM-004 supports POL-001 and POL-003; arbitrary-\(k\) execution is excluded.
+- COM-004 requires `AnchorRelativeExpert` objects and never interprets a
+  complete replacement expert as a delta.
 - The feature extractor and `RouterScoreBank` are frozen at inference
   attachment.
 - Existing expert gradient flags are preserved.
@@ -213,7 +246,8 @@ Registry synchronization:
 - Telemetry is opt-in, bounded, detached, copied to CPU, and contains no model
   inputs or activations.
 - Additional MLP arguments are forwarded unchanged. Token-aligned auxiliary
-  tensors requiring sparse indexing are not supported by INF-001 or INF-002.
+  tensors requiring sparse indexing are not supported by INF-001, INF-002, or
+  COM-004.
 - PKG-007 implements local explicit top-1 attachment. Top-2 package
   attachment, `RoutedMLP` integration, capacity estimation, telemetry,
   compatibility-index construction, and distributed dispatch remain separate
@@ -236,6 +270,9 @@ For \(N=\prod_i D_i\), router selection and initial mask-scan grouping are
 \(O(NK)\). INF-001 executes one MLP per token. INF-002 executes one MLP for an
 anchor or effective top-1 token and two MLPs for an effective top-2 token;
 combination is linear in the selected activation size.
+COM-004 executes the anchor for all \(N\) tokens plus zero, one, or two sparse
+delta experts per token. The current PEFT representation still executes its
+private frozen base inside each selected complete expert.
 
 ## Hugging Face integration
 
@@ -255,6 +292,11 @@ POL-005 can instead consume a PKG-003 compatibility index supplied explicitly
 by the caller. The dispatcher is deliberately not exposed through `RoutedMLP`,
 `AnchoredMoEForCausalLM`, registry synchronization, or declarative
 configuration yet.
+
+COM-004 uses the same Qwen3 wrapper through the explicit
+`configure_always_on_anchor_deltas()` API. It accepts `AnchorRelativeExpert`
+objects, POL-001 or POL-003, and model-family-neutral router features and
+scores. It is not selected by `AnchoredMoEConfig` or package materialization.
 
 CORE-005 wraps the native causal LM in a `PreTrainedModel` facade. Its
 `forward()` and `generate()` delegate to that native implementation, while
@@ -315,6 +357,19 @@ degraded_tokens = result.capacity.top1_mask
 # Use LearnedMixtureWeightCombination(fitted_head) for COM-003.
 ```
 
+Always-on anchor with adaptive LoRA deltas:
+
+```python
+routed_mlp.configure_always_on_anchor_deltas(
+    layer_index=3,
+    router_feature_extractor=features,
+    router_heads=heads,
+    experts={"code:0": code_lora, "math:0": math_lora},
+    selection_policy=AdaptiveTop1Top2Selection(mix_threshold=0.25),
+)
+output = routed_mlp(hidden_states, expert_availability=availability)
+```
+
 Compatibility-aware top-2 uses the same dispatcher:
 
 ```python
@@ -352,6 +407,7 @@ See `examples/verify_routed_top1.py`, `examples/verify_top2_dispatch.py`,
 `examples/verify_compatibility_top2.py`,
 `examples/verify_combination_baselines.py`,
 `examples/verify_learned_mixture_weights.py`, and
+`examples/verify_always_on_anchor_deltas.py`,
 `examples/verify_package_runtime.py` for deterministic offline examples. The
 last uses `AnchoredMoEForCausalLM` for the complete public top-1 composition
 lifecycle. The NB-007 `examples/export_reload_lifecycle.py` companion and
@@ -375,9 +431,14 @@ exact rollback.
 - [PyTorch `softmax` documentation](https://docs.pytorch.org/docs/stable/generated/torch.nn.functional.softmax.html)
   defines the normalized score weights applied after ranked pair
   reconstruction.
+- [DeepSeekMoE: Towards Ultimate Expert Specialization in Mixture-of-Experts Language Models](https://arxiv.org/abs/2401.06066)
+  motivates shared-plus-routed expert computation. COM-004 retains a
+  pretrained immutable dense anchor and adds independently trained plug-in
+  deltas instead of jointly training shared and routed experts.
 
 INF-001, INF-002, BAL-002, and EVAL-002 are framework infrastructure and do
-not derive a training or optimization algorithm from a paper.
+not derive a training or optimization algorithm from a paper. COM-004 is
+paper-motivated with the difference documented above.
 
 ## Tests and known limitations
 
@@ -402,10 +463,17 @@ integration, policy-result validation before execution, both/one/neither
 availability, second-ranked survivor promotion, effective route arity,
 pair-shaped overflow metadata, and preservation of all INF-001 tests.
 
+COM-004 acceptance covers exact dense fallback, adaptive anchor/top-1/top-2
+routes, top-1 overflow, sparse expert call counts, delta and score gradients,
+LoRA zero-delta equality, immutable anchor parameters, public result
+invariants, and tiny-Qwen3 `RoutedMLP` execution.
+
 The initial implementation groups each candidate with a separate mask scan.
 Optimized batched dispatch, token-aligned auxiliary MLP arguments, capacity
 estimation, fallback beyond the selected pair, live-model checkpoint hash
 verification, route serialization,
 automatic install hooks, model-level configuration, multi-device
 materialization, top-2 telemetry, `RoutedMLP`
-top-2 integration, and package-driven top-2 attachment remain unsupported.
+replacement-top-2 integration, package-driven top-2 or delta attachment,
+native delta-only PEFT kernels, and arbitrary-\(k\) delta execution remain
+unsupported.

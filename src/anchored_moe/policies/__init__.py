@@ -1,6 +1,7 @@
 """Selection, combination, and capacity policies for anchored routing."""
 
 from anchored_moe.policies.capacity import (
+    AdaptiveToAnchorCapacity,
     CapacityDecision,
     OverflowToAnchorCapacity,
     Top2CapacityDecision,
@@ -8,6 +9,8 @@ from anchored_moe.policies.capacity import (
 )
 from anchored_moe.policies.combination import (
     ActivationCombinationResult,
+    AlwaysOnAnchorDeltaCombination,
+    AnchorDeltaCombinationResult,
     CombinationPolicy,
     EqualWeightCombination,
     NormalizedPositiveEvidenceCombination,
@@ -35,7 +38,10 @@ from anchored_moe.policies.selection import (
 
 __all__ = [
     "ActivationCombinationResult",
+    "AlwaysOnAnchorDeltaCombination",
+    "AnchorDeltaCombinationResult",
     "AdaptiveRouteDecision",
+    "AdaptiveToAnchorCapacity",
     "AdaptiveTop1Top2Selection",
     "AnchorVetoTop2Selection",
     "AnchoredTop1Selection",

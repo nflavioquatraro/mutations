@@ -119,6 +119,32 @@ def test_backward_reaches_only_adapters_and_never_the_original_anchor() -> None:
         assert torch.equal(tensor, anchor_before[name])
 
 
+def test_lora_expert_exposes_exact_anchor_relative_delta() -> None:
+    torch.manual_seed(229)
+    anchor = NamedProjectionMLP().eval()
+    hidden_states = torch.randn(2, 3, 4)
+    expert = PEFTLoRAExpert(anchor, config=_config())
+    anchor_output = anchor(hidden_states)
+
+    zero_delta = expert.forward_delta(
+        hidden_states,
+        anchor_output=anchor_output,
+    )
+    assert torch.equal(zero_delta, torch.zeros_like(anchor_output))
+
+    with torch.no_grad():
+        for name in expert.adapter_parameter_names:
+            if ".lora_B." in name:
+                expert.expert_mlp.get_parameter(name).fill_(0.05)
+    complete_output = expert(hidden_states)
+    delta = expert.forward_delta(
+        hidden_states,
+        anchor_output=anchor_output,
+    )
+    assert torch.equal(delta, complete_output - anchor_output)
+    assert torch.count_nonzero(delta).item() > 0
+
+
 def test_trainability_toggle_never_unfreezes_private_base() -> None:
     expert = PEFTLoRAExpert(
         NamedProjectionMLP(),

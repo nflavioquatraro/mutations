@@ -46,6 +46,8 @@ standalone weighted top-2 strategy primitives:
   unchanged top-2 selection;
 - adaptive anchor/top-1/top-2 selection with explicit auditable route arity
   and deterministic mixture-threshold behavior;
+- explicit always-on-anchor execution with sparse top-1 or adaptive top-2
+  PEFT/LoRA deltas, exact dense fallback, and capacity-aware degradation;
 - confidence-gated dynamic-\(k\) selection with stable specialist ranking,
   explicit per-token compute bounds, and auditable variable route arity;
 - immutable package-declared expert compatibility groups and deterministic
@@ -164,6 +166,7 @@ python examples/verify_dense_equivalence.py
 python examples/inspect_expert_package.py
 python examples/verify_full_mlp_expert.py
 python examples/verify_lora_expert.py
+python examples/verify_always_on_anchor_deltas.py
 python examples/verify_affine_router.py
 python examples/verify_logical_router.py
 python examples/verify_router_distillation.py
