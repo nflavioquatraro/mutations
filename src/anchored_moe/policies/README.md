@@ -6,8 +6,10 @@ The policies subpackage owns decisions made from already calibrated router
 scores, already selected specialist outputs, and capacity metadata. POL-001
 implements fixed-zero anchored hard top-1 selection. POL-002 ranks an
 anchor-veto top-2 pair, POL-003 chooses adaptive anchor/top-1/top-2 route
-arity, and POL-005 chooses a globally ranked top-2 pair restricted by explicit
-PKG-003 compatibility groups. POL-006 chooses a confidence-qualified
+arity, POL-004 chooses anchor/package top-1 and then an unconditional local
+top-2 pair inside the winning package, and POL-005 chooses a globally ranked
+top-2 pair restricted by explicit PKG-003 compatibility groups. POL-006
+chooses a confidence-qualified
 specialist prefix under an explicit per-token maximum-expert budget. COM-001
 combines an approved specialist pair with score-softmax weights, COM-002
 supplies equal-weight and normalized-positive-evidence baselines, and COM-003
@@ -31,6 +33,7 @@ evaluation features.
 | POL-001 | `selection.policy: anchored_top1` | `selection.py` | Validated |
 | POL-002 | `selection.policy: anchor_veto_top2` | `selection.py` | Validated |
 | POL-003 | `selection.policy: adaptive_top1_top2` | `selection.py` | Validated |
+| POL-004 | `selection.policy: hierarchical_package_top1_local_top2` | `hierarchical.py` | Validated |
 | POL-005 | `selection.policy: global_compatibility_top2` | `selection.py` | Validated |
 | POL-006 | `selection.policy: dynamic_k` | `selection.py` | Validated |
 | COM-001 | `combination.policy: score_softmax` | `combination.py` | Validated |
@@ -55,6 +58,11 @@ per-token compute bound and whose active prefix varies by confidence.
 consumes the top-1 result, while INF-002 consumes either top-2 policy through
 the narrow interface. COM-004 consumes adaptive routes through its explicit
 delta dispatcher; arbitrary-\(k\) sparse execution remains separate.
+`HierarchicalPackageTop1LocalTop2Selection` instead exposes a staged API:
+`select_packages()` returns ordinary anchored `RouteDecision` metadata and
+`select_locals()` reconstructs one `HierarchicalRouteDecision` containing both
+the package audit trail and a flattened dispatch-compatible
+`Top2RouteDecision`.
 
 `OverflowToAnchorCapacity` consumes a `RouteDecision` and optional per-token
 expert availability. `CapacityDecision` exposes the effective routes and the
@@ -204,6 +212,45 @@ with shape \(D_1\times\cdots\times D_n\times2\), while route arity has token
 shape \(D_1\times\cdots\times D_n\). If fewer than two specialists exist,
 candidate index zero and score zero pad the missing ranking slots. Padding is
 never active.
+
+For POL-004, package evidence is
+
+\[
+Q_t=[q_{t,1},\ldots,q_{t,P}],
+\qquad q_{t,0}=0,
+\]
+
+and the first-stage package route is
+
+\[
+c_t=\operatorname*{argmax}_{p\in\{0,\ldots,P\}}q_{t,p}.
+\]
+
+The anchor is candidate zero and wins an exact zero tie. If \(c_t=0\), the
+flattened expert pair is \((0,0)\). Otherwise RTR-005 supplies only package
+\(c_t\)'s local scores
+
+\[
+L_{t,c_t}
+=
+[g_{t,c_t,1},\ldots,g_{t,c_t,K_{c_t}}],
+\qquad K_{c_t}\ge2.
+\]
+
+POL-004 stable-sorts these specialist-only scores and returns their first two
+indices. No second anchor comparison is applied:
+
+\[
+(e_{t,1},e_{t,2})
+=
+\operatorname{Top2Stable}(L_{t,c_t}).
+\]
+
+This is intentional. Package-local scores need only preserve within-package
+order, so two negative local scores remain a valid pair after the package gate
+has already approved specialization. Local indices are translated into one
+globally unique package-major expert order before returning pair-shaped
+metadata to INF-002.
 
 For POL-006, let \(K_{\max}\ge1\) be the configured per-token specialist
 budget and let \(\tau_{\mathrm{act}}\ge0\) be the confidence threshold.
@@ -402,6 +449,21 @@ Adaptive anchor/top-1/top-2:
    greater than the mixture threshold; otherwise choose top-1.
 7. Return ranked metadata, route arity, mode masks, and active per-expert masks.
 
+Hierarchical package top-1/local top-2:
+
+1. Apply POL-001 to finite package scores with the fixed-zero anchor prepended.
+2. Ask RTR-005 to score only the flattened rows assigned to each winning
+   non-anchor package.
+3. Require one local score group for every active package and none for inactive
+   packages; each group's indices must exactly equal the first-stage rows.
+4. Validate the complete package-major topology, at least two local experts
+   per package, and global expert-ID uniqueness.
+5. Stable-sort each selected package's local scores without an anchor column or
+   positivity threshold.
+6. Translate the two local positions into flattened global candidate indices.
+7. Preserve anchor rows as `[0, 0]` and return both package routes and the
+   dispatch-compatible expert-pair decision.
+
 Dynamic-\(k\) confidence and budget selection:
 
 1. Apply the shared score, identifier, shape, and finite-value validation.
@@ -499,6 +561,16 @@ Top-2 capacity degradation:
   conservative anchor and top-1 modes respectively.
 - POL-003 does not execute, combine, capacity-check, or compatibility-check
   selected specialists.
+- POL-004 applies anchor abstention only at the package stage.
+- POL-004 local top-2 is unconditional, stable, and restricted to two distinct
+  experts owned by the selected package.
+- POL-004 requires exact selected-row coverage from RTR-005 and rejects
+  missing, extra, duplicated, reordered, cross-package, or dtype/device
+  mismatched local score groups before dispatch.
+- POL-004 flattens experts in package order while retaining aligned package
+  ownership metadata; anchor rows remain `[0, 0]`.
+- POL-004 does not score routers, execute experts, combine activations, fit
+  package evidence, or create package metadata.
 - POL-006 route arity is between zero and `max_experts`, inclusive.
 - POL-006 activates specialists only on a strict threshold exceedance and
   preserves append order on exact score ties.
@@ -569,6 +641,7 @@ delta execution after `configure_always_on_anchor_deltas()`.
 `AnchoredMoEConfig` continues to reject
 `selection.policy: anchored_top1`, `selection.policy: anchor_veto_top2`,
 `selection.policy: adaptive_top1_top2`, and
+`selection.policy: hierarchical_package_top1_local_top2`,
 `selection.policy: global_compatibility_top2`, and
 `selection.policy: dynamic_k` for model-level configuration because runtime
 strategy construction is not yet configuration-driven. Expert package
@@ -576,6 +649,10 @@ manifests may declare `anchored_top1`; top-2, adaptive, and dynamic-\(k\)
 package attachment remain unsupported. Standalone experiments can use all
 selection strategies explicitly. INF-002 composes either POL-002 or POL-005
 with any `CombinationPolicy` and BAL-002 in a standalone sparse dispatcher.
+POL-004 passes its flattened pair through
+`AnchoredTop2Dispatcher.dispatch_preselected()`, which reuses the same BAL-002
+capacity, combination, sparse execution, and reconstruction path without
+pretending that staged package/local scores are one flat global score bank.
 `capacity.degradation: top2_to_top1` documents that direct API strategy;
 `AnchoredMoEConfig` does not accept it until top-2 model attachment and
 configuration-driven policy construction exist. This does not silently enable
@@ -592,6 +669,7 @@ from anchored_moe import (
     CompatibilityConstrainedTop2Selection,
     DynamicKSelection,
     EqualWeightCombination,
+    HierarchicalPackageTop1LocalTop2Selection,
     LearnedMixtureWeightCombination,
     MixtureCompatibilityIndex,
     NormalizedPositiveEvidenceCombination,
@@ -671,10 +749,28 @@ delta_mixture = AlwaysOnAnchorDeltaCombination(mix_temperature=1.0)(
     selected_scores=effective_delta_scores,
     route_arity=effective_delta_arity,
 )
+
+hierarchical_policy = HierarchicalPackageTop1LocalTop2Selection()
+package_routes = hierarchical_policy.select_packages(
+    hierarchical_router.score_packages(features, layer_index=layer_index),
+    package_ids=hierarchical_router.package_ids_for_layer(layer_index),
+)
+local_groups = hierarchical_router.score_selected_locals(
+    features,
+    package_indices=package_routes.selected_indices,
+    package_ids=package_routes.expert_ids,
+    layer_index=layer_index,
+)
+hierarchical_routes = hierarchical_policy.select_locals(
+    package_routes,
+    local_groups,
+    expert_ids_by_package=expert_ids_by_package,
+)
 ```
 
 The public strategy names are `anchored_top1`, `anchor_veto_top2`,
-`adaptive_top1_top2`, `global_compatibility_top2`, `dynamic_k`,
+`adaptive_top1_top2`, `hierarchical_package_top1_local_top2`,
+`global_compatibility_top2`, `dynamic_k`,
 `score_softmax`, `equal_weight`, `normalized_positive_evidence`,
 `learned_mixture_weight`, `always_on_anchor_deltas`, and
 `top2_to_top1`. See
@@ -683,6 +779,9 @@ The public strategy names are `anchored_top1`, `anchor_veto_top2`,
 `examples/verify_adaptive_selection.py`,
 `examples/verify_dynamic_k_selection.py`, and
 `examples/verify_combination_baselines.py` for deterministic integration.
+See `examples/verify_hierarchical_routing.py` for the staged RTR-005/POL-004
+package gate, selected-row local scoring, negative-score local top-2, and
+flattened route reconstruction.
 See `examples/verify_learned_mixture_weights.py` for COM-003 fitting,
 buffer-only deployment, activation combination, and safe reload.
 See `examples/verify_always_on_anchor_deltas.py` for COM-004 anchor, top-1,
@@ -707,7 +806,8 @@ and adaptive top-2 LoRA-delta execution.
 - The repository
   [architecture blueprint](../../../anchored-plugin-moe-architecture.md)
   defines fixed-zero anchor evidence, anchored hard top-1, anchor-veto top-2,
-  adaptive anchor/top-1/top-2, dynamic-\(k\) allocation, score-softmax
+  adaptive anchor/top-1/top-2, hierarchical package/local routing,
+  dynamic-\(k\) allocation, score-softmax
   activation combination, both COM-002 baselines, separate learned COM-003
   mixing scores, and capacity-aware top-2 degradation.
 - [Harder Tasks Need More Experts: Dynamic Routing in MoE Models](https://arxiv.org/abs/2403.07652)
@@ -723,10 +823,10 @@ and adaptive top-2 LoRA-delta execution.
   COM-004 differs by retaining one pretrained dense MLP as an immutable
   always-on anchor and adding independently trained plug-in deltas.
 
-POL-001, POL-002, POL-003, POL-005, COM-001, COM-002, COM-003, BAL-001, and
-BAL-002 are framework infrastructure and do not derive a training or
-optimization algorithm from a paper. COM-004 and POL-006 are paper-motivated,
-with project-specific differences documented above.
+POL-001, POL-002, POL-003, POL-004, POL-005, COM-001, COM-002, COM-003,
+BAL-001, and BAL-002 are framework infrastructure and do not derive a training
+or optimization algorithm from a paper. COM-004 and POL-006 are
+paper-motivated, with project-specific differences documented above.
 
 ## Tests and known limitations
 
@@ -777,6 +877,15 @@ single-expert padding, arbitrary leading dimensions, dtype/device preservation,
 input immutability, invalid thresholds, malformed public decisions, and
 affine-router integration.
 
+POL-004 tests cover fixed-zero package selection, package-order ties,
+unconditional local top-2 with negative scores, local-order ties, exact
+selected-row coverage, global expert flattening, cross-package identity
+rejection, anchor rows, source-score immutability, sparse preselected dispatch,
+capacity/combination reuse, and the executable hierarchical example. The
+initial policy requires rectangular RTR-005 topology and does not support
+local top-1, a second local anchor veto, ragged package layers, prompt
+shortlisting, or configuration-driven model attachment.
+
 POL-006 tests cover arities from anchor through the configured budget, strict
 confidence-threshold ties, global strongest-prefix retention, append-order
 ties, active arity and per-expert masks, empty and undersized registry padding,
@@ -793,11 +902,12 @@ requirements, duplicate expert IDs, converted-layer coverage, sparse INF-002
 execution, exact anchor fallback, gradient preservation, and validation before
 candidate execution.
 
-INF-001 executes effective top-1 routes, INF-002 executes capacity-adjusted
-standalone anchor-veto or compatibility-constrained routes, and EVAL-002
-records top-1 routes. COM-004 executes adaptive sparse routes only for
-anchor-relative experts. Capacity estimation, fallback beyond the selected
-pair, arbitrary-\(k\) sparse execution, arbitrary-\(k\) activation
-combination and compatibility, top-2 telemetry, decision serialization,
-package attachment, `RoutedMLP` replacement-top-2 integration, and
-model-level routed strategy configuration remain future work.
+INF-001 executes effective top-1 routes. INF-002 executes capacity-adjusted
+standalone anchor-veto, compatibility-constrained, or preselected
+hierarchical routes, and EVAL-002 records top-1 routes. COM-004 executes
+adaptive sparse routes only for anchor-relative experts. Capacity estimation,
+fallback beyond the selected pair, arbitrary-\(k\) sparse execution,
+arbitrary-\(k\) activation combination and compatibility, top-2 telemetry,
+decision serialization, package attachment, `RoutedMLP` replacement-top-2
+integration, and model-level routed strategy configuration remain future
+work.

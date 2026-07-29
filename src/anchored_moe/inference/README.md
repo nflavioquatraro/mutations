@@ -18,6 +18,9 @@ learned frozen mixture weights. PKG-007 safely materializes
 top-1 runtime objects from active local packages. During that materialization,
 RTR-003 compiles package-owned independent affine heads into one frozen
 logical score bank per routed layer.
+POL-004 supplies an already selected flattened pair after its staged package
+and local decisions; `AnchoredTop2Dispatcher.dispatch_preselected()` executes
+that pair through the unchanged INF-002 capacity and combination path.
 COM-004 provides a separate explicit `RoutedMLP` mode in which the live anchor
 executes for every token and sparse POL-001 or POL-003 routes add
 anchor-relative expert deltas.
@@ -172,6 +175,12 @@ Pair-shaped top-2 dispatch:
 9. Reconstruct anchor, top-1, and combined outputs in original token order.
 10. Return original routes, capacity metadata, and full-shape weights.
 
+Preselected hierarchical top-2 dispatch performs the same algorithm after
+validating a caller-supplied `Top2RouteDecision`. A shape-only zero score bank
+preserves the existing validation boundary; the supplied local selected scores
+remain the mixture inputs. This adapter does not rerun or flatten POL-004
+selection semantics.
+
 Always-on anchor-delta dispatch:
 
 1. Validate anchor-relative experts and POL-001 or POL-003 selection.
@@ -227,6 +236,8 @@ Registry synchronization:
   ranked pair.
 - INF-002 preserves first/second ranked order when assigning configured
   combination weights.
+- Preselected routes must preserve the hidden-state token shape, expert order,
+  selected-score dtype, and device before any candidate executes.
 - INF-002 emits zero specialist weights for effective anchor tokens,
   \([1,0]\) for effective top-1 tokens, and non-negative sum-to-one weights for
   effective top-2 tokens.
@@ -355,6 +366,13 @@ degraded_tokens = result.capacity.top1_mask
 # Use EqualWeightCombination() or
 # NormalizedPositiveEvidenceCombination() for COM-002 comparisons.
 # Use LearnedMixtureWeightCombination(fitted_head) for COM-003.
+
+hierarchical_result = AnchoredTop2Dispatcher().dispatch_preselected(
+    hidden_states,
+    selected_routes=hierarchical_routes.expert_routes,
+    anchor_mlp=anchor,
+    experts=experts_in_hierarchical_package_major_order,
+)
 ```
 
 Always-on anchor with adaptive LoRA deltas:
@@ -408,6 +426,7 @@ See `examples/verify_routed_top1.py`, `examples/verify_top2_dispatch.py`,
 `examples/verify_combination_baselines.py`,
 `examples/verify_learned_mixture_weights.py`, and
 `examples/verify_always_on_anchor_deltas.py`,
+`examples/verify_hierarchical_routing.py`, and
 `examples/verify_package_runtime.py` for deterministic offline examples. The
 last uses `AnchoredMoEForCausalLM` for the complete public top-1 composition
 lifecycle. The NB-007 `examples/export_reload_lifecycle.py` companion and
@@ -461,7 +480,9 @@ candidate output contracts, affine-router and full-MLP integration, public
 result invariants, compatibility-constrained sparse execution, registry-index
 integration, policy-result validation before execution, both/one/neither
 availability, second-ranked survivor promotion, effective route arity,
-pair-shaped overflow metadata, and preservation of all INF-001 tests.
+pair-shaped overflow metadata, preselected hierarchical pairs, package-major
+expert order, anchor rows, absence of cross-package mixtures, and preservation
+of all INF-001 tests.
 
 COM-004 acceptance covers exact dense fallback, adaptive anchor/top-1/top-2
 routes, top-1 overflow, sparse expert call counts, delta and score gradients,

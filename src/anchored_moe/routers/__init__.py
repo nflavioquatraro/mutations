@@ -11,6 +11,11 @@ from anchored_moe.routers.heads import (
     AppendOnlyRouterHeads,
     RouterSerializationError,
 )
+from anchored_moe.routers.hierarchical import (
+    HierarchicalLocalScores,
+    HierarchicalRouterError,
+    HierarchicalRouterScoreBank,
+)
 from anchored_moe.routers.logical import (
     LogicalAppendOnlyRouter,
     compile_logical_router,
@@ -37,6 +42,9 @@ __all__ = [
     "CrossLayerStickinessResult",
     "CrossLayerTop1Stickiness",
     "HardRouteDistillationConfig",
+    "HierarchicalLocalScores",
+    "HierarchicalRouterError",
+    "HierarchicalRouterScoreBank",
     "IdentityRouterFeatureExtractor",
     "LayerRouterDistillationReport",
     "LogicalAppendOnlyRouter",

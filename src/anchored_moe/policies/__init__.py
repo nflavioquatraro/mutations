@@ -22,6 +22,11 @@ from anchored_moe.policies.learned_combination import (
     LearnedMixtureWeightCombination,
     LearnedMixtureWeightHead,
 )
+from anchored_moe.policies.hierarchical import (
+    HierarchicalPackageTop1LocalTop2Selection,
+    HierarchicalRouteDecision,
+    HierarchicalSelectionError,
+)
 from anchored_moe.policies.selection import (
     AdaptiveRouteDecision,
     AdaptiveTop1Top2Selection,
@@ -51,6 +56,9 @@ __all__ = [
     "DynamicKRouteDecision",
     "DynamicKSelection",
     "EqualWeightCombination",
+    "HierarchicalPackageTop1LocalTop2Selection",
+    "HierarchicalRouteDecision",
+    "HierarchicalSelectionError",
     "LEARNED_MIXTURE_HEAD_FORMAT_VERSION",
     "LearnedMixtureSerializationError",
     "LearnedMixtureWeightCombination",

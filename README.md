@@ -27,6 +27,9 @@ standalone weighted top-2 strategy primitives:
   strict, deterministic safetensors serialization;
 - a frozen registry-level logical router that compiles independent heads into
   layer-local append-only matrices while preserving incumbent scores exactly;
+- frozen hierarchical package/local routing with a fixed-zero package gate,
+  selected-package-only local scoring, unconditional stable local top-2, and
+  dispatch-compatible routes that cannot mix experts across packages;
 - deterministic router-only global recalibration that jointly optimizes every
   installed affine score column against anchor-relative utility replay while
   leaving the source router, anchor, and experts unchanged;
@@ -149,7 +152,9 @@ activation during registry changes remain separate tracked features.
 Teacher-score distribution distillation, top-2/adaptive distillation,
 top-2/adaptive or autoregressive route hysteresis, arbitrary-\(k\)
 capacity/combination/dispatch, automatic model-level sticky-route propagation,
-and frozen-route expert training also remain separate work.
+frozen-route expert training, ragged hierarchical topologies, prompt-level
+shortlisting, and configuration-driven hierarchical model attachment also
+remain separate work.
 
 ## Development setup
 
@@ -173,6 +178,7 @@ python examples/verify_lora_expert.py
 python examples/verify_always_on_anchor_deltas.py
 python examples/verify_affine_router.py
 python examples/verify_logical_router.py
+python examples/verify_hierarchical_routing.py
 python examples/verify_router_distillation.py
 python examples/verify_cross_layer_stickiness.py
 python examples/verify_anchored_top1.py

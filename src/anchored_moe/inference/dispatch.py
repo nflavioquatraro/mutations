@@ -757,6 +757,56 @@ class AnchoredTop2Dispatcher:
             mixture_weights=mixture_weights,
         )
 
+    def dispatch_preselected(
+        self,
+        hidden_states: Tensor,
+        *,
+        selected_routes: Top2RouteDecision,
+        anchor_mlp: nn.Module,
+        experts: Sequence[nn.Module],
+        expert_availability: Tensor | None = None,
+        module_args: Sequence[Any] = (),
+        module_kwargs: dict[str, Any] | None = None,
+    ) -> Top2DispatchResult:
+        """Execute an already selected pair route through the INF-002 runtime.
+
+        This entry point supports staged selectors such as POL-004, whose
+        package and local scores cannot be represented by the flat
+        ``expert_scores`` input of :meth:`dispatch`. Selection remains
+        external, while capacity degradation, sparse module execution,
+        activation combination, and reconstruction are exactly the ordinary
+        INF-002 path.
+
+        ``selected_routes.selected_scores`` provides the local mixture scores.
+        A shape-only zero score bank is allocated internally so the established
+        dispatcher validation and output dtype/device contracts remain shared.
+        """
+
+        if not isinstance(selected_routes, Top2RouteDecision):
+            raise TypeError("selected_routes must be a Top2RouteDecision.")
+        if not isinstance(hidden_states, Tensor):
+            raise TypeError("hidden_states must be a torch.Tensor.")
+        if hidden_states.ndim < 1:
+            raise ValueError("hidden_states must have a final hidden dimension.")
+        placeholder_scores = hidden_states.new_zeros(
+            hidden_states.shape[:-1] + (len(selected_routes.expert_ids),)
+        )
+        dispatcher = AnchoredTop2Dispatcher(
+            selection_policy=_PreselectedTop2Selection(selected_routes),
+            combination_policy=self.combination_policy,
+            capacity_policy=self.capacity_policy,
+        )
+        return dispatcher.dispatch(
+            hidden_states,
+            expert_scores=placeholder_scores,
+            expert_ids=selected_routes.expert_ids,
+            anchor_mlp=anchor_mlp,
+            experts=experts,
+            expert_availability=expert_availability,
+            module_args=module_args,
+            module_kwargs=module_kwargs,
+        )
+
 
 class AlwaysOnAnchorDeltaDispatcher:
     r"""Execute the anchor for every token and add sparse routed deltas.
@@ -1017,6 +1067,25 @@ class AlwaysOnAnchorDeltaDispatcher:
             expert_ids=effective.expert_ids,
             overflow_mask=overflow_mask,
         )
+
+
+class _PreselectedTop2Selection(Top2SelectionPolicy):
+    """Return one immutable staged decision for dispatcher composition."""
+
+    policy_name = "preselected_top2"
+
+    def __init__(self, selected_routes: Top2RouteDecision) -> None:
+        self.selected_routes = selected_routes
+
+    def select(
+        self,
+        expert_scores: Tensor,
+        *,
+        expert_ids: Sequence[str],
+    ) -> Top2RouteDecision:
+        """Return the staged decision; the dispatcher validates its contract."""
+
+        return self.selected_routes
 
 
 def _validate_top2_selection_result(

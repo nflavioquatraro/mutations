@@ -9,6 +9,9 @@ evidence for an expert at one layer. RTR-003 compiles those package-owned heads
 into frozen layer-local matrices without changing the package wire format.
 RTR-004 creates a new frozen logical router by jointly recalibrating all
 installed affine columns against aligned anchor-relative utility replay data.
+RTR-005 composes one package-level logical router with one logical local router
+per package and evaluates local scores only for token rows already assigned to
+that package.
 RTR-007 distills the anchored hard assignments of any immutable teacher score
 bank into a deterministic affine student and freezes it for deployment.
 RTR-008 applies an explicit switching margin to adjacent-layer anchored top-1
@@ -29,6 +32,7 @@ capacity, and registry features.
 | RTR-002 | `router_architecture: independent_affine_heads` | `base.py`, `heads.py` | Validated |
 | RTR-003 | `router_architecture: logical_append_only_columns` | `base.py`, `logical.py` | Validated |
 | RTR-004 | `recalibration: router_only_global` | `calibration/global_recalibration.py` | Validated |
+| RTR-005 | `router_architecture: hierarchical_package_local` | `hierarchical.py` | Validated |
 | RTR-007 | `strategy: hard_route_distillation` | `stabilized.py` | Validated |
 | RTR-008 | `strategy: cross_layer_top1_stickiness`, `switch_margin` | `stickiness.py` | Validated |
 
@@ -37,6 +41,9 @@ model-family-neutral extension interfaces. `IdentityRouterFeatureExtractor`,
 `AffineRouterHead`, `AppendOnlyRouterHeads`, and `LogicalAppendOnlyRouter`
 provide the concrete implementations. `compile_logical_router()` makes the
 package-head-to-registry-runtime boundary explicit.
+`HierarchicalRouterScoreBank` composes copied `LogicalAppendOnlyRouter`
+instances and returns `HierarchicalLocalScores` groups whose flattened row
+indices make selected-package-only scoring auditable.
 
 ## Mathematical formulation
 
@@ -114,6 +121,35 @@ independent source heads.
 The anchor score remains defined by the architecture as
 \(g_{\ell,0}(h)=0\), but this subpackage does not yet compare expert scores
 against it.
+
+For RTR-005, let \(P\) be the number of installed packages and let package
+\(p\) own \(K_p\ge2\) local experts. The package bank returns
+
+\[
+Q_\ell(h)
+=
+\left[q_{\ell,1}(h),\ldots,q_{\ell,P}(h)\right].
+\]
+
+POL-004 supplies a selected package index \(c_t\in\{0,\ldots,P\}\) for each
+token, where zero is the anchor. RTR-005 then evaluates local bank \(p\) only
+on the flattened selected row set
+
+\[
+I_{\ell,p}=\{t:c_t=p\},
+\qquad
+L_{\ell,p}
+=
+\left[
+g_{\ell,p,1}(h_t),\ldots,g_{\ell,p,K_p}(h_t)
+\right]_{t\in I_{\ell,p}}.
+\]
+
+Thus package scoring costs \(P\) affine columns per token, while local scoring
+costs only the \(K_{c_t}\) columns belonging to the selected package. Anchor
+rows belong to no \(I_{\ell,p}\) and execute no local router. RTR-005 returns
+strictly increasing flattened row indices with every \(L_{\ell,p}\), so the
+policy can reconstruct the original token-leading shape exactly.
 
 RTR-004 uses the fixed-zero anchor during offline fitting. For replay utility
 matrix \(A_\ell\), it selects the anchor-first best-route class from
@@ -248,6 +284,20 @@ Logical append:
 3. Append its ownership key only after tensor registration succeeds.
 4. Leave every incumbent value, source head, and source storage unchanged.
 
+Hierarchical package/local scoring:
+
+1. Require a non-empty RTR-003 package router and an exact local-router mapping.
+2. Validate one package order at every covered layer, exact local layer
+   coverage, at least two stable local experts per package, globally unique
+   expert IDs, and one feature width, dtype, and device.
+3. Copy every source bank through independent affine heads into new buffer-only
+   logical routers.
+4. Score every package for all token rows.
+5. After POL-004 selects package indices, flatten features and gather the rows
+   assigned to each non-anchor package in package order.
+6. Score only the matching local router and return finite scores plus strictly
+   increasing flattened row indices.
+
 Global recalibration:
 
 1. Convert a frozen logical router to storage-independent affine heads.
@@ -317,6 +367,17 @@ Cross-layer top-1 stickiness:
   returns no trainable parameters.
 - A recalibrated router is meaningful only for the registry hash and exact
   expert order recorded by its report.
+- RTR-005 uses a strict rectangular topology: every package appears at every
+  covered layer, every local router covers exactly those layers, and local
+  expert order is constant across layers.
+- RTR-005 requires at least two local experts per package and globally unique
+  expert IDs across packages.
+- Package and local banks share one feature width, dtype, and device and are
+  copied into storage-independent buffer-only RTR-003 deployments.
+- Anchor rows never reach a local router; each selected row reaches exactly
+  one package-local score bank.
+- RTR-005 does not choose packages or experts, compare local scores with the
+  anchor, execute experts, or persist a new hierarchy artifact.
 - Hard-route distillation never changes the teacher, feature bank, anchor,
   experts, or model.
 - The teacher must be frozen, in evaluation mode, on CPU, and produce finite
@@ -373,6 +434,10 @@ router_feature_specification:
 `logical_append_only_columns` describes the in-memory registry runtime, not a
 package manifest. PKG-005 serializes a recalibrated logical router as a
 standalone registry-specific version; it does not change the package format.
+`hierarchical_package_local` is likewise an in-memory composition of existing
+logical banks. Package and local affine heads retain their existing
+safetensors formats; callers rebuild the hierarchy explicitly after package
+and registry validation.
 RTR-007 returns the same `LogicalAppendOnlyRouter` runtime contract, so
 `RoutedMLP` needs no distillation-specific dispatch path. This initial slice
 does not add a report-bearing persistence format or automatic activation.
@@ -391,6 +456,7 @@ from anchored_moe import (
     CrossLayerTop1Stickiness,
     HardRouteDistillationConfig,
     IdentityRouterFeatureExtractor,
+    HierarchicalRouterScoreBank,
     compile_logical_router,
     distill_frozen_router,
     recalibrate_global_router,
@@ -438,6 +504,15 @@ sticky_result = stabilizer(
     previous_routes=previous_layer_routes,
 )
 previous_layer_routes = sticky_result.routes
+
+hierarchical = HierarchicalRouterScoreBank(
+    package_logical_router,
+    {
+        "code-package": code_local_logical_router,
+        "math-package": math_local_logical_router,
+    },
+)
+package_scores = hierarchical.score_packages(features, layer_index=18)
 ```
 
 See `examples/verify_affine_router.py` for RTR-002 deterministic scoring,
@@ -452,6 +527,8 @@ assignment fitting, exact replay agreement, and frozen deployment state.
 See `examples/verify_cross_layer_stickiness.py` for RTR-008 explicit
 adjacent-layer sequencing, margin retention, auditable switching, and
 buffer-only logical-router immutability.
+See `examples/verify_hierarchical_routing.py` for RTR-005 package scoring,
+selected-row local scoring, exact anchor omission, and POL-004 reconstruction.
 
 `AnchoredMoEConfig` continues to reject non-anchor selection policies. INF-001
 allows router objects to be attached explicitly to one `RoutedMLP`; package
@@ -478,6 +555,9 @@ RTR-001, RTR-002, RTR-003, and RTR-004 are framework infrastructure and do not
 derive an optimization algorithm from a paper. RTR-004 implements the
 blueprint's explicit router-only mode using a documented project-specific
 anchored classification objective.
+RTR-005 is also framework infrastructure. It composes the blueprint's
+two-stage hierarchy from existing affine banks without adopting a separate
+paper-derived fitting algorithm.
 RTR-007 adopts StableMoE's two-stage distill-then-freeze principle. It differs
 by distilling fixed-zero-anchor assignments from an arbitrary immutable
 composed teacher over offline CAL-001 features. It does not reproduce the
@@ -503,7 +583,10 @@ student storage independence, exact replay agreement, invalid teacher
 rejection, zero-margin POL-001 equivalence, strict-margin anchor/expert
 retention, current-score gradients, cross-layer expert-ID realignment,
 absent-expert fallback, explicit sequence boundaries, stateless repeated
-calls, audit masks, and `RoutedMLP` plus package-synchronization integration.
+calls, audit masks, rectangular hierarchical topology, source-storage
+independence, package/local identity validation, selected-row-only local
+scoring, anchor-row omission, and `RoutedMLP` plus package-synchronization
+integration.
 
 The current router implementation has no learned projection or head removal.
 RTR-003 uses shape-stable per-column affine evaluation to guarantee exact
@@ -525,6 +608,11 @@ anchored top-1 decisions only. Top-2/adaptive stickiness, autoregressive
 token-to-token hysteresis, automatic model-level route propagation,
 capacity-aware incumbent invalidation, and persistent route state are not
 implemented.
+RTR-005 currently requires rectangular layer coverage and at least two local
+experts per package. Ragged package topologies, package-local router
+serialization as one artifact, automatic construction from registry
+manifests, distributed package routing, and prompt-level shortlisting remain
+separate work.
 Standalone anchor comparison and top-1 selection are implemented by POL-001;
 INF-001 explicitly attaches them for routed-layer dispatch,
 PKG-007 validates serialized router ownership against expert payload bindings,
