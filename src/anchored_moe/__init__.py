@@ -53,6 +53,10 @@ from anchored_moe.experts import (
     LoRAProjectionDelta,
     MICRO_EXPERT_FORMAT_VERSION,
     PEFTLoRAExpert,
+    ProductKeyMicroExpertRetriever,
+    ProductKeyRetrievalConfig,
+    ProductKeyRetrievalError,
+    ProductKeyRetrievalResult,
 )
 from anchored_moe.evaluation import (
     ActiveMLPMetrics,
@@ -357,6 +361,10 @@ __all__ = [
     "PromptShortlistedScores",
     "PromptShortlistingError",
     "PromptTopMShortlister",
+    "ProductKeyMicroExpertRetriever",
+    "ProductKeyRetrievalConfig",
+    "ProductKeyRetrievalError",
+    "ProductKeyRetrievalResult",
     "MixtureCompatibilityError",
     "MixtureCompatibilityIndex",
     "MixtureWeightFittingConfig",

@@ -15,6 +15,10 @@ EXP-004 implements an atomic set of fine-grained intermediate-width
 micro-experts copied from one compatible bias-free gated MLP. The complete set
 reconstructs the anchor exactly at initialization while exposing its narrow
 children for future retrieval research.
+EXP-005 implements exact product-key retrieval over a square EXP-004
+micro-expert identifier space. It owns two learned subkey tables and returns
+stable top-k indices, key pairs, masks, and graph-connected raw scores without
+executing or combining the selected children.
 
 This subpackage does not decide routes, attach experts to `RoutedMLP`, install
 packages, manage capacity, or provide training loops. TRN-001 consumes the
@@ -29,6 +33,7 @@ parameterization remains independently configurable.
 | EXP-002 | `expert_parameterization: peft_lora`, `LoRAExpertConfig` | `base.py`, `low_rank.py` | Validated |
 | EXP-003 | `expert_parameterization: block_sparse_delta`, `BlockSparseDeltaConfig` | `base.py`, `structured_sparse.py` | Validated |
 | EXP-004 | `expert_parameterization: fine_grained_micro`, `FineGrainedMicroExpertConfig` | `base.py`, `micro.py` | Validated |
+| EXP-005 | `ProductKeyRetrievalConfig`, `ProductKeyMicroExpertRetriever` | `retrieval.py` | Validated |
 
 `Expert` defines the model-family-neutral execution, parameter-accounting, and
 serialization contract. Its `set_trainable()` extension point lets each
@@ -211,6 +216,24 @@ rounding differences caused solely by using several smaller matrix kernels.
 All parameters still belong to the narrow registered children, so gradients
 and serialization remain segmented.
 
+For EXP-005, let two learned subkey tables
+\(\mathcal C,\mathcal C'\subset\mathbb R^{d_s}\) each contain \(C\) rows.
+Their Cartesian product defines \(N=C^2\) stable row-major micro-expert IDs.
+An already projected query
+\(q=[q_1;q_2]\in\mathbb R^{2d_s}\) gives pair \((i,j)\) the raw score
+
+\[
+s_{i,j}(q)
+=q_1^\top c_i+q_2^\top c'_j.
+\]
+
+For requested width \(k\), the retriever first finds the best
+\(\min(k,C)\) rows of each subkey table. It then scores their at most
+\(\min(k,C)^2\) Cartesian pairs and performs a second stable top-k. Every
+global top-k product key must use a row from both retained subkey lists, so the
+bounded search exactly matches exhaustive ranking over all \(N\) keys. Equal
+scores resolve by the row-major expert index \(iC+j\).
+
 ## Algorithms
 
 Anchor-copy initialization:
@@ -299,6 +322,22 @@ Fine-grained micro-expert construction and serialization:
    shapes, dtypes, and finite values before constructing and freezing the live
    anchor.
 
+Product-key micro-expert retrieval:
+
+1. Validate one positive `top_k`, two finite equal-shape floating subkey
+   tables, and exactly \(C^2\) stable expert IDs.
+2. Copy both subkey tables into independently owned parameters; optionally
+   freeze both through the public trainability boundary.
+3. Split each finite caller-projected query into two equal subqueries.
+4. Rank each subkey score table stably and keep \(\min(k,C)\) candidates.
+5. Form only their Cartesian candidate scores and row-major expert indices.
+6. Pre-sort candidates by expert index, apply stable descending score ranking,
+   and return the exact top-k indices, pairs, graph-connected scores, and
+   derived masks.
+7. When constructed from `FineGrainedMicroExpertSet`, require a perfect-square
+   child count and derive one stable identifier per child without retaining or
+   mutating the set.
+
 ## Assumptions and invariants
 
 - The runtime can deep-copy the anchor MLP.
@@ -362,6 +401,19 @@ Fine-grained micro-expert construction and serialization:
   select, normalize, retrieve, balance, or capacity-limit micro-experts.
 - Safetensors loading rejects non-finite values as well as metadata, topology,
   key, shape, and dtype mismatches before freezing the supplied live anchor.
+- EXP-005 version 1 requires two equal \(C\times d_s\) subkey tables, an
+  implicit perfect-square expert count \(N=C^2\), and one query of width
+  \(2d_s\). Query, keys, and selected scores share one floating dtype/device.
+- Product-key identifiers use an immutable row-major mapping. Stable sorting
+  makes equal-score selection deterministic in that order.
+- Retrieval owns independent key copies and may train only those key
+  parameters. It neither retains nor changes the EXP-004 set or anchor.
+- Selected scores remain differentiable. Discrete selected indices, pairs,
+  and masks do not provide gradients through top-k membership.
+- EXP-005 implements one retrieval head over preprojected queries. Query
+  projection, normalization, multi-head retrieval, score activation, subset
+  execution, output combination, capacity, and package persistence are
+  outside its version-1 contract.
 
 ## Hugging Face integration
 
@@ -403,6 +455,14 @@ derives explicit layer/expert payload bindings, and publishes a strictly
 validated expert-only package without serializing the anchor.
 Fine-grained package binding is also deferred: the version-1 safetensors file
 is an expert-set artifact, not a new package wire format.
+
+`ProductKeyMicroExpertRetriever` is an ordinary PyTorch module whose two key
+tables participate in `state_dict()` and device placement. It accepts hidden
+features only after a caller or model-family adapter has projected them into
+the documented split-query space. It does not alter Hugging Face model
+forward/generation behavior, attach routes to `RoutedMLP`, or introduce a new
+package wire format. RTR-006 may shortlist packages before callers invoke
+their local retrievers, but automatic shortlist propagation is deferred.
 
 ## Configuration and examples
 
@@ -463,6 +523,23 @@ micro_set = FineGrainedMicroExpertSet.from_anchor(
 micro_set.save_safetensors("code-micro-experts.safetensors")
 ```
 
+```python
+import torch
+from anchored_moe import (
+    ProductKeyMicroExpertRetriever,
+    ProductKeyRetrievalConfig,
+)
+
+retriever = ProductKeyMicroExpertRetriever.from_micro_expert_set(
+    micro_set,
+    torch.randn(2, 8),
+    torch.randn(2, 8),
+    config=ProductKeyRetrievalConfig(top_k=2),
+    expert_id_prefix="code-micro",
+)
+retrieval = retriever(torch.randn(4, 16))
+```
+
 See `examples/verify_full_mlp_expert.py` for an offline Qwen3 example covering
 copy equality, gradient isolation, and tensor serialization. See
 `examples/verify_lora_expert.py` for zero-update equivalence, adapter-only
@@ -472,6 +549,9 @@ sparse-only optimization, immutable-anchor verification, and exact reload. See
 `examples/verify_micro_experts.py` for exact all-segment Qwen3 reconstruction,
 individual narrow contributions, atomic optimization, immutable-anchor
 verification, and exact safe reload. See
+`examples/verify_product_key_retrieval.py` for exact bounded-versus-exhaustive
+product-key search, row-major ties, EXP-004 count binding, gradient ownership,
+and explicit RTR-006 package shortlisting. See
 `examples/verify_always_on_anchor_deltas.py` for anchor-relative LoRA
 execution under COM-004. See
 `examples/train_expert_package.py` for multi-layer training and package export.
@@ -505,6 +585,13 @@ execution under COM-004. See
   shared experts. EXP-004 instead partitions a pinned dense anchor, executes
   every segment with unit contribution for exact initialization, and leaves
   routing, shared experts, balancing, and specialized kernels out of scope.
+- [Mixture of A Million Experts](https://arxiv.org/abs/2407.04153)
+  defines PEER's split-query product-key search and proves that the global
+  top-k lies within the Cartesian product of the two subkey top-k sets.
+  EXP-005 implements only that exact one-head retrieval index. It accepts
+  preprojected queries, uses EXP-004 multi-channel segments instead of
+  singleton neurons, and omits query normalization, multi-head retrieval,
+  score activation, expert execution, output aggregation, and package state.
 - The repository
   [architecture blueprint](../../../anchored-plugin-moe-architecture.md)
   specifies full-copy initialization and immutable-anchor behavior.
@@ -516,6 +603,8 @@ infrastructure rather than an implementation of a paper-derived pruning,
 mixture, or sparse-kernel algorithm.
 EXP-004 implements the cited fine-grained segmentation idea with the documented
 anchored initialization, atomic-set, and routing differences.
+EXP-005 implements the cited product-key search with the documented anchored
+micro-expert mapping and retrieval-only differences.
 
 ## Tests and known limitations
 
@@ -547,6 +636,13 @@ safetensors bytes, strict metadata/topology/tensor validation, non-finite
 rejection, exact reload, and real forced-path Trainer optimization of only the
 atomic set.
 
+EXP-005 acceptance additionally covers strict configuration and square-index
+binding, exact equality with exhaustive Cartesian top-k across several widths,
+stable row-major ties, pair/index/mask alignment, finite dtype/device/shape
+validation, independent subkey storage, graph-connected query/key gradients,
+explicit key trainability, Qwen3 EXP-004 non-mutation, and manual RTR-006
+package-shortlist composition.
+
 INF-001 can explicitly attach an expert object to one `RoutedMLP`, TRN-001 can
 force one trainable expert at every converted layer, PKG-002 can
 activate its validated package descriptor in a registry, and PKG-007 can
@@ -556,10 +652,12 @@ the private frozen base, block-sparse package export/materialization, mixed
 parameterization packages, non-default LoRA initialization, learned or ragged
 sparse masks, fused sparse kernels, performance validation, and distributed
 materialization remain future work.
-Micro-expert subset routing, product-key retrieval, arbitrary-\(k\) dispatch,
-shared experts, load balancing, package export/materialization, biased or
-non-gated MLPs, ragged or hashed partitions, fused segmented kernels,
-accelerator performance claims, and distributed training remain future work.
+Micro-expert subset routing, query-projection and retriever training
+orchestration, query normalization, multi-head product-key retrieval,
+arbitrary-\(k\) dispatch, shared experts, load balancing, product-key
+safetensors/package materialization, biased or non-gated MLPs, non-square or
+ragged indices, fused segmented kernels, accelerator performance claims, and
+distributed training remain future work.
 COM-005 adds reference-only pair merging over the exposed effective matrices;
 arbitrary expert counts, fused dynamic-weight kernels, and static merged
 artifacts remain outside EXP-002.

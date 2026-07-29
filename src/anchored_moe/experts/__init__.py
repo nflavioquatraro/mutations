@@ -20,6 +20,12 @@ from anchored_moe.experts.micro import (
     FineGrainedMicroExpertSet,
     FineGrainedMicroExpertTopology,
 )
+from anchored_moe.experts.retrieval import (
+    ProductKeyMicroExpertRetriever,
+    ProductKeyRetrievalConfig,
+    ProductKeyRetrievalError,
+    ProductKeyRetrievalResult,
+)
 from anchored_moe.experts.structured_sparse import (
     BLOCK_SPARSE_DELTA_FORMAT_VERSION,
     BlockSparseDeltaConfig,
@@ -44,4 +50,8 @@ __all__ = [
     "LoRAProjectionDelta",
     "MICRO_EXPERT_FORMAT_VERSION",
     "PEFTLoRAExpert",
+    "ProductKeyMicroExpertRetriever",
+    "ProductKeyRetrievalConfig",
+    "ProductKeyRetrievalError",
+    "ProductKeyRetrievalResult",
 ]

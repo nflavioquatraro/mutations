@@ -81,6 +81,10 @@ from anchored_moe.experts import (
     LoRAExpertConfig,
     PEFTLoRAExpert,
     MICRO_EXPERT_FORMAT_VERSION,
+    ProductKeyMicroExpertRetriever,
+    ProductKeyRetrievalConfig,
+    ProductKeyRetrievalError,
+    ProductKeyRetrievalResult,
 )
 from anchored_moe.inference import (
     AnchoredTop1Dispatcher,
@@ -426,6 +430,10 @@ def test_current_public_symbols_have_docstrings() -> None:
         BlockSparseModuleTopology,
         LoRAExpertConfig,
         PEFTLoRAExpert,
+        ProductKeyMicroExpertRetriever,
+        ProductKeyRetrievalConfig,
+        ProductKeyRetrievalError,
+        ProductKeyRetrievalResult,
         CounterfactualOracleResult,
         CounterfactualRoute,
         CounterfactualRouteLosses,
