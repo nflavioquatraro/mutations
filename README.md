@@ -22,6 +22,9 @@ standalone weighted top-2 strategy primitives:
 - standalone PEFT/LoRA experts with private frozen anchor copies, exact
   zero-update behavior, adapter-only training, and deterministic adapter-only
   safetensors serialization;
+- deterministic fixed block-sparse delta experts with private frozen anchor
+  copies, exact zero-update behavior, block-only forced-path training, resolved
+  immutable masks, and sparse-only safetensors serialization (EXP-003);
 - frozen identity router features over pre-MLP hidden states;
 - independent append-only affine router heads with calibrated scores and
   strict, deterministic safetensors serialization;
@@ -179,6 +182,7 @@ python examples/verify_dense_equivalence.py
 python examples/inspect_expert_package.py
 python examples/verify_full_mlp_expert.py
 python examples/verify_lora_expert.py
+python examples/verify_block_sparse_expert.py
 python examples/verify_always_on_anchor_deltas.py
 python examples/verify_affine_router.py
 python examples/verify_logical_router.py

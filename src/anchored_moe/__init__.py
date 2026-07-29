@@ -38,6 +38,10 @@ from anchored_moe.calibration import (
 from anchored_moe.configuration import AnchoredMoEConfig, ResolvedStrategyConfig
 from anchored_moe.experts import (
     AnchorRelativeExpert,
+    BLOCK_SPARSE_DELTA_FORMAT_VERSION,
+    BlockSparseDeltaConfig,
+    BlockSparseDeltaExpert,
+    BlockSparseModuleTopology,
     Expert,
     ExpertSerializationError,
     FullMLPExpert,
@@ -231,6 +235,10 @@ __all__ = [
     "AppendOnlyRouterHeads",
     "AuxiliaryLoadBalancingError",
     "AuxiliaryLoadBalancingLoss",
+    "BLOCK_SPARSE_DELTA_FORMAT_VERSION",
+    "BlockSparseDeltaConfig",
+    "BlockSparseDeltaExpert",
+    "BlockSparseModuleTopology",
     "CapacityDecision",
     "CombinationPolicy",
     "COMPOSITION_FORMAT_VERSION",

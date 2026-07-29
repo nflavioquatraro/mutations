@@ -67,6 +67,10 @@ from anchored_moe.evaluation import (
     measure_module_state_footprint,
 )
 from anchored_moe.experts import (
+    BLOCK_SPARSE_DELTA_FORMAT_VERSION,
+    BlockSparseDeltaConfig,
+    BlockSparseDeltaExpert,
+    BlockSparseModuleTopology,
     Expert,
     ExpertSerializationError,
     FullMLPExpert,
@@ -402,6 +406,9 @@ def test_current_public_symbols_have_docstrings() -> None:
         Expert,
         ExpertSerializationError,
         FullMLPExpert,
+        BlockSparseDeltaConfig,
+        BlockSparseDeltaExpert,
+        BlockSparseModuleTopology,
         LoRAExpertConfig,
         PEFTLoRAExpert,
         CounterfactualOracleResult,
@@ -557,6 +564,7 @@ def test_current_public_symbols_have_docstrings() -> None:
     ]
 
     assert EXPERT_PAYLOAD_BINDING_FORMAT_VERSION == 1
+    assert BLOCK_SPARSE_DELTA_FORMAT_VERSION == 1
     assert COMPOSITION_FORMAT_VERSION == 1
     assert REGISTRY_ROUTER_VERSION_FORMAT_VERSION == 1
     assert all(inspect.getdoc(symbol) for symbol in public_symbols)
