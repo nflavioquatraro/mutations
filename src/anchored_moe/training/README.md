@@ -24,6 +24,11 @@ from completed-batch sparse assignments. It exposes raw scores separately from
 selection-only biased scores, excludes the fixed-zero anchor, and safely
 serializes the bias history. It does not claim to rebalance TRN-003's actual
 computation because that dense local path always executes both experts.
+BAL-005 provides a stateless training/prefill research backend in which every
+expert selects a fixed-capacity bucket from a shared batch. It consumes
+TRN-003-compatible affine router logits but deliberately stops at an auditable
+sparse assignment plan: expert execution, output reconstruction, Trainer
+integration, and autoregressive decoding remain separate concerns.
 TRN-005 adds independently weighted replay KL against
 precomputed immutable-anchor logits and parameter drift from
 expert-initialization snapshots. Training does not own data partitioning,
@@ -40,6 +45,7 @@ capacity balancing, or process-level parallel expert dispatch.
 | TRN-004 | `refine_independent_expert_set`, `MixtureAwareRefinementReport`, `MixtureAwareRefinementError` | `refinement.py` | Validated |
 | BAL-003 | `load_balancing_weight`, `AuxiliaryLoadBalancingLoss`, `LocalMiniMoEObjectiveReport` | `balancing.py`, `mini_moe.py` | Validated |
 | BAL-004 | `LossFreeBiasConfig`, `LossFreeBiasBalancer`, `LossFreeBiasedScores`, `LossFreeBiasUpdateReport` | `loss_free.py` | Validated |
+| BAL-005 | `ExpertChoiceConfig`, `ExpertChoiceRouting`, `ExpertChoiceDecision`, `ExpertChoiceRoutingError` | `expert_choice.py` | Validated |
 | TRN-005 | `ExpertObjectiveConfig`, `ReplayKLPreservation`, `ExpertWeightDrift`, `ExpertObjectiveReport` | `objectives.py`, `expert_trainer.py` | Validated |
 
 `ForcedPathTrainingReport` records the resolved layer topology and exact
@@ -266,6 +272,41 @@ underloaded specialist receives a higher one. The update is under
 enters the router or experts. Candidate-zero anchor and inactive padding
 occurrences contribute to no \(c_i\).
 
+For BAL-005, let \(L\in\mathbb R^{n\times E}\) be router logits for \(n\)
+flattened eligible training or prefill tokens and \(E\) experts. Specialist
+affinities are normalized across experts:
+
+\[
+S_{t,e}
+=
+\operatorname{softmax}_e(L_{t,:}).
+\]
+
+Given explicit expert capacity \(C\le n\), expert \(e\) selects
+
+\[
+I_e
+=
+\operatorname{TopC}_{t}\;S_{t,e},
+\qquad |I_e|=C.
+\]
+
+The load of every expert is therefore exactly \(C\), while token arity is
+
+\[
+a_t
+=
+\sum_{e=1}^{E}\mathbb 1[t\in I_e],
+\qquad 0\le a_t\le E.
+\]
+
+An eligible token with \(a_t=0\) receives anchor fallback. Padding is excluded
+before ranking and requests neither specialist nor anchor work. BAL-005 stores
+the sparse index matrix \(I\in\mathbb N^{E\times C}\), its selected
+graph-connected gates \(G\in[0,1]^{E\times C}\), token arities, and fallback
+mask; it does not materialize the paper's
+\(E\times C\times n\) one-hot permutation tensor.
+
 For forced-path logits \(z_{\ell,t}\), precomputed immutable-anchor logits
 \(z^A_{\ell,t}\), replay temperature \(T\), and non-negative token weights
 \(m_t\), preservation is
@@ -414,6 +455,22 @@ Loss-free selection-bias execution:
 9. Save only the bias and update-step buffers plus strict JSON metadata in
    safetensors when the training history must be resumed.
 
+Expert-choice assignment:
+
+1. Require at least two unique expert IDs matching the final router-logit
+   dimension and a positive explicit expert capacity.
+2. Validate finite floating logits, exact mask shape/device, and at least
+   `expert_capacity` eligible tokens before any routing work.
+3. Apply softmax across the expert dimension without changing caller logits.
+4. Flatten token dimensions, discard padding positions, and stably sort each
+   expert's affinities across eligible tokens.
+5. Retain exactly the first `expert_capacity` positions for every expert;
+   flattened token order resolves exact affinity ties.
+6. Gather graph-connected selected gates and scatter sparse occurrences into
+   original-shape token assignment counts.
+7. Mark exactly the eligible zero-assignment tokens for immutable-anchor
+   fallback and return the immutable decision.
+
 Mixture-aware refinement:
 
 1. Require one completed `IndependentExpertSetTrainingReport` containing
@@ -499,6 +556,21 @@ TRN-005 objective execution:
   score columns, route candidate indices, and restored safetensors metadata.
 - The initial BAL-004 primitive performs no distributed load reduction and no
   automatic Trainer-step hook.
+- BAL-005 is batch-relative: every expert sees the same eligible token set and
+  selects exactly `expert_capacity` distinct positions. Exact affinity ties
+  preserve flattened token order.
+- BAL-005 requires the explicit capacity not to exceed the eligible-token
+  count. It never silently clips capacity or invents a rounding rule for a
+  capacity factor.
+- One token may be selected by several experts. Eligible zero-assignment
+  tokens are marked for the immutable anchor; masked padding is never selected
+  and never marked as anchor work.
+- BAL-005 mutates neither logits nor masks. Gradients flow through selected
+  softmax gates, while indices, assignment counts, and fallback masks remain
+  discrete audit metadata.
+- BAL-005 owns no module state and performs no serialization, expert
+  execution, Trainer hook, cross-process token aggregation, or autoregressive
+  route decision.
 - Opposite deterministic biases break initial symmetry without changing
   affine weights.
 - `LocalMiniMoETrainer` is one-shot. Successful and failed runs detach the
@@ -568,6 +640,14 @@ not registered in `LocalMiniMoETrainer`. Sparse training loops call
 `apply_for_selection()` before routing and `update()` only after the completed
 batch. Its standalone safetensors file permits explicit checkpoint ownership
 without serializing the anchor, experts, optimizer, or datasets.
+
+`ExpertChoiceRouting` consumes ordinary batched PyTorch tensors. A Hugging Face
+data collator's boolean attention mask can be passed as `token_mask`; false
+positions are excluded before expert ranking. The backend accepts logits from
+`AppendOnlyRouterHeads`, including the affine heads used by TRN-003, but is not
+registered by `LocalMiniMoETrainer` and does not replace its differentiable
+dense two-expert execution. Accelerate/distributed callers must establish a
+shared token group themselves; this version performs no collective operation.
 
 `refine_independent_expert_set()` validates the completed TRN-002 report and
 ordinary Trainer keyword mapping before constructing `LocalMiniMoETrainer`.
@@ -723,6 +803,23 @@ report = balancer.update(routes.selected_indices)
 balancer.save_safetensors("./loss-free-bias.safetensors")
 ```
 
+Expert-choice routing plans fixed training/prefill buckets without executing
+the experts:
+
+```python
+routing = ExpertChoiceRouting(
+    ExpertChoiceConfig(expert_capacity=32)
+)
+decision = routing(
+    local_router_logits,
+    expert_ids=("code:0", "code:1"),
+    token_mask=attention_mask.bool(),
+)
+print(decision.selected_token_indices)
+print(decision.token_assignment_counts)
+print(decision.anchor_fallback_mask)
+```
+
 See `examples/verify_forced_path_training.py` for a deterministic offline
 training run using a randomly initialized tiny Qwen3 model, precomputed anchor
 logits, token masks, and both TRN-005 terms.
@@ -738,6 +835,9 @@ optimizer ownership, exact anchor restoration, and final freezing.
 sparse anchored top-1 routes, reduces a nine-to-one historical assignment
 imbalance to five-to-five, proves raw-score immutability and zero trainable
 parameters, and round-trips the buffer-only state.
+`examples/verify_expert_choice_routing.py` applies BAL-005 to a masked batch,
+proves exact equal expert capacity, variable zero/one/multiple-expert token
+arity, stable sparse indices, anchor fallback, and selected-gate gradients.
 `examples/verify_mixture_aware_refinement.py` trains two paths independently,
 refines the same pair jointly, and verifies provenance linkage, second-stage
 expert updates, trained local heads, exact anchor restoration, and final
@@ -781,6 +881,12 @@ freezing. See
   documents the use of auxiliary-loss-free bias balancing at scale. This
   framework implementation is a composable local primitive and does not claim
   the report's distributed training or throughput results.
+- [Mixture-of-Experts with Expert Choice Routing](https://arxiv.org/abs/2202.09368)
+  motivates fixed expert buckets, token-axis top-\(k\), and variable expert
+  counts per token. BAL-005 uses explicit integer capacity, sparse indices,
+  padding exclusion, and anchor fallback; it omits execution, the paper's dense
+  permutation tensor, capacity-factor rounding, distributed training, capped
+  token arity, and autoregressive serving.
 
 TRN-001 through TRN-004 are framework infrastructure and introduce no
 paper-derived training algorithm. TRN-003 implements the package-local
@@ -791,7 +897,8 @@ differences stated above. BAL-003 adapts the Switch auxiliary objective with
 the dense-execution, masking, and layer-averaging differences stated above.
 BAL-004 adapts the loss-free sign update with anchored candidate semantics,
 explicit completed-batch assignments, and no automatic distributed or Trainer
-integration.
+integration. BAL-005 adapts expert-choice assignment to an immutable-anchor
+training/prefill planner with explicit capacity and no execution backend.
 
 ## Tests and known limitations
 
@@ -845,6 +952,12 @@ and zero-load behavior, weighted pair-shaped assignments, strict invalid-input
 rejection, safetensors round trips and format rejection, resumed state, sparse
 anchored top-1 convergence, and its executable offline example.
 
+BAL-005 tests cover exact per-expert bucket size, variable token arity,
+multi-expert token selection, anchor fallback, padding exclusion, stable tie
+resolution, configuration round trips, strict capacity/shape/value rejection,
+decision self-validation, input immutability, selected-gate gradients,
+TRN-003-compatible affine-head scores, and its executable offline example.
+
 NB-003 records training-dataset and base-checkpoint provenance but does not
 serialize per-example teacher logits or generate them online. Precomputed
 full-vocabulary logits can also be storage-intensive; compact teacher targets
@@ -862,4 +975,8 @@ not rebalance TRN-003 computation: meaningful load control requires \(K<N\)
 sparse training. Automatic route-decision adapters, per-layer balancer banks,
 gradient-accumulation windows, distributed all-reduce, decay or proportional
 update variants, bias clipping, and production load/throughput studies remain
-future work.
+future work. BAL-005 is not wired into TRN-003, `RoutedMLP`, or an expert
+dispatcher. Capacity-factor resolution, capped experts per token, sparse
+activation combination, model/package configuration, generation, distributed
+token groups, accelerator performance, and production training remain future
+work.

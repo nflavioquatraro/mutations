@@ -5,6 +5,12 @@ from anchored_moe.training.balancing import (
     AuxiliaryLoadBalancingLoss,
     LocalMiniMoEObjectiveReport,
 )
+from anchored_moe.training.expert_choice import (
+    ExpertChoiceConfig,
+    ExpertChoiceDecision,
+    ExpertChoiceRouting,
+    ExpertChoiceRoutingError,
+)
 from anchored_moe.training.expert_trainer import (
     ForcedExpertBinding,
     ForcedPathExpertTrainer,
@@ -50,6 +56,10 @@ from anchored_moe.training.refinement import (
 __all__ = [
     "AuxiliaryLoadBalancingError",
     "AuxiliaryLoadBalancingLoss",
+    "ExpertChoiceConfig",
+    "ExpertChoiceDecision",
+    "ExpertChoiceRouting",
+    "ExpertChoiceRoutingError",
     "ForcedExpertBinding",
     "ForcedPathExpertTrainer",
     "ForcedPathTrainingError",

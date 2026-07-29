@@ -135,6 +135,10 @@ standalone weighted top-2 strategy primitives:
 - gradient-free specialist selection biases updated from completed-batch
   sparse loads, with an exact fixed-zero anchor, separate raw combination
   scores, immutable diagnostics, and strict safetensors persistence (BAL-004);
+- deterministic expert-choice training/prefill assignment with explicit fixed
+  expert capacity, padding exclusion, variable experts per token, stable
+  token-order ties, graph-connected selected gates, and exact anchor-fallback
+  metadata for unassigned valid tokens (BAL-005);
 - provenance-validated mixture-aware refinement that links a completed
   two-expert independent-training report to joint expert-and-router updates
   through the same local mini-MoE runtime;
@@ -177,6 +181,10 @@ configuration-driven hierarchical or shortlisted model attachment also remain
 separate work. Micro-expert subset routing, query-projection and retriever
 training, multi-head retrieval, shared experts, micro-expert package
 materialization, and segmented fused kernels also remain separate work.
+BAL-005 currently plans sparse assignments only; expert execution, Trainer and
+`RoutedMLP` integration, capacity-factor rounding, capped token arity,
+distributed token groups, and autoregressive decoding remain explicit future
+work.
 
 ## Development setup
 
@@ -233,6 +241,7 @@ python examples/verify_forced_path_training.py
 python examples/verify_independent_expert_set.py
 python examples/verify_local_mini_moe.py
 python examples/verify_loss_free_bias_balancing.py
+python examples/verify_expert_choice_routing.py
 python examples/verify_mixture_aware_refinement.py
 python examples/train_expert_package.py
 python examples/fit_router.py
