@@ -25,6 +25,10 @@ standalone weighted top-2 strategy primitives:
 - deterministic fixed block-sparse delta experts with private frozen anchor
   copies, exact zero-update behavior, block-only forced-path training, resolved
   immutable masks, and sparse-only safetensors serialization (EXP-003);
+- deterministic atomic fine-grained micro-expert sets for compatible gated
+  MLPs, with exact all-segment anchor initialization, independently executable
+  narrow children, isolated training, and strict set-only safetensors
+  serialization (EXP-004);
 - frozen identity router features over pre-MLP hidden states;
 - independent append-only affine router heads with calibrated scores and
   strict, deterministic safetensors serialization;
@@ -167,7 +171,9 @@ capacity/combination/dispatch, automatic model-level sticky-route propagation,
 frozen-route expert training, ragged hierarchical topologies, prompt-retriever
 training, automatic shortlist propagation through generation, and
 configuration-driven hierarchical or shortlisted model attachment also remain
-separate work.
+separate work. Product-key micro-expert retrieval, subset routing, shared
+experts, micro-expert package materialization, and segmented fused kernels also
+remain separate work.
 
 ## Development setup
 
@@ -189,6 +195,7 @@ python examples/inspect_expert_package.py
 python examples/verify_full_mlp_expert.py
 python examples/verify_lora_expert.py
 python examples/verify_block_sparse_expert.py
+python examples/verify_micro_experts.py
 python examples/verify_always_on_anchor_deltas.py
 python examples/verify_parameter_space_merge.py
 python examples/verify_affine_router.py

@@ -73,9 +73,14 @@ from anchored_moe.experts import (
     BlockSparseModuleTopology,
     Expert,
     ExpertSerializationError,
+    FineGrainedMicroExpert,
+    FineGrainedMicroExpertConfig,
+    FineGrainedMicroExpertSet,
+    FineGrainedMicroExpertTopology,
     FullMLPExpert,
     LoRAExpertConfig,
     PEFTLoRAExpert,
+    MICRO_EXPERT_FORMAT_VERSION,
 )
 from anchored_moe.inference import (
     AnchoredTop1Dispatcher,
@@ -411,6 +416,10 @@ def test_current_public_symbols_have_docstrings() -> None:
         measure_module_state_footprint,
         Expert,
         ExpertSerializationError,
+        FineGrainedMicroExpert,
+        FineGrainedMicroExpertConfig,
+        FineGrainedMicroExpertSet,
+        FineGrainedMicroExpertTopology,
         FullMLPExpert,
         BlockSparseDeltaConfig,
         BlockSparseDeltaExpert,
@@ -576,6 +585,7 @@ def test_current_public_symbols_have_docstrings() -> None:
 
     assert EXPERT_PAYLOAD_BINDING_FORMAT_VERSION == 1
     assert BLOCK_SPARSE_DELTA_FORMAT_VERSION == 1
+    assert MICRO_EXPERT_FORMAT_VERSION == 1
     assert COMPOSITION_FORMAT_VERSION == 1
     assert LOSS_FREE_BIAS_FORMAT_VERSION == 1
     assert REGISTRY_ROUTER_VERSION_FORMAT_VERSION == 1

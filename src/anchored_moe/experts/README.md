@@ -11,6 +11,10 @@ EXP-003 implements a complete MLP over a private frozen copy with deterministic
 fixed block-sparse additive updates in explicitly targeted linear projections.
 It stores and optimizes only the active blocks while preserving the same
 complete-output and anchor-relative interfaces.
+EXP-004 implements an atomic set of fine-grained intermediate-width
+micro-experts copied from one compatible bias-free gated MLP. The complete set
+reconstructs the anchor exactly at initialization while exposing its narrow
+children for future retrieval research.
 
 This subpackage does not decide routes, attach experts to `RoutedMLP`, install
 packages, manage capacity, or provide training loops. TRN-001 consumes the
@@ -24,6 +28,7 @@ parameterization remains independently configurable.
 | EXP-001 | `expert_parameterization: full_mlp` | `base.py`, `full_mlp.py` | Validated |
 | EXP-002 | `expert_parameterization: peft_lora`, `LoRAExpertConfig` | `base.py`, `low_rank.py` | Validated |
 | EXP-003 | `expert_parameterization: block_sparse_delta`, `BlockSparseDeltaConfig` | `base.py`, `structured_sparse.py` | Validated |
+| EXP-004 | `expert_parameterization: fine_grained_micro`, `FineGrainedMicroExpertConfig` | `base.py`, `micro.py` | Validated |
 
 `Expert` defines the model-family-neutral execution, parameter-accounting, and
 serialization contract. Its `set_trainable()` extension point lets each
@@ -35,6 +40,10 @@ It also exposes canonical graph-connected effective projection updates
 through `projection_deltas()` for COM-005 without changing its payload format.
 `BlockSparseDeltaExpert` owns compact fixed-shape block tensors and a resolved
 immutable mask over private frozen linear projections.
+`FineGrainedMicroExpertSet` is the complete `Expert` boundary; each
+`FineGrainedMicroExpert` child owns one deterministic contiguous range of
+intermediate channels. The set, rather than an individual partial
+contribution, is the atomic training and serialization unit.
 
 ## Mathematical formulation
 
@@ -166,6 +175,42 @@ coordinate, taking the configured prefix, then restoring canonical coordinate
 order. This is deterministic selection, not a statistical randomness or
 security claim.
 
+For EXP-004, let a compatible bias-free gated MLP be
+
+\[
+A(h)=W_d\left(\sigma(W_gh)\odot W_uh\right),
+\]
+
+with hidden width \(d\), intermediate width \(d_f\), and a pointwise
+activation \(\sigma\). For segmentation factor \(m\), version 1 requires
+\(m\ge 2\) and \(m\mid d_f\). Contiguous channel ranges
+\(I_0,\ldots,I_{m-1}\), each of width \(d_f/m\), define
+
+\[
+E_i(h)
+=
+W_{d[:,I_i]}
+\left(
+\sigma(W_{g[I_i,:]}h)
+\odot
+W_{u[I_i,:]}h
+\right).
+\]
+
+Every child maps to the full hidden width, but it is only a partial
+contribution. Executing the atomic set gives
+
+\[
+\sum_{i=0}^{m-1}E_i(h)=A(h).
+\]
+
+The implementation re-concatenates the segmented gate, up, and down weights
+in their original channel order for the complete-set path. This retains the
+same full-width linear reductions as the structural anchor equation and avoids
+rounding differences caused solely by using several smaller matrix kernels.
+All parameters still belong to the narrow registered children, so gradients
+and serialization remain segmented.
+
 ## Algorithms
 
 Anchor-copy initialization:
@@ -234,6 +279,26 @@ Block-sparse construction and serialization:
    require exact metadata, topology, keys, shapes, dtypes, coordinates, and
    finite values, and freeze the live anchor only after validation.
 
+Fine-grained micro-expert construction and serialization:
+
+1. Validate the segmentation factor, public projection and activation paths,
+   contiguous partition strategy, and explicit trainability.
+2. Resolve three distinct bias-free floating `nn.Linear` projections plus one
+   stateless pointwise activation.
+3. Require matching gate/up shapes, the corresponding down shape, one shared
+   device/dtype, and exact width divisibility.
+4. Reject source parameters outside the configured projections and reject
+   persistent buffers so the complete state partition is auditable.
+5. Copy every gate/up row range and matching down column range into independent
+   narrow modules before freezing the live anchor.
+6. Execute the atomic set by reassembling each full projection in stable
+   channel order; expose individual child execution without selecting children.
+7. Save only the narrow weights with canonical configuration, source topology,
+   activation identity, dtype, parameterization, and format metadata.
+8. On load, validate metadata, live source topology, exact tensor closure,
+   shapes, dtypes, and finite values before constructing and freezing the live
+   anchor.
+
 ## Assumptions and invariants
 
 - The runtime can deep-copy the anchor MLP.
@@ -276,6 +341,27 @@ Block-sparse construction and serialization:
 - The block path avoids a dense delta-weight materialization but uses ordinary
   PyTorch slicing, small `linear` calls, zero output chunks, and concatenation.
   It makes no fused-kernel, memory-bandwidth, or speedup guarantee.
+- EXP-004 version 1 accepts only the structural gated equation documented
+  above. Projection paths are configurable and no Qwen3 class check is used,
+  but custom forward arithmetic outside that equation is unsupported.
+- Gate, up, and down projections must be bias-free floating `nn.Linear`
+  modules with identical dtype/device and no other source parameters or
+  persistent buffers.
+- The activation must be callable, pointwise, and stateless. The
+  implementation validates the absence of module parameters and buffers but
+  cannot infer pointwise semantics from arbitrary Python code.
+- The intermediate width must be exactly divisible by the segmentation factor.
+  Segment ranges are contiguous, exhaustive, non-overlapping, and ordered.
+- The atomic set owns exactly the source projection parameter count in
+  independently allocated storage. Construction freezes the compatible live
+  anchor only after every child copy succeeds.
+- `FineGrainedMicroExpertSet.forward()` is a complete replacement output.
+  Individual child outputs are partial contributions and must not be attached
+  to existing top-1 or top-2 replacement dispatch independently.
+- EXP-004 defines unit-contribution all-segment execution only. It does not
+  select, normalize, retrieve, balance, or capacity-limit micro-experts.
+- Safetensors loading rejects non-finite values as well as metadata, topology,
+  key, shape, and dtype mismatches before freezing the supplied live anchor.
 
 ## Hugging Face integration
 
@@ -298,6 +384,14 @@ MLP forward implementation. `ForcedPathExpertTrainer` consumes it through the
 unchanged `Expert.set_trainable()` boundary and therefore constructs an
 optimizer containing only block values.
 
+`FineGrainedMicroExpertSet` resolves configurable structural paths rather than
+importing a Qwen3 implementation class. The defaults match Qwen3's
+`gate_proj`, `up_proj`, `down_proj`, and `act_fn`, while another Transformers
+backend can supply different public paths if it implements the same bias-free
+gated equation. TRN-001 consumes the complete atomic set through the unchanged
+`Expert` boundary and places every segmented parameter, and no anchor
+parameter, in the optimizer.
+
 The `.safetensors` payload is suitable for inclusion in the
 `expert_weight_files` declared by an `ExpertPackageManifest`. Package
 construction, base-checkpoint validation, and multi-layer tensor layout are
@@ -307,6 +401,8 @@ follow-up, as does block-sparse package binding. NB-003's
 `export_full_mlp_expert_package()` consumes trained `FullMLPExpert` objects,
 derives explicit layer/expert payload bindings, and publishes a strictly
 validated expert-only package without serializing the anchor.
+Fine-grained package binding is also deferred: the version-1 safetensors file
+is an expert-set artifact, not a new package wire format.
 
 ## Configuration and examples
 
@@ -354,12 +450,28 @@ sparse_expert = BlockSparseDeltaExpert.from_anchor(
 sparse_expert.save_safetensors("code-blocks.safetensors")
 ```
 
+```python
+from anchored_moe import (
+    FineGrainedMicroExpertConfig,
+    FineGrainedMicroExpertSet,
+)
+
+micro_set = FineGrainedMicroExpertSet.from_anchor(
+    model.model.layers[2].mlp,
+    config=FineGrainedMicroExpertConfig(segmentation_factor=4),
+)
+micro_set.save_safetensors("code-micro-experts.safetensors")
+```
+
 See `examples/verify_full_mlp_expert.py` for an offline Qwen3 example covering
 copy equality, gradient isolation, and tensor serialization. See
 `examples/verify_lora_expert.py` for zero-update equivalence, adapter-only
 optimization, immutable-anchor verification, and exact adapter reload. See
 `examples/verify_block_sparse_expert.py` for deterministic mask resolution,
 sparse-only optimization, immutable-anchor verification, and exact reload. See
+`examples/verify_micro_experts.py` for exact all-segment Qwen3 reconstruction,
+individual narrow contributions, atomic optimization, immutable-anchor
+verification, and exact safe reload. See
 `examples/verify_always_on_anchor_deltas.py` for anchor-relative LoRA
 execution under COM-004. See
 `examples/train_expert_package.py` for multi-layer training and package export.
@@ -386,6 +498,13 @@ execution under COM-004. See
   defines SHA-256, which EXP-003 uses only to rank canonical block coordinates
   reproducibly. It does not use the digest as a payload signature or a source
   of secret randomness.
+- [DeepSeekMoE: Towards Ultimate Expert Specialization in Mixture-of-Experts
+  Language Models](https://arxiv.org/abs/2401.06066) motivates EXP-004's split
+  of one FFN intermediate dimension into more narrowly focused experts. The
+  paper trains router-weighted fine-grained experts jointly and also isolates
+  shared experts. EXP-004 instead partitions a pinned dense anchor, executes
+  every segment with unit contribution for exact initialization, and leaves
+  routing, shared experts, balancing, and specialized kernels out of scope.
 - The repository
   [architecture blueprint](../../../anchored-plugin-moe-architecture.md)
   specifies full-copy initialization and immutable-anchor behavior.
@@ -395,6 +514,8 @@ EXP-002 implements the cited LoRA parameterization with the documented
 private-copy difference. EXP-003 is project-specific structured-sparsity
 infrastructure rather than an implementation of a paper-derived pruning,
 mixture, or sparse-kernel algorithm.
+EXP-004 implements the cited fine-grained segmentation idea with the documented
+anchored initialization, atomic-set, and routing differences.
 
 ## Tests and known limitations
 
@@ -417,6 +538,15 @@ gradients and optimizer ownership, trainability toggling, failure-atomic
 construction, sparse-only deterministic safetensors bytes, strict metadata and
 coordinate validation, exact reload, and real forced-path Trainer updates.
 
+EXP-004 acceptance additionally covers strict configuration and structural
+source validation, deterministic contiguous topology, exact Qwen3 all-segment
+initialization, narrow partial contributions, exact parameter-count
+partitioning, live-anchor and cross-child storage isolation, atomic
+trainability, failure-safe construction, deterministic expert-set-only
+safetensors bytes, strict metadata/topology/tensor validation, non-finite
+rejection, exact reload, and real forced-path Trainer optimization of only the
+atomic set.
+
 INF-001 can explicitly attach an expert object to one `RoutedMLP`, TRN-001 can
 force one trainable expert at every converted layer, PKG-002 can
 activate its validated package descriptor in a registry, and PKG-007 can
@@ -426,6 +556,10 @@ the private frozen base, block-sparse package export/materialization, mixed
 parameterization packages, non-default LoRA initialization, learned or ragged
 sparse masks, fused sparse kernels, performance validation, and distributed
 materialization remain future work.
+Micro-expert subset routing, product-key retrieval, arbitrary-\(k\) dispatch,
+shared experts, load balancing, package export/materialization, biased or
+non-gated MLPs, ragged or hashed partitions, fused segmented kernels,
+accelerator performance claims, and distributed training remain future work.
 COM-005 adds reference-only pair merging over the exposed effective matrices;
 arbitrary expert counts, fused dynamic-weight kernels, and static merged
 artifacts remain outside EXP-002.

@@ -13,6 +13,13 @@ from anchored_moe.experts.low_rank import (
     LoRAProjectionDelta,
     PEFTLoRAExpert,
 )
+from anchored_moe.experts.micro import (
+    MICRO_EXPERT_FORMAT_VERSION,
+    FineGrainedMicroExpert,
+    FineGrainedMicroExpertConfig,
+    FineGrainedMicroExpertSet,
+    FineGrainedMicroExpertTopology,
+)
 from anchored_moe.experts.structured_sparse import (
     BLOCK_SPARSE_DELTA_FORMAT_VERSION,
     BlockSparseDeltaConfig,
@@ -28,8 +35,13 @@ __all__ = [
     "BlockSparseModuleTopology",
     "Expert",
     "ExpertSerializationError",
+    "FineGrainedMicroExpert",
+    "FineGrainedMicroExpertConfig",
+    "FineGrainedMicroExpertSet",
+    "FineGrainedMicroExpertTopology",
     "FullMLPExpert",
     "LoRAExpertConfig",
     "LoRAProjectionDelta",
+    "MICRO_EXPERT_FORMAT_VERSION",
     "PEFTLoRAExpert",
 ]
