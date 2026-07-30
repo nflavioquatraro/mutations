@@ -1,0 +1,388 @@
+---
+title: Evaluation
+description: Verify exact fallback, route and lifecycle behavior, compare quality with cost, and build bounded scaling reports without overstating experimental evidence.
+order: 12
+group: Workflows
+source:
+  - src/anchored_moe/evaluation/README.md
+  - src/anchored_moe/evaluation/equivalence.py
+  - src/anchored_moe/evaluation/routing.py
+  - src/anchored_moe/evaluation/lifecycle.py
+  - src/anchored_moe/evaluation/quality.py
+  - src/anchored_moe/evaluation/efficiency.py
+  - src/anchored_moe/evaluation/registry_composition.py
+  - src/anchored_moe/evaluation/scaling.py
+  - examples/verify_dense_equivalence.py
+  - examples/verify_registry_lifecycle.py
+  - examples/evaluate_registry_strategies.py
+  - examples/evaluate_router_data_scaling.py
+feature_ids:
+  - EVAL-001
+  - EVAL-002
+  - EVAL-003
+  - EVAL-004
+  - EVAL-005
+  - EVAL-006
+  - EVAL-007
+last_reviewed: 2026-07-30
+---
+
+import CodeDisclosure from "../../components/docs/CodeDisclosure.astro";
+import EquationBlock from "../../components/docs/EquationBlock.astro";
+import IntegrationBadge from "../../components/docs/IntegrationBadge.astro";
+import StrategyTable from "../../components/docs/StrategyTable.astro";
+
+export const evaluationStrategies = [
+  {
+    strategy: "Equivalence and route agreement",
+    feature: "EVAL-001 / EVAL-002",
+    question: "Did conversion preserve outputs, anchor state, and route decisions?",
+    output: "Exactness, differences, fingerprints, and agreement",
+    status: { status: "Composable" },
+  },
+  {
+    strategy: "Lifecycle and registry composition",
+    feature: "EVAL-003 / EVAL-006",
+    question: "Are removal, reinsertion, subsets, and installation orders reproducible?",
+    output: "Invariant reports and bounded composition trials",
+    status: { status: "Composable" },
+  },
+  {
+    strategy: "Top-1/top-2 quality",
+    feature: "EVAL-004",
+    question: "Does a selected pair improve enough to justify its extra execution?",
+    output: "Regret, pair gain, and destructive-mixture rate",
+    status: { status: "Composable" },
+  },
+  {
+    strategy: "Efficiency accounting",
+    feature: "EVAL-005",
+    question: "What latency, storage, and active-MLP work did a strategy require?",
+    output: "Timing, throughput, state bytes, and route-derived work",
+    status: { status: "Composable" },
+  },
+  {
+    strategy: "Router-data scaling",
+    feature: "EVAL-007",
+    question: "How does router-only recalibration compare as replay data grows?",
+    output: "Three-stratum measurements and plot-ready gaps",
+    status: { status: "Research primitive" },
+  },
+];
+
+## What this part does
+
+Evaluation turns the framework's architectural promises into explicit,
+inspectable measurements. It checks exact dense fallback, route and package
+lifecycle behavior, top-1 versus top-2 quality, execution cost, registry
+composition, and router-data scaling.
+
+<IntegrationBadge status="Composable" />
+
+These evaluators are validated public APIs, but callers deliberately assemble
+them around a model, registry, policy decision, or completed experiment. They
+do not run automatically during inference, install packages, choose benchmark
+data, or turn synthetic measurements into production claims.
+
+## Where it fits
+
+Evaluation observes completed framework operations without owning them:
+
+1. conversion produces dense and anchored outputs for equivalence checks;
+2. routing produces decisions for agreement and active-work accounting;
+3. registry operations produce immutable snapshots for lifecycle checks;
+4. counterfactual evaluation produces aligned losses for quality comparison;
+5. callers wrap a fixed operation for timing and storage measurement;
+6. completed routing and training runs provide scaling measurements.
+
+The package returns immutable, JSON-compatible reports where practical.
+Evaluation does not silently synchronize a model, recalibrate a router, retain
+prompt content, or mutate the supplied tensors, modules, packages, or registry.
+
+## Implemented approaches
+
+<StrategyTable
+  caption="Evaluation questions and current integration boundaries"
+  description="All seven tracked evaluators are validated. The first six are explicit composable tools; router-data scaling remains a research primitive because its report organizes evidence rather than establishing the hypothesis."
+  columns={[
+    { key: "strategy", label: "Evaluation area" },
+    { key: "feature", label: "Feature" },
+    { key: "question", label: "Question answered" },
+    { key: "output", label: "Primary output" },
+    { key: "status", label: "Integration label" },
+  ]}
+  rows={evaluationStrategies}
+/>
+
+### Exact equivalence and route agreement
+
+EVAL-001 compares tensors with declared absolute and relative tolerances and
+reports whether PyTorch's exact elementwise equality also holds. The dense
+conversion test compares every hidden state and final logits, then fingerprints
+the selected anchor MLP state using sorted names, shapes, dtypes, and tensor
+bytes.
+
+EVAL-002 compares the candidates that actually executed under one stable
+expert ordering. It refuses mismatched token shapes or expert IDs, reports the
+matching token count and agreement fraction, and records no token text, hidden
+states, logits, or activations.
+
+### Lifecycle and registry composition
+
+EVAL-003 checks removal and reinsertion from immutable registry snapshots.
+Exact restoration requires the package count to fall on removal and the
+original active order, registry digest, and compatibility binding to return
+after reinsertion.
+
+EVAL-006 extends that check to the empty registry and every installation order
+of every non-empty package subset. It calculates the complete trial count
+before observation and rejects an experiment that exceeds the caller's bound.
+Each order starts from a fresh registry, while an optional caller-owned digest
+can test whether model behavior is order-invariant.
+
+### Top-1/top-2 quality
+
+EVAL-004 aligns top-1 and anchor-veto top-2 decisions with an explicit
+counterfactual loss table. It compares each selected route with the best
+evaluated candidate, separates best-single from best-pair quality, and reports
+how often an executed pair is worse than the selected single specialist.
+
+The evaluator never invents a missing pair loss. Candidate coverage, token
+shape, and expert ordering must match exactly before any aggregate is returned.
+
+### Efficiency accounting
+
+EVAL-005 measures synchronized warmup-aware latency and throughput for any
+zero-argument operation. It also counts unique resident parameter and buffer
+storage and derives active MLP executions directly from an immutable route
+decision.
+
+Work units are caller-defined, so throughput is comparable only when two
+strategies use the same definition. Timing tests validate contracts and
+positive durations rather than assuming one machine-specific performance
+threshold.
+
+### Router-data scaling
+
+EVAL-007 compares fixed strict append-only measurements, router-only
+recalibration at increasing replay sizes, and one matched local mini-MoE
+baseline. Every report requires disjoint specialization-interior, boundary,
+and mixed-input evaluation rows plus strictly nested router-training subsets.
+
+The result is a deterministic grid of observed performance and regret gaps.
+It preserves RTR-004 and TRN-003 provenance, but it does not collect a dataset,
+train a new conventional MoE, render a plot, or claim that more data must
+improve results monotonically.
+
+## How it works
+
+The evaluation workflow keeps measurement separate from the operation being
+measured:
+
+```text
+Caller executes a fixed model, policy, registry, or training workflow
+  → capture aligned outputs, routes, snapshots, losses, or metric blocks
+  → validate identity, shape, provenance, and immutability contracts
+  → calculate one narrowly defined family of measurements
+  → return an immutable or JSON-compatible report
+```
+
+This boundary makes synthetic fixtures useful for contract testing without
+confusing them with production benchmark evidence. Callers remain responsible
+for representative data, identical runtime settings, meaningful work units,
+and any statistical analysis beyond the provided deterministic aggregates.
+
+## Mathematical intuition
+
+<EquationBlock
+  intuition="Dense fallback is exact only when the converted tensor has identical values, not merely a small average error."
+  equation="d_abs = maxᵢ |ŷᵢ − yᵢ|; exact ⇔ torch.equal(ŷ, y)"
+  spokenLabel="Maximum absolute difference is the largest elementwise difference between converted output y hat and dense output y; exact is true only when PyTorch reports elementwise equality."
+  symbols={[
+    { symbol: "y", meaning: "The output from the original dense model or layer." },
+    { symbol: "ŷ", meaning: "The output after anchored conversion." },
+    { symbol: "d_abs", meaning: "The largest absolute elementwise difference." },
+  ]}
+  consequence="CPU forced-anchor validation currently requires exact hidden states and logits. Future optimized runtimes must declare any nonzero tolerance explicitly."
+/>
+
+<EquationBlock
+  intuition="Router regret measures the loss paid for the selected route relative to the best candidate that was actually evaluated."
+  equation="Rₜᵖ = Lₜᵖ − min(c ∈ C) Lₜ,c"
+  spokenLabel="Regret R for token t under policy p equals the selected policy loss minus the lowest evaluated candidate loss."
+  symbols={[
+    { symbol: "Lₜᵖ", meaning: "Loss of the route selected by policy p for token t." },
+    { symbol: "C", meaning: "The explicit set of counterfactual anchor, single, and sampled pair candidates." },
+    { symbol: "Rₜᵖ", meaning: "Non-negative selected-route regret for token t." },
+  ]}
+  consequence="Top-1 and top-2 can be compared against the same oracle only when they share token alignment, expert order, and a finite loss definition."
+/>
+
+<EquationBlock
+  intuition="A top-2 decision costs a second MLP execution only on tokens where a specialist pair actually runs."
+  equation="C_top1 = N; C_top2 = Σₜ (1 + pₜ)"
+  spokenLabel="Top-1 MLP work equals token count N; top-2 work is the sum over tokens of one plus pair indicator p."
+  symbols={[
+    { symbol: "N", meaning: "The number of routed tokens." },
+    { symbol: "pₜ", meaning: "One when token t executes two specialists and zero when it falls back to the anchor." },
+    { symbol: "C", meaning: "Mathematical MLP token executions, separate from sparse module-call count." },
+  ]}
+  consequence="Quality gains can be read beside exact route-derived work instead of assuming every top-2 selection executes two specialists."
+/>
+
+## Minimal usage
+
+Compare one converted output and then inspect the work implied by a route:
+
+```python
+equivalence = assert_tensors_equivalent(
+    converted.logits,
+    dense.logits,
+    name="logits",
+    atol=0.0,
+    rtol=0.0,
+)
+work = measure_active_mlp_metrics(route_decision)
+assert equivalence.exact
+print(work.mean_active_mlps_per_token)
+```
+
+The caller supplies the two aligned tensors and a completed route decision.
+Neither evaluator executes or changes the model.
+
+## Verified implementation details
+
+<CodeDisclosure
+  summary="Show exact dense conversion validation"
+  source="examples/verify_dense_equivalence.py"
+  verified
+>
+
+```python
+with torch.no_grad():
+    dense = model(input_ids=input_ids, output_hidden_states=True)
+
+Qwen3Backend().convert(
+    model,
+    AnchoredMoEConfig(converted_layers="upper_half"),
+)
+with torch.no_grad():
+    converted = model(input_ids=input_ids, output_hidden_states=True)
+
+assert_tensors_equivalent(converted.logits, dense.logits, name="logits")
+for index, (actual, expected) in enumerate(
+    zip(converted.hidden_states, dense.hidden_states, strict=True)
+):
+    assert_tensors_equivalent(actual, expected, name=f"hidden_states[{index}]")
+```
+
+Expected invariant: the tiny local Qwen3 fixture preserves every hidden state
+and final logit exactly while the selected dense MLPs become routed wrappers.
+</CodeDisclosure>
+
+<CodeDisclosure
+  summary="Show removal, reinsertion, and bounded composition trials"
+  source="examples/verify_registry_lifecycle.py"
+  verified
+>
+
+```python
+installed = registry.snapshot()
+registry.unload(code.identity)
+removed = registry.snapshot()
+registry.install(ExpertPackage.from_directory(code.package_directory))
+reinserted = registry.snapshot()
+
+evaluation = evaluate_registry_lifecycle(
+    installed,
+    removed,
+    reinserted,
+)
+assert evaluation.exact
+
+compositions = evaluate_registry_compositions((math, code))
+assert compositions.subset_count == 4
+assert compositions.trial_count == 5
+```
+
+Expected invariant: reinsertion restores the original two-package order and
+registry identity, while two packages produce the empty set, three non-empty
+subsets, and five bounded installation trials.
+</CodeDisclosure>
+
+<CodeDisclosure
+  summary="Show top-1/top-2 quality beside measured work"
+  source="examples/evaluate_registry_strategies.py"
+  verified
+>
+
+```python
+quality = compare_top1_top2_to_oracle(
+    losses,
+    top1_result.selected_routes,
+    top2_result.selected_routes,
+)
+top1_work = measure_active_mlp_metrics(top1_result.selected_routes)
+top2_work = measure_active_mlp_metrics(top2_result.selected_routes)
+
+assert top1_work.mean_active_mlps_per_token == 1.0
+assert top2_work.mean_active_mlps_per_token > 1.0
+print(quality.mean_top1_regret, quality.mean_top2_regret)
+```
+
+Expected invariant: the deterministic fixture reports quality against one
+explicit counterfactual table while active-MLP work comes from the routes that
+actually executed.
+</CodeDisclosure>
+
+## Current limitations
+
+- Equivalence tests currently establish exact CPU behavior for local tiny
+  Qwen3 fixtures. Production checkpoints, optimized kernels, accelerators, and
+  distributed runtimes need separately declared compatibility tolerances.
+- Route comparison covers final candidate decisions, not cross-layer
+  trajectories, first-divergence depth, serialized route histories, or
+  distributed aggregation.
+- Counterfactual quality evaluation consumes losses measured elsewhere. It
+  does not execute every candidate through the model or estimate an
+  unevaluated expert pair.
+- Efficiency reports exclude optimizer state, activations, allocator cache,
+  serialized files, and energy use. CPU and MPS runtime peak memory are
+  reported as unavailable.
+- Registry composition is exhaustive only within the caller-approved trial
+  bound. It does not persist reports, parallelize trials, or define the
+  behavior artifact a caller should hash.
+- Router-data scaling aggregates completed measurements. The current
+  synthetic acceptance fixture is not evidence that router-only recalibration
+  matches a jointly trained production MoE.
+- Confidence intervals, statistical benchmark comparisons, production
+  hardware baselines, and representative public datasets remain future work.
+
+## References
+
+The [architecture paper](/paper.pdf) and repository blueprint listed in the
+page sources define exact fallback, route stability, lifecycle invariants,
+counterfactual regret, top-1/top-2 comparison, and the router-subset hypothesis
+test.
+
+[PyTorch numerical accuracy](https://docs.pytorch.org/docs/stable/notes/numerical_accuracy.html)
+motivates explicit tolerances for future optimized runtime variants. The
+timing, synchronization, tensor-storage, and allocator APIs used by EVAL-005
+are standard PyTorch infrastructure rather than a paper-derived benchmark
+method.
+
+No paper-derived evaluation algorithm is claimed. EVAL-001 through EVAL-007
+operationalize repository invariants using exact comparisons, standard finite
+permutations, synchronized timing, SHA-256 digests, and explicitly supplied
+experimental measurements.
+
+## Related pages
+
+- [Configuration and modeling](/docs/configuration-and-modeling/) establishes
+  the exact dense fallback that evaluation checks.
+- [Policies](/docs/policies/) defines the top-1, top-2, and adaptive decisions
+  used by quality and active-work reports.
+- [Registry](/docs/registry/) defines the immutable snapshots, lifecycle, and
+  package ordering used by composition evaluation.
+- [Inference](/docs/inference/) explains the sparse execution and route
+  telemetry that evaluation observes.
