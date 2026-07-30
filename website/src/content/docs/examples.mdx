@@ -1,6 +1,6 @@
 ---
 title: End-to-end examples
-description: Compare complete Anchored Plug-in MoE workflows, from exact anchor conversion through routed deltas, local training, hierarchical routing, prompt-level shortlisting, and compatibility-constrained mixtures.
+description: Compare complete Anchored Plug-in MoE workflows, from exact anchor conversion through routed deltas, local training, hierarchical routing, prompt-level shortlisting, compatibility-constrained mixtures, and dynamic expert counts.
 order: 13
 group: Learn by example
 source:
@@ -19,6 +19,8 @@ source:
   - examples/verify_hierarchical_routing.py
   - examples/verify_prompt_shortlisting.py
   - examples/verify_compatibility_top2.py
+  - examples/verify_dynamic_k_selection.py
+  - tests/integration/test_affine_router_dynamic_k.py
   - tests/integration/test_anchor_delta_routed_mlp.py
   - tests/integration/test_hierarchical_top2_dispatch.py
   - tests/integration/test_local_mini_moe_trainer.py
@@ -41,6 +43,7 @@ source:
   - tests/unit/test_calibrated_package_export.py
   - tests/unit/test_compatibility_top2_selection.py
   - tests/unit/test_composition_checkpoint.py
+  - tests/unit/test_dynamic_k_selection.py
   - tests/unit/test_efficiency.py
   - tests/unit/test_mixture_compatibility.py
   - tests/unit/test_top2_selection.py
@@ -72,6 +75,7 @@ feature_ids:
   - POL-003
   - POL-004
   - POL-005
+  - POL-006
   - COM-001
   - COM-004
   - BAL-002
@@ -171,6 +175,14 @@ export const exampleWorkflows = [
     bestFor: "Preventing invalid global mixtures",
     guide: "Published below",
   },
+  {
+    approach: "Dynamic-k selection",
+    active: "Anchor or 1–Kmax experts",
+    expert: "Ranked compatible specialists",
+    lifecycle: { status: "Research primitive" },
+    bestFor: "Confidence-gated compute allocation",
+    guide: "Published below",
+  },
 ];
 
 ## What this page does
@@ -185,9 +197,10 @@ the columns evaluated by token-level routing.
 
 The comparison table keeps integration boundaries visible from the start.
 Exact conversion, packaged top-1, weighted top-2, adaptive selection, routed
-LoRA deltas, local mini-MoE training, package-first hierarchy, and
-prompt-shortlisted top-1 are published below. The final guide adds a global
-top-2 policy that rejects cross-group pairs before sparse execution.
+LoRA deltas, local mini-MoE training, package-first hierarchy,
+prompt-shortlisted top-1, and compatibility-constrained top-2 are published
+below. The final guide varies the number of selected specialists per token
+under a strict compute cap while keeping the execution boundary explicit.
 
 ## Compare the workflows
 
@@ -2241,3 +2254,217 @@ method.
   come from; compatibility filtering does not recalibrate them.
 - [Evaluation](/docs/evaluation/) separates deterministic framework evidence
   from mixture-quality and production-scaling claims.
+
+## Confidence-gated dynamic-k selection
+
+<IntegrationBadge status="Research primitive" />
+
+### The problem it solves
+
+Fixed top-1 and top-2 policies assign the same maximum specialist count to
+every token. Dynamic-\(k\) selection lets clear anchor cases use no specialist,
+lets simple positive cases retain one, and lets stronger multi-expert evidence
+retain more—without exceeding a configured per-token ceiling.
+
+This guide stops at the selection decision. It verifies which expert IDs and
+scores survive, but it does not execute or combine an arbitrary number of
+experts.
+
+### Workflow contract
+
+- **Expert representation:** selection is representation-agnostic and consumes
+  only stable expert IDs plus a score column for each candidate. The selected
+  experts still need mutually compatible execution and combination semantics.
+- **Routing and selection:** append-only affine heads produce specialist scores
+  in deterministic order. `DynamicKSelection` stable-ranks them, keeps only
+  scores strictly above `activation_threshold`, and caps the active prefix at
+  `max_experts`.
+- **Combination and capacity:** POL-006 returns auditable route metadata only.
+  It does not define arbitrary-\(k\) weights, sparse dispatch, overflow, or
+  batch-wide capacity allocation.
+- **Training and calibration:** the policy does not train a difficulty model or
+  recalibrate scores. The threshold must be chosen externally from held-out
+  data if it is meant to represent calibrated confidence.
+- **Active work:** all \(K\) specialist scores are inputs to selection. The
+  decision retains at most `K_max` ranked candidates per token, but this
+  fixture makes no execution-cost or latency claim.
+- **Packaging and serialization:** the policy is a standalone public primitive.
+  It is not attached through package synchronization, model configuration, or
+  composition checkpoints.
+- **Expected result:** route arity is deterministic, bounded between zero and
+  `K_max`, exact threshold ties remain inactive, and arity zero records an
+  anchor decision.
+
+### How confidence becomes a bounded route
+
+```text
+Calibrated specialist scores
+  → stable descending specialist ranking
+  → discard scores at or below the activation threshold
+  → retain at most Kmax candidates
+  → expose arity, ranked IDs, scores, and masks
+```
+
+The threshold decides whether evidence is strong enough to activate a
+specialist. The budget decides how many qualifying specialists can survive.
+Neither step supplies mixture weights or runs an expert module.
+
+### Bounded active-arity rule
+
+<EquationBlock
+  intuition="Count specialists whose scores clear the confidence threshold, then clamp that count to the per-token compute budget."
+  equation="a(h) = min(K_max, Σ_i 𝟙[g_i(h) > τ_act])"
+  spokenLabel="The active arity for token representation h is the smaller of the configured maximum expert count and the number of specialist scores strictly above the activation threshold."
+  symbols={[
+    { symbol: "h", meaning: "One token representation scored by the router." },
+    { symbol: "g_i(h)", meaning: "The calibrated score for specialist i; the anchor remains the fixed-zero fallback." },
+    { symbol: "τ_act", meaning: "A finite non-negative activation threshold." },
+    { symbol: "K_max", meaning: "The positive per-token maximum number of retained specialists." },
+    { symbol: "a(h)", meaning: "The selected specialist count; zero means anchor." },
+  ]}
+  consequence="Only the first a(h) entries of the stable ranking are active. A score exactly equal to the threshold is inactive, so a non-negative threshold preserves strictly positive specialist evidence."
+/>
+
+### Four-token walkthrough
+
+The verified fixture scores code, mathematics, and science candidates with
+`activation_threshold=0.5` and `max_experts=2`.
+
+<StrategyTable
+  caption="Confidence-gated dynamic-k example"
+  description="Scores retain router order as code, mathematics, and science. Candidate index 0 remains reserved for the anchor."
+  columns={[
+    { key: "token", label: "Specialist scores" },
+    { key: "qualifying", label: "Above 0.5" },
+    { key: "retained", label: "Retained ranking" },
+    { key: "arity", label: "Route arity" },
+  ]}
+  rows={[
+    {
+      token: "[1.0, 2.0, 1.5]",
+      qualifying: "All three",
+      retained: "[math, science]",
+      arity: "2",
+    },
+    {
+      token: "[1.0, -1.0, 0.0]",
+      qualifying: "Code",
+      retained: "[code]",
+      arity: "1",
+    },
+    {
+      token: "[-1.0, -2.0, -1.5]",
+      qualifying: "None",
+      retained: "Anchor",
+      arity: "0",
+    },
+    {
+      token: "[1.0, 0.5, 0.75]",
+      qualifying: "Code, science",
+      retained: "[code, science]",
+      arity: "2",
+    },
+  ]}
+/>
+
+The final mathematics score equals the threshold and is therefore inactive.
+This strict boundary is deliberate: a threshold tie cannot silently spend
+additional specialist compute.
+
+### Minimal explicit selection
+
+```python
+scores = router(features, layer_index=1)
+decision = DynamicKSelection(
+    max_experts=2,
+    activation_threshold=0.5,
+)(
+    scores,
+    expert_ids=router.expert_ids_for_layer(1),
+)
+```
+
+The result provides `route_arity`, `ranked_indices`, `ranked_scores`,
+`anchor_mask`, and per-expert or per-arity masks for an explicitly composed
+downstream experiment.
+
+### Run the verified example
+
+From the repository root, run:
+
+```bash
+python examples/verify_dynamic_k_selection.py
+```
+
+The deterministic offline example reports route arities `[[2, 1, 0, 2]]` and
+ranked candidate indices
+`[[[2, 3], [1, 3], [1, 3], [1, 3]]]`.
+
+<CodeDisclosure
+  summary="Show thresholded selection under a two-expert cap"
+  source="examples/verify_dynamic_k_selection.py"
+  verified
+>
+
+```python
+decision = DynamicKSelection(
+    max_experts=2,
+    activation_threshold=0.5,
+)(
+    router(features, layer_index=1),
+    expert_ids=router.expert_ids_for_layer(1),
+)
+assert decision.route_arity.tolist() == [[2, 1, 0, 2]]
+assert decision.anchor_mask.sum().item() == 1
+assert decision.max_experts == 2
+```
+
+Expected invariants: deterministic append-order ties, a hard two-specialist
+upper bound, one exact anchor token, one top-1 token, two top-2 tokens, and no
+mutation of the router scores.
+</CodeDisclosure>
+
+### Current limitations
+
+- POL-006 counts calibrated scores above a fixed threshold; it does not learn
+  token difficulty, cumulative probability, entropy, or a compute-allocation
+  objective.
+- The budget is per token. There is no batch-wide, layer-wide, or model-wide
+  budget optimizer and no interaction with expert capacity.
+- Arbitrary-\(k\) combination, sparse dispatch, overflow handling, route
+  telemetry, package-driven attachment, model configuration, and composition
+  checkpoint persistence remain future work.
+- Selecting multiple experts does not establish that they are mutually
+  compatible or that their mixture improves quality.
+- The fixture validates deterministic scores, ordering, masks, gradients,
+  threshold behavior, and compute bounds—not specialist quality, calibrated
+  utility, latency, memory savings, or distributed execution.
+
+### References and related pages
+
+<PaperReference
+  title="Harder Tasks Need More Experts: Dynamic Routing in MoE Models"
+  authors="Huang et al."
+  arxivId="2403.07652"
+  purpose="Motivates selecting a variable number of experts from routing confidence."
+  difference="POL-006 uses a caller-supplied calibrated-score threshold, deterministic append-order ties, a fixed-zero anchor outcome, and a hard per-token cap rather than the paper's learned dynamic-routing mechanism."
+/>
+
+<PaperReference
+  title="DA-MoE: Towards Dynamic Expert Allocation for Mixture-of-Experts Models"
+  authors="Li et al."
+  arxivId="2409.06669"
+  purpose="Motivates allocating different expert counts to tokens according to estimated importance."
+  difference="POL-006 exposes deterministic selection metadata only; it does not learn token importance, optimize a compute-allocation objective, or execute the selected expert set."
+/>
+
+- [Policies](/docs/policies/) defines `POL-006`, the stable ranking contract,
+  strict threshold semantics, shapes, masks, and validation boundaries.
+- [Routers](/docs/routers/) explains the append-only affine scores consumed by
+  this fixture.
+- [Calibration](/docs/calibration/) covers held-out score calibration and
+  threshold selection; POL-006 performs neither automatically.
+- [Inference](/docs/inference/) documents the currently validated top-1 and
+  pair-shaped top-2 dispatchers, not an arbitrary-\(k\) dispatcher.
+- [Evaluation](/docs/evaluation/) separates route determinism and active-work
+  accounting from quality or production-efficiency evidence.
