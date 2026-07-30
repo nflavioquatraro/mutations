@@ -1,0 +1,428 @@
+---
+title: Routers
+description: Understand how frozen features become calibrated expert evidence, how package heads compile into a logical runtime, and where advanced router strategies stop today.
+order: 6
+group: Core components
+source:
+  - src/anchored_moe/routers/README.md
+  - src/anchored_moe/routers/base.py
+  - src/anchored_moe/routers/features.py
+  - src/anchored_moe/routers/heads.py
+  - src/anchored_moe/routers/logical.py
+  - src/anchored_moe/routers/hierarchical.py
+  - src/anchored_moe/routers/shortlisting.py
+  - src/anchored_moe/routers/stabilized.py
+  - src/anchored_moe/routers/stickiness.py
+  - src/anchored_moe/calibration/global_recalibration.py
+  - examples/verify_affine_router.py
+  - examples/verify_logical_router.py
+feature_ids:
+  - RTR-001
+  - RTR-002
+  - RTR-003
+  - RTR-004
+  - RTR-005
+  - RTR-006
+  - RTR-007
+  - RTR-008
+last_reviewed: 2026-07-30
+---
+
+import CodeDisclosure from "../../components/docs/CodeDisclosure.astro";
+import EquationBlock from "../../components/docs/EquationBlock.astro";
+import IntegrationBadge from "../../components/docs/IntegrationBadge.astro";
+import PaperReference from "../../components/docs/PaperReference.astro";
+import StrategyTable from "../../components/docs/StrategyTable.astro";
+
+export const routerStrategies = [
+  {
+    strategy: "Identity features",
+    feature: "RTR-001",
+    result: "Unchanged pre-MLP hidden states",
+    boundary: "Package-compatible feature contract",
+    status: { status: "Integrated" },
+  },
+  {
+    strategy: "Independent affine heads",
+    feature: "RTR-002",
+    result: "One calibrated score per expert",
+    boundary: "Package-owned and safely serialized",
+    status: { status: "Integrated" },
+  },
+  {
+    strategy: "Logical append-only router",
+    feature: "RTR-003",
+    result: "Frozen layer-local score bank",
+    boundary: "Compiled during explicit top-1 synchronization",
+    status: { status: "Integrated" },
+  },
+  {
+    strategy: "Global recalibration",
+    feature: "RTR-004",
+    result: "New registry-bound logical router",
+    boundary: "Explicit fit, persistence, and activation",
+    status: { status: "Composable" },
+  },
+  {
+    strategy: "Hierarchical routing",
+    feature: "RTR-005",
+    result: "Package scores plus selected-package local scores",
+    boundary: "Manual hierarchy; no manifest-driven attachment",
+    status: { status: "Research primitive" },
+  },
+  {
+    strategy: "Prompt shortlisting",
+    feature: "RTR-006",
+    result: "Full score shape with unselected columns masked",
+    boundary: "Requires external retrieval scores",
+    status: { status: "Research primitive" },
+  },
+  {
+    strategy: "Hard-route distillation",
+    feature: "RTR-007",
+    result: "Frozen affine student router",
+    boundary: "Explicit assembly; no report-bearing activation",
+    status: { status: "Composable" },
+  },
+  {
+    strategy: "Cross-layer stickiness",
+    feature: "RTR-008",
+    result: "Stabilized anchored top-1 decision",
+    boundary: "Caller supplies previous routes",
+    status: { status: "Research primitive" },
+  },
+];
+
+## What this part does
+
+Routers turn a token's pre-MLP hidden state into calibrated evidence for each
+installed specialist. They preserve stable expert ordering and package
+ownership, but they do not decide which path runs or execute an MLP.
+
+<IntegrationBadge status="Integrated" />
+
+The core identity-feature, independent-head, and logical-router pipeline is
+integrated into package-driven anchored top-1 composition. Global
+recalibration and distillation are explicitly composable, while hierarchical,
+shortlisted, and cross-layer strategies remain research primitives.
+
+## Where it fits
+
+The router is one stage in a deliberately separated runtime:
+
+1. a converted layer exposes the hidden state immediately before its MLP;
+2. a frozen feature extractor produces the router feature tensor;
+3. package-owned heads score their experts;
+4. a logical router presents those scores in stable registry order;
+5. a selection policy compares specialist evidence with the zero-score anchor;
+6. inference dispatches the selected experts and combines their outputs.
+
+The routers subpackage owns stages two through four. Calibration fits or
+adjusts head parameters, policies choose routes, capacity rules handle
+availability, inference executes sparse paths, and the registry controls
+package lifecycle.
+
+## Implemented approaches
+
+<StrategyTable
+  caption="Router strategies and their current integration boundaries"
+  description="Every row is implemented and validated in the Python framework; the label describes how much explicit assembly is still required."
+  columns={[
+    { key: "strategy", label: "Strategy" },
+    { key: "feature", label: "Feature" },
+    { key: "result", label: "Result" },
+    { key: "boundary", label: "Current boundary" },
+    { key: "status", label: "Integration label" },
+  ]}
+  rows={routerStrategies}
+/>
+
+### Frozen identity features
+
+`IdentityRouterFeatureExtractor` accepts the pre-MLP hidden state and returns
+the same tensor object. Version one has no learned projection, allocation, or
+hidden detachment. This keeps the feature space easy to audit and lets the
+caller control gradient flow during explicit fitting.
+
+The extractor also exposes an immutable feature specification. Packages bind
+their heads to that specification so a router trained for one hidden width or
+feature transformation cannot be attached silently to another.
+
+### Independent append-only heads
+
+Each `AffineRouterHead` owns one expert score at one decoder layer. Its affine
+weight and bias produce raw evidence; a positive temperature and a threshold
+turn that evidence into the calibrated score consumed by later policies.
+
+`AppendOnlyRouterHeads` preserves registration order and rejects duplicate
+`(layer_index, expert_id)` ownership. Appending a package does not rewrite old
+heads, and the safetensors format contains only finite tensors and validated
+non-executable metadata.
+
+### One frozen logical router
+
+`compile_logical_router()` copies independent package heads into a
+`LogicalAppendOnlyRouter`. The runtime stores layer-local affine rows,
+temperatures, and thresholds as frozen buffers while preserving the same score
+shape, expert identifiers, and calibrated values.
+
+Compilation is an ownership boundary: later training of a package head cannot
+change the deployed router. The implementation evaluates columns in a
+shape-stable order so appending a new column preserves every incumbent score
+bit-for-bit for identical inputs, dtype, device, and backend.
+
+### Explicit global recalibration
+
+`recalibrate_global_router()` jointly fits copied affine columns against an
+aligned replay bank of anchor-relative utilities. It returns a new frozen
+logical router and a report bound to the exact registry and compatibility
+hashes; source heads, experts, and model state remain unchanged.
+
+This mode intentionally gives up append-only score invariance. It never runs
+as a hidden installation side effect, and activating its separately persisted
+registry-router version remains an explicit lifecycle operation.
+
+### Hierarchical package and local scoring
+
+`HierarchicalRouterScoreBank` scores packages first, then evaluates a local
+logical router only for token rows assigned to the selected non-anchor
+package. Stable flattened row indices let the policy reconstruct the original
+token shape without scoring unrelated local experts.
+
+The current hierarchy requires rectangular layer coverage, at least two local
+experts per package, and globally unique expert identifiers. It is constructed
+manually from validated logical routers and has no manifest-driven model
+attachment.
+
+### Prompt-level shortlisting
+
+`PromptTopMShortlister` accepts external finite retrieval scores and selects a
+stable top-M candidate set for each prompt. A
+`PromptShortlistedLogicalRouter` evaluates only those columns, then restores
+the complete expert dimension with a finite value below the zero-score anchor
+for every unselected candidate.
+
+The retriever, its training, generation-time reuse, and expert-weight paging
+are outside this primitive. A retrieval miss therefore cannot be recovered by
+the token router unless another shortlisted specialist has positive evidence.
+
+### Router distillation
+
+`distill_frozen_router()` takes an immutable teacher score bank, derives
+anchor-first hard top-1 assignments over cached features, and fits a
+deterministic affine student. The accepted student compiles into the ordinary
+frozen logical-router contract, so explicit routed-layer composition needs no
+distillation-specific dispatcher.
+
+Version one distills assignments rather than score distributions. It does not
+yet cover top-2 or adaptive targets, persist its report with a registry
+version, or activate itself on a model.
+
+### Cross-layer route stickiness
+
+`CrossLayerTop1Stickiness` applies a switching margin between the current
+anchored top-1 winner and a caller-supplied previous-layer route. It compares
+both candidates using current-layer evidence and retains the incumbent unless
+the new winner exceeds it by strictly more than the margin.
+
+The stabilizer owns no request state. A model or generation loop must carry
+the previous route explicitly; zero margin delegates exactly to ordinary
+anchored top-1 behavior.
+
+## How it works
+
+### Keep score production separate from route choice
+
+Router output has one specialist column per registered expert. The permanent
+anchor column is not stored in the router because its evidence is always zero.
+A selection policy prepends that zero conceptually and applies anchor-first,
+stable tie-breaking.
+
+This boundary matters: a positive specialist score is evidence, not an
+execution command. Top-1, top-2, adaptive, compatibility, and capacity
+policies can interpret the same score bank differently.
+
+### Preserve ownership through compilation
+
+Package files retain independently owned affine heads because installation,
+removal, and versioning operate at package boundaries. The synchronized model
+uses a compiled logical view because inference needs one stable expert order
+per layer.
+
+Compilation copies rather than aliases state:
+
+```text
+Package heads → validated append order → copied frozen buffers → score bank
+```
+
+The logical architecture is therefore an in-memory runtime representation, not
+a second package wire format.
+
+### Make advanced behavior explicit
+
+Global recalibration may change all scores, hierarchical routing changes which
+columns are evaluated, shortlisting depends on external prompt evidence,
+distillation approximates a teacher, and stickiness depends on a previous
+decision. Each behavior has a separate public entry point and records or
+returns the metadata needed to audit its boundary.
+
+## Mathematical intuition
+
+One affine head converts a feature vector into calibrated expert evidence:
+
+<EquationBlock
+  intuition="A specialist activates only after its raw affine evidence is adjusted by its own temperature and threshold."
+  equation="gₗ,ₖ(h) = (wₗ,ₖᵀ φₗ(h) + bₗ,ₖ) / Tₗ,ₖ − τₗ,ₖ"
+  spokenLabel="Score g for layer l and expert k equals affine evidence from feature phi of h divided by temperature T, minus threshold tau."
+  symbols={[
+    { symbol: "h", meaning: "Pre-MLP hidden states with shape batch by sequence by model width." },
+    { symbol: "φₗ(h)", meaning: "Frozen router features; version one is the unchanged hidden state." },
+    { symbol: "wₗ,ₖ, bₗ,ₖ", meaning: "The affine weight and bias owned by expert k at layer l." },
+    { symbol: "Tₗ,ₖ", meaning: "A finite positive temperature fitted during calibration." },
+    { symbol: "τₗ,ₖ", meaning: "A finite activation threshold subtracted from the scaled evidence." },
+  ]}
+  consequence="The anchor remains at score zero outside the router. A specialist must beat that fixed baseline under the selected policy before it can run."
+/>
+
+For K registered experts at one layer, the logical router stacks the
+calibrated columns without changing their order or meaning:
+
+<EquationBlock
+  intuition="The runtime router is a stable ordered view of independently owned expert evidence."
+  equation="Gₗ(h) = [gₗ,₁(h), …, gₗ,K(h)] ∈ ℝᴮˣˢˣᴷ"
+  spokenLabel="Router score bank G at layer l stacks specialist score columns one through K into a batch by sequence by expert tensor."
+  symbols={[
+    { symbol: "Gₗ(h)", meaning: "All specialist scores for one decoder layer." },
+    { symbol: "B", meaning: "Batch size." },
+    { symbol: "S", meaning: "Sequence length, or the equivalent token-leading dimensions." },
+    { symbol: "K", meaning: "Number of registered specialist columns at the layer." },
+  ]}
+  consequence="Appending expert K plus one extends only the final dimension. Existing columns retain their values and stable expert identifiers."
+/>
+
+## Minimal usage
+
+Compile one package-owned affine head into a frozen logical score bank:
+
+```python
+from anchored_moe import AffineRouterHead, AppendOnlyRouterHeads
+from anchored_moe import compile_logical_router
+
+heads = AppendOnlyRouterHeads(feature_size=4096)
+heads.append(AffineRouterHead(
+    4096, layer_index=18, expert_id="code:0"
+))
+router = compile_logical_router(heads)
+scores = router(hidden_states, layer_index=18)
+```
+
+The resulting final dimension follows stable expert order. Comparing these
+scores with the anchor and executing a path remain separate policy and
+inference steps.
+
+## Verified implementation details
+
+<CodeDisclosure
+  summary="Show append-only score preservation and exact safe reload"
+  source="examples/verify_affine_router.py"
+  verified
+>
+
+```python
+original = router(features, layer_index=2)
+router.append(AffineRouterHead(
+    4, layer_index=2, expert_id="math:0", threshold=0.2
+))
+appended = router(features, layer_index=2)
+
+assert torch.equal(appended[..., :1], original)
+router.save_safetensors(payload_path)
+restored = AppendOnlyRouterHeads.from_safetensors(payload_path)
+assert torch.equal(restored(features, layer_index=2), appended)
+```
+
+Expected invariant: appending a separately owned head preserves the incumbent
+column exactly, and strict safetensors reload restores the complete score bank.
+</CodeDisclosure>
+
+<CodeDisclosure
+  summary="Show frozen logical compilation and routed top-1 execution"
+  source="examples/verify_logical_router.py"
+  verified
+>
+
+```python
+logical = LogicalAppendOnlyRouter.from_independent_heads(independent)
+incumbent = logical(features, layer_index=3)
+logical.append(math_head)
+appended = logical(features, layer_index=3)
+
+assert torch.equal(appended[..., :1], incumbent)
+assert sum(p.numel() for p in logical.parameters()) == 0
+output = routed(features)
+assert torch.equal(output, expected_output)
+```
+
+Expected invariant: the compiled router owns frozen, storage-independent state;
+appending preserves old scores, and the shared score-bank interface drives
+explicit anchored top-1 execution.
+</CodeDisclosure>
+
+## Current limitations
+
+- Version-one runtime features are the identity transform; there is no learned
+  frozen projection.
+- Logical compilation deliberately favors bit-exact append invariance over one
+  fused matrix multiplication and has no independent package format.
+- Global recalibration requires aligned offline replay data and changes every
+  specialist score for one exact registry.
+- Hierarchical routing requires rectangular package topology and explicit
+  construction from logical routers.
+- Prompt shortlisting requires caller-provided retrieval scores and does not
+  retain generation state or page expert weights into memory.
+- Hard-route distillation supports anchored top-1 assignments only and has no
+  report-bearing registry activation.
+- Cross-layer stickiness is caller-sequenced outside the model forward; it does
+  not provide top-2, adaptive, or autoregressive hysteresis.
+- Selection, combination, capacity, dispatch, feature caching, calibration,
+  and package lifecycle remain deliberately separate subsystems.
+
+## References
+
+<PaperReference
+  title="StableMoE: Stable Routing Strategy for Mixture of Experts"
+  authors="Damai Dai et al."
+  arxivId="2204.08396"
+  purpose="Motivates separating route discovery from a lightweight frozen deployment router."
+  difference="Mutations distills fixed-zero-anchor top-1 assignments from an arbitrary immutable composed teacher and implements cross-layer switching as a separate deterministic margin rule; it does not reproduce StableMoE's jointly learned balanced teacher or later expert-training stage."
+/>
+
+The core feature, affine-head, logical-compilation, hierarchical, shortlisting,
+and global-recalibration implementations are project-specific framework
+infrastructure rather than paper-derived router algorithms. Their tensor and
+module behavior follows the
+[PyTorch module contract](https://docs.pytorch.org/docs/stable/generated/torch.nn.Module.html),
+and router payloads use the
+[safetensors format](https://huggingface.co/docs/safetensors/) for
+non-executable state.
+
+The
+[router theory README](https://github.com/nflavioquatraro/mutations/blob/main/src/anchored_moe/routers/README.md)
+contains the complete algorithms, invariants, validation coverage, and
+documented research differences. The
+[architecture blueprint](https://github.com/nflavioquatraro/mutations/blob/main/anchored-plugin-moe-architecture.md)
+defines the shared fixed-zero anchor, append-only installation, and optional
+router-only recalibration modes.
+
+## Related pages
+
+- Read [experts](/docs/experts/) for the transformations identified by each
+  router column.
+- Return to [configuration and modeling](/docs/configuration-and-modeling/) for
+  the current declarative configuration and explicit synchronization boundary.
+- Continue to **Policies** when that page is published to see how score banks
+  become top-1, top-2, adaptive, or hierarchical route decisions.
+- The planned **Calibration** page will explain feature banks, utility labels,
+  ridge fitting, temperatures, thresholds, and replay-based refinement.
+- The planned **Inference** page will cover sparse dispatch and route
+  telemetry.
