@@ -1,0 +1,268 @@
+---
+title: Backends
+description: Discover model-family MLPs, convert selected Qwen3 layers safely, and preserve exact dense behavior behind a model-neutral contract.
+order: 4
+group: Core components
+source:
+  - src/anchored_moe/backends/README.md
+  - src/anchored_moe/backends/base.py
+  - src/anchored_moe/backends/qwen3.py
+  - src/anchored_moe/modeling.py
+  - tests/unit/test_backend.py
+  - tests/integration/test_qwen3_equivalence.py
+  - examples/verify_dense_equivalence.py
+feature_ids:
+  - CORE-002
+  - CORE-003
+  - CORE-005
+last_reviewed: 2026-07-30
+---
+
+import CodeDisclosure from "../../components/docs/CodeDisclosure.astro";
+import EquationBlock from "../../components/docs/EquationBlock.astro";
+import IntegrationBadge from "../../components/docs/IntegrationBadge.astro";
+import StrategyTable from "../../components/docs/StrategyTable.astro";
+
+export const backendStrategies = [
+  {
+    approach: "ModelBackend contract",
+    modelShape: "Any family with an explicit adapter",
+    status: { status: "Integrated" },
+    boundary:
+      "The model façade uses the contract for support checks, ordered MLP discovery, safe replacement, and conversion.",
+  },
+  {
+    approach: "Qwen3 causal language model",
+    modelShape: "Qwen3ForCausalLM",
+    status: { status: "Integrated" },
+    boundary:
+      "Decoder layers are discovered through model.model.layers and selected MLPs are converted in place.",
+  },
+  {
+    approach: "Bare Qwen3 decoder",
+    modelShape: "Qwen3Model",
+    status: { status: "Composable" },
+    boundary:
+      "The adapter supports model.layers directly, while the complete loading and generation façade targets causal language models.",
+  },
+  {
+    approach: "Additional model families",
+    modelShape: "Llama, Mistral, and other layouts",
+    status: { status: "Planned" },
+    boundary:
+      "No other family adapter or equivalence suite is implemented yet.",
+  },
+];
+
+## What this part does
+
+Backends translate a model family's concrete module layout into the small set of
+operations the routing framework needs. They verify the family contract,
+discover decoder MLPs in stable order, replace selected MLP references safely,
+and report exactly which layers were converted.
+
+<IntegrationBadge status="Integrated" />
+
+Qwen3 is the first and only validated backend. Routing decisions, expert
+weights, calibration, package lifecycle, and sparse dispatch remain outside
+this layer so another model family can be added without changing those
+strategies.
+
+## Where it fits
+
+The backend sits between configuration and the model-neutral `RoutedMLP`:
+
+1. `AnchoredMoEConfig` names the backend and selects decoder layers;
+2. `AnchoredMoEForCausalLM` resolves or receives a matching backend;
+3. the backend validates the live model before structural mutation;
+4. it discovers replaceable MLPs and resolves the selected layer indices;
+5. it freezes the incumbent model and moves each selected MLP into a
+   `RoutedMLP`;
+6. the native model continues to own attention, forward, and generation.
+
+The backend does not choose an expert or compute a router score. A newly
+converted wrapper starts in `forced_anchor` mode and calls the same original
+MLP once.
+
+## Implemented approaches
+
+<StrategyTable
+  caption="Backend support and integration boundaries"
+  description="Support for a module layout is distinct from complete causal-language-model loading and generation integration."
+  columns={[
+    { key: "approach", label: "Approach" },
+    { key: "modelShape", label: "Supported model shape" },
+    { key: "status", label: "Integration label" },
+    { key: "boundary", label: "Current boundary" },
+  ]}
+  rows={backendStrategies}
+/>
+
+### The model-family contract
+
+Every `ModelBackend` implementation owns four operations:
+
+| Operation | Responsibility | Failure boundary |
+|---|---|---|
+| `supports_model()` | Confirm the declared family and required decoder structure. | Returns `false` for an incompatible or incomplete model. |
+| `iter_mlp_references()` | Yield replaceable MLP references in decoder order. | Rejects a model that does not satisfy the exact family contract. |
+| `replace_mlp()` | Replace the module originally observed at one location. | Rejects a stale reference or a non-module replacement. |
+| `convert()` | Freeze the model, wrap selected MLPs, and return a deterministic report. | Rejects a mismatched backend or an already-routed selected layer. |
+
+`MLPReference` records the zero-based layer index, owning module, attribute
+name, and module observed during discovery. `ConversionReport` records the
+backend name, total decoder depth, and ordered converted indices. Neither type
+contains routing policy or expert state.
+
+## How it works
+
+### Validate the Qwen3 structure
+
+`Qwen3Backend` requires `model.config.model_type == "qwen3"`. It supports the
+decoder path used by `Qwen3ForCausalLM` (`model.model.layers`) and the direct
+path used by `Qwen3Model` (`model.layers`). The resolved layers must be an
+ordered module sequence, and every layer must expose an MLP module.
+
+These checks are deliberately structural. A model that happens to have a
+similar attribute name is not accepted unless it also declares the supported
+family contract.
+
+### Discover before changing anything
+
+The adapter snapshots an `MLPReference` for every decoder layer, then asks the
+configuration to resolve the requested indices against the discovered depth.
+Explicit selections are already sorted and deterministic by this point.
+
+Replacement succeeds only if the layer still owns the exact module captured
+during discovery. If another operation changed that attribute, conversion
+raises instead of overwriting the newer state.
+
+### Freeze and wrap selected MLPs
+
+Before replacement, the backend checks every selected reference for an existing
+`RoutedMLP`. Conversion is intentionally not idempotent: a second conversion
+would obscure ownership and create nested routing state, so it is rejected.
+
+After all prechecks pass, the complete model is frozen. Only selected
+`layer.mlp` attributes are replaced, and each wrapper owns the original MLP
+object as `anchor_mlp`. Unselected MLPs, attention, embeddings, normalization,
+and the language-model head retain their module objects and parameter values.
+
+## Mathematical intuition
+
+<EquationBlock
+  intuition="Conversion changes the owning module reference while preserving the original dense MLP object as the wrapper's anchor."
+  equation="layer_ℓ.mlp = A_ℓ  →  layer_ℓ.mlp = RoutedMLP(A_ℓ),   id(anchor_mlp) = id(A_ℓ)"
+  spokenLabel="At selected layer ell, the MLP reference changes from anchor A ell to a routed MLP containing A ell, while the anchor object's identity remains equal."
+  symbols={[
+    { symbol: "ℓ", meaning: "A selected zero-based decoder-layer index." },
+    { symbol: "A_ℓ", meaning: "The original dense MLP module owned by layer ℓ before conversion." },
+    { symbol: "id(·)", meaning: "Object identity: the wrapper holds the same module rather than a clone." },
+  ]}
+  consequence="Forced-anchor execution calls the unchanged dense MLP, and the equivalence suite can compare its parameters and outputs exactly."
+/>
+
+No expert term appears in this equation. Experts and routing state are attached
+later through explicit composition APIs.
+
+## Minimal usage
+
+Convert selected layers of an already loaded Qwen3 causal language model:
+
+```python
+from anchored_moe import AnchoredMoEConfig
+from anchored_moe.backends import Qwen3Backend
+
+report = Qwen3Backend().convert(
+    model,
+    AnchoredMoEConfig(converted_layers=[1, 3]),
+)
+
+assert report.converted_layers == (1, 3)
+```
+
+`model` must satisfy the supported Qwen3 contract. After this call it is frozen,
+layers 1 and 3 contain routed wrappers, and both wrappers remain in exact
+forced-anchor mode.
+
+## Verified implementation details
+
+<CodeDisclosure
+  summary="Show selected-layer conversion and anchor identity checks"
+  source="tests/unit/test_backend.py"
+  verified
+>
+
+```python
+layers = tiny_qwen3_model.model.layers
+originals = tuple(layer.mlp for layer in layers)
+
+report = Qwen3Backend().convert(
+    tiny_qwen3_model,
+    AnchoredMoEConfig(converted_layers=[1, 3]),
+)
+
+assert report.converted_layers == (1, 3)
+assert layers[0].mlp is originals[0]
+assert layers[1].mlp.anchor_mlp is originals[1]
+assert layers[2].mlp is originals[2]
+assert layers[3].mlp.anchor_mlp is originals[3]
+assert all(
+    not parameter.requires_grad
+    for parameter in tiny_qwen3_model.parameters()
+)
+```
+
+The linked test also verifies stable discovery, direct `Qwen3Model` support,
+double-conversion rejection, and stale-reference protection. The integration
+test and offline example separately prove exact hidden-state and logit equality
+after upper-half conversion.
+</CodeDisclosure>
+
+## Current limitations
+
+- Qwen3 is the only implemented model-family adapter.
+- The validated decoder paths cover ordinary Transformers
+  `Qwen3ForCausalLM` and `Qwen3Model` objects, not arbitrary wrappers with
+  different ownership paths.
+- Production remote checkpoints, optimized kernels, quantized layouts,
+  multiple devices, and distributed execution require separate validation.
+- Conversion is deliberately one-way for a live model; calling it twice is an
+  error rather than a no-op.
+- Backend conversion creates forced-anchor wrappers only. Package
+  synchronization and advanced routing modes belong to modeling, registry, and
+  inference layers.
+- Exact equality is established on the deterministic CPU test path. Other
+  runtimes must declare and test their own tolerances.
+
+## References
+
+The backend is project-specific framework infrastructure rather than a
+paper-derived algorithm.
+
+- The
+  [Hugging Face Qwen3 documentation](https://huggingface.co/docs/transformers/model_doc/qwen3)
+  defines the supported model family and its public configuration.
+- The
+  [Hugging Face model documentation](https://huggingface.co/docs/transformers/main_classes/model)
+  defines the `PreTrainedModel` conventions preserved by
+  `AnchoredMoEForCausalLM`.
+- The repository's
+  [backend theory README](https://github.com/nflavioquatraro/mutations/blob/main/src/anchored_moe/backends/README.md)
+  records the local contract, algorithms, invariants, tests, and known limits.
+- The repository's
+  [architecture blueprint](https://github.com/nflavioquatraro/mutations/blob/main/anchored-plugin-moe-architecture.md)
+  defines anchor immutability, exact fallback, and model-family abstraction.
+
+## Related pages
+
+- Read [configuration and modeling](/docs/configuration-and-modeling/) for
+  layer selection, model loading, and the explicit package-synchronization
+  boundary.
+- Use [getting started](/docs/getting-started/) to run the complete offline
+  equivalence example.
+- Return to the [overview](/docs/overview/) for the package lifecycle and
+  integration-label definitions.
+- Inspect the
+  [feature implementation tracker](https://github.com/nflavioquatraro/mutations/blob/main/feature-implementation-plan.md)
+  for the acceptance evidence behind `CORE-002`, `CORE-003`, and `CORE-005`.
