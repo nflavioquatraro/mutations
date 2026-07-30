@@ -657,9 +657,7 @@ temperature scaling is motivated by the following calibration work, then
 adapted to independent binary utility heads and explicit activation thresholds.
 
 <PaperReference
-  title="On Calibration of Modern Neural Networks"
-  authors="Chuan Guo, Geoff Pleiss, Yu Sun, and Kilian Q. Weinberger"
-  arxivId="1706.04599"
+  referenceId="temperature-scaling"
   purpose="Motivates fitting a post-hoc temperature on held-out predictions."
   difference="Mutations calibrates each frozen utility head independently, uses disjoint rows for temperature and threshold fitting, and subtracts an explicit activation threshold before anchored routing."
 />
@@ -1255,17 +1253,13 @@ Mutations applies those ideas to independently trained plug-ins around an
 immutable pretrained anchor.
 
 <PaperReference
-  title="LoRA: Low-Rank Adaptation of Large Language Models"
-  authors="Edward J. Hu et al."
-  arxivId="2106.09685"
+  referenceId="lora"
   purpose="Defines the frozen-weight low-rank update used for compact anchor-relative expert state."
   difference="Mutations injects LoRA into a frozen private MLP copy, retains the immutable live anchor as an always-on path, and routes explicit output deltas rather than replacing the base model."
 />
 
 <PaperReference
-  title="DeepSeekMoE: Towards Ultimate Expert Specialization in Mixture-of-Experts Language Models"
-  authors="Damai Dai et al."
-  arxivId="2401.06066"
+  referenceId="deepseekmoe"
   purpose="Motivates separating shared computation from routed specialized contributions."
   difference="Mutations starts from a pretrained immutable anchor and independently trained plug-ins; it does not reproduce DeepSeekMoE's training recipe, expert segmentation, or shared-expert architecture."
 />
@@ -1501,9 +1495,7 @@ The balancing term adapts the Switch auxiliary objective to a dense
 two-expert local mixture.
 
 <PaperReference
-  title="Switch Transformers: Scaling to Trillion Parameter Models with Simple and Efficient Sparsity"
-  authors="William Fedus, Barret Zoph, and Noam Shazeer"
-  arxivId="2101.03961"
+  referenceId="switch-transformers"
   purpose="Motivates the assignment-fraction and mean-router-probability auxiliary load-balancing objective."
   difference="Mutations computes the objective independently at each converted layer, supports token weights, averages layer losses, and applies it to a dense two-expert local training path rather than sparse global top-1 dispatch."
 />
@@ -2459,17 +2451,13 @@ mutation of the router scores.
 ### References and related pages
 
 <PaperReference
-  title="Harder Tasks Need More Experts: Dynamic Routing in MoE Models"
-  authors="Huang et al."
-  arxivId="2403.07652"
+  referenceId="dynamic-routing"
   purpose="Motivates selecting a variable number of experts from routing confidence."
   difference="POL-006 uses a caller-supplied calibrated-score threshold, deterministic append-order ties, a fixed-zero anchor outcome, and a hard per-token cap rather than the paper's learned dynamic-routing mechanism."
 />
 
 <PaperReference
-  title="DA-MoE: Towards Dynamic Expert Allocation for Mixture-of-Experts Models"
-  authors="Li et al."
-  arxivId="2409.06669"
+  referenceId="da-moe"
   purpose="Motivates allocating different expert counts to tokens according to estimated importance."
   difference="POL-006 exposes deterministic selection metadata only; it does not learn token importance, optimize a compute-allocation objective, or execute the selected expert set."
 />
@@ -2680,9 +2668,7 @@ explicit outer step.
 ### References and related pages
 
 <PaperReference
-  title="Mixture of A Million Experts"
-  authors="Xu Owen He"
-  arxivId="2407.04153"
+  referenceId="peer"
   purpose="Defines PEER's split-query product-key search and proves that the global top-k lies inside the Cartesian product of the two subkey top-k sets."
   difference="EXP-005 implements one exact retrieval head over caller-projected queries and EXP-004 multi-channel segments. It omits PEER's query projection and normalization, multi-head retrieval, score activation, singleton expert execution, output aggregation, and package persistence."
 />

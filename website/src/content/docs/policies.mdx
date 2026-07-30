@@ -420,33 +420,25 @@ and the exact anchor respectively, without dropping or reordering a token.
 ## References
 
 <PaperReference
-  title="Harder Tasks Need More Experts: Dynamic Routing in MoE Models"
-  authors="Quzhe Huang et al."
-  arxivId="2403.07652"
+  referenceId="dynamic-routing"
   purpose="Motivates varying active expert count according to routing confidence."
   difference="POL-006 uses a fixed calibrated-score threshold and explicit per-token cap rather than learning the paper's dynamic routing mechanism."
 />
 
 <PaperReference
-  title="DeepSeekMoE: Towards Ultimate Expert Specialization in Mixture-of-Experts Language Models"
-  authors="Damai Dai et al."
-  arxivId="2401.06066"
+  referenceId="deepseekmoe"
   purpose="Motivates separating shared computation from routed specialist computation."
   difference="COM-004 keeps a pretrained dense MLP immutable and always active, then adds independently trained plug-in deltas instead of jointly training shared and routed experts from scratch."
 />
 
 <PaperReference
-  title="Soft Merging of Experts with Adaptive Routing"
-  authors="Mohammed Muqeeth, Haokun Liu, and Colin Raffel"
-  arxivId="2306.03745"
+  referenceId="smear"
   purpose="Motivates constructing an input-dependent expert by combining parameters before execution."
   difference="COM-005 is a two-LoRA correctness backend driven by an already fitted frozen mixture head; it does not reproduce SMEAR's training procedure."
 />
 
 <PaperReference
-  title="X-LoRA: Mixture of Low-Rank Adapter Experts, a Flexible Framework for Large Language Models with Applications in Protein Mechanics and Molecular Design"
-  authors="Eric L. Buehler and Markus J. Buehler"
-  arxivId="2402.07148"
+  referenceId="x-lora"
   purpose="Motivates layerwise, token-dependent composition of frozen LoRA experts."
   difference="COM-005 merges exactly one selected pair's effective updates and does not implement X-LoRA's scaling network or package lifecycle."
 />

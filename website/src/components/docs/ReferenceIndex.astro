@@ -1,0 +1,34 @@
+---
+import PaperReference from "./PaperReference.astro";
+import {
+  getReferenceGroup,
+  type ReferenceGroupId,
+} from "../../data/references";
+
+interface Props {
+  groupId: ReferenceGroupId;
+}
+
+const { groupId } = Astro.props;
+const group = getReferenceGroup(groupId);
+---
+
+<div class="reference-index" aria-label={`${group.title} references`}>
+  {
+    group.referenceIds.map((referenceId) => (
+      <PaperReference referenceId={referenceId} showRelated />
+    ))
+  }
+</div>
+
+<style>
+  .reference-index {
+    display: grid;
+    gap: 1rem;
+    margin: 1rem 0 2.5rem;
+  }
+
+  .reference-index :global(.paper-reference) {
+    margin: 0;
+  }
+</style>

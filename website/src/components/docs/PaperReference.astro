@@ -1,29 +1,37 @@
 ---
+import {
+  getReference,
+  type ReferenceId,
+} from "../../data/references";
+
 interface Props {
-  title: string;
-  authors: string;
-  arxivId: string;
-  purpose: string;
-  difference: string;
+  referenceId: ReferenceId;
+  purpose?: string;
+  difference?: string;
+  showRelated?: boolean;
 }
 
-const { title, authors, arxivId, purpose, difference } = Astro.props;
-const modernArxivId = /^\d{4}\.\d{4,5}(v\d+)?$/;
-const legacyArxivId = /^[a-z-]+(?:\.[A-Z]{2})?\/\d{7}(v\d+)?$/i;
-
-if (!modernArxivId.test(arxivId) && !legacyArxivId.test(arxivId)) {
-  throw new Error(`Invalid arXiv identifier for "${title}": ${arxivId}`);
-}
-
-const arxivHref = `https://arxiv.org/abs/${arxivId}`;
+const {
+  referenceId,
+  purpose: purposeOverride,
+  difference: differenceOverride,
+  showRelated = false,
+} = Astro.props;
+const reference = getReference(referenceId);
+const purpose = purposeOverride ?? reference.purpose;
+const difference = differenceOverride ?? reference.difference;
 ---
 
-<article class="paper-reference" aria-label={`Paper reference: ${title}`}>
+<article
+  class="paper-reference"
+  id={showRelated ? `reference-${referenceId}` : undefined}
+  aria-label={`Reference: ${reference.title}`}
+>
   <header>
-    <p>{authors}</p>
-    <h3>{title}</h3>
-    <a href={arxivHref} rel="noreferrer">
-      arXiv:{arxivId}
+    <p>{reference.authors} · {reference.year}</p>
+    <h3>{reference.title}</h3>
+    <a href={reference.href} rel="noreferrer">
+      {reference.sourceLabel}
       <span aria-hidden="true">↗</span>
     </a>
   </header>
@@ -37,6 +45,21 @@ const arxivHref = `https://arxiv.org/abs/${arxivId}`;
       <dt>How Mutations differs</dt>
       <dd>{difference}</dd>
     </div>
+    {
+      showRelated && (
+        <div class="related-docs">
+          <dt>Read it in context</dt>
+          <dd>
+            {reference.relatedDocs.map((document, index) => (
+              <>
+                {index > 0 && <span aria-hidden="true"> · </span>}
+                <a href={document.href}>{document.label}</a>
+              </>
+            ))}
+          </dd>
+        </div>
+      )
+    }
   </dl>
 </article>
 
@@ -101,6 +124,12 @@ const arxivHref = `https://arxiv.org/abs/${arxivId}`;
     border-left: 1px solid var(--hairline);
   }
 
+  dl > .related-docs {
+    grid-column: 1 / -1;
+    border-top: 1px solid var(--hairline);
+    border-left: 0;
+  }
+
   dt {
     margin-bottom: 0.45rem;
     color: var(--ink);
@@ -114,6 +143,10 @@ const arxivHref = `https://arxiv.org/abs/${arxivId}`;
     color: #4e6e8f;
     font-size: 0.83rem;
     line-height: 1.55;
+  }
+
+  .related-docs a {
+    font-weight: 700;
   }
 
   @media (max-width: 600px) {
@@ -130,6 +163,12 @@ const arxivHref = `https://arxiv.org/abs/${arxivId}`;
       justify-self: start;
       min-height: 2.75rem;
       align-content: center;
+    }
+
+    .related-docs a {
+      display: inline-flex;
+      min-height: 2.75rem;
+      align-items: center;
     }
 
     dl {

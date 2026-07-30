@@ -225,25 +225,19 @@ restoration, composition export, and reload.
 ## References
 
 <PaperReference
-  title="LoRA: Low-Rank Adaptation of Large Language Models"
-  authors="Edward Hu and collaborators"
-  arxivId="2106.09685"
+  referenceId="lora"
   purpose="Motivates compact anchor-relative expert parameterizations."
   difference="Mutations keeps those experts behind its own immutable-anchor and explicit lifecycle contracts."
 />
 
 <PaperReference
-  title="Switch Transformers: Scaling to Trillion Parameter Models with Simple and Efficient Sparsity"
-  authors="William Fedus, Barret Zoph, and Noam Shazeer"
-  arxivId="2101.03961"
+  referenceId="switch-transformers"
   purpose="Motivates sparse routing and load-balancing comparisons."
   difference="Mutations adds permanent dense fallback and does not treat its anchor policy as a Switch Transformer mechanism."
 />
 
 <PaperReference
-  title="On Calibration of Modern Neural Networks"
-  authors="Chuan Guo and collaborators"
-  arxivId="1706.04599"
+  referenceId="temperature-scaling"
   purpose="Motivates temperature calibration."
   difference="The repository applies per-head binary utility calibration and explicit activation thresholds rather than reproducing the paper's multiclass setup."
 />

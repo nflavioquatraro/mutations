@@ -1,0 +1,79 @@
+---
+title: References
+description: Follow the research papers and technical standards that motivate Mutations, with project-specific differences stated beside every source.
+order: 15
+group: Project
+source:
+  - anchored-plugin-moe-architecture.md
+  - feature-implementation-plan.md
+  - src/anchored_moe/experts/README.md
+  - src/anchored_moe/routers/README.md
+  - src/anchored_moe/policies/README.md
+  - src/anchored_moe/training/README.md
+  - src/anchored_moe/calibration/README.md
+  - src/anchored_moe/registry/README.md
+  - src/anchored_moe/inference/README.md
+  - src/anchored_moe/evaluation/README.md
+  - src/anchored_moe/utils/README.md
+feature_ids:
+  - DOC-003
+last_reviewed: 2026-07-30
+---
+
+import ReferenceIndex from "../../components/docs/ReferenceIndex.astro";
+
+## What this index contains
+
+This is the canonical bibliography for research ideas and reproducibility
+standards discussed in the Mutations documentation. Each entry links directly
+to its primary source, explains what the source motivates, and states where
+the repository intentionally differs.
+
+Routine framework API documentation remains on the page where that API is
+used. This keeps the index focused on conceptual and algorithmic provenance
+rather than turning it into a dependency directory.
+
+## Expert representations
+
+These papers motivate compact adaptations, fine-grained specialist structure,
+and retrieval from large collections of small experts.
+
+<ReferenceIndex groupId="expert-representations" />
+
+## Routing and composition
+
+These sources cover sparse routing, fixed-capacity expert choice, route
+stabilization, parameter-space composition, and variable expert counts.
+
+<ReferenceIndex groupId="routing-and-composition" />
+
+## Training and calibration
+
+These sources motivate teacher preservation, start-point regularization,
+temperature scaling, router fitting, and load balancing.
+
+<ReferenceIndex groupId="training-and-calibration" />
+
+## Standards and reproducibility
+
+These specifications support deterministic artifact identities and canonical
+metadata. They are infrastructure references, not sources for a routing or
+training algorithm.
+
+<ReferenceIndex groupId="standards-and-reproducibility" />
+
+## Current limitations
+
+This is a curated implementation bibliography, not an exhaustive survey of
+Mixture-of-Experts research. A paper appears here only when the repository
+documentation identifies a concrete implementation influence. Inclusion does
+not mean Mutations reproduces the paper's architecture, training procedure, or
+reported results; those boundaries are stated on every entry.
+
+## Related pages
+
+Start with [Experts](/docs/experts/) for parameterizations,
+[Routers](/docs/routers/) and [Policies](/docs/policies/) for selection and
+composition, or [Training](/docs/training/) and
+[Calibration](/docs/calibration/) for fitting workflows. The
+[end-to-end examples](/docs/examples/) show how those pieces are assembled.

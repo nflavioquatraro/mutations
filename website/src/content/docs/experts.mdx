@@ -447,25 +447,19 @@ package shortlisting.
 ## References
 
 <PaperReference
-  title="LoRA: Low-Rank Adaptation of Large Language Models"
-  authors="Edward J. Hu et al."
-  arxivId="2106.09685"
+  referenceId="lora"
   purpose="Defines the frozen-weight low-rank update used for compact EXP-002 adapter state."
   difference="Mutations injects LoRA into a private MLP copy so the expert can return a complete replacement output and expose an explicit anchor-relative delta."
 />
 
 <PaperReference
-  title="DeepSeekMoE: Towards Ultimate Expert Specialization in Mixture-of-Experts Language Models"
-  authors="DeepSeek-AI"
-  arxivId="2401.06066"
+  referenceId="deepseekmoe"
   purpose="Motivates splitting one feed-forward intermediate dimension into more narrowly focused experts."
   difference="DeepSeekMoE jointly trains routed fine-grained and shared experts; Mutations partitions a pinned dense anchor and executes the complete set with unit contribution for exact initialization."
 />
 
 <PaperReference
-  title="Mixture of A Million Experts"
-  authors="Xu Owen He"
-  arxivId="2407.04153"
+  referenceId="peer"
   purpose="Defines the split-query product-key search used to retrieve from a large expert identifier space."
   difference="The current primitive provides one exact retrieval head over caller-projected queries and multi-channel micro-experts, without PEER's query stack, singleton execution, aggregation, or package persistence."
 />
