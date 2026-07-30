@@ -1,25 +1,50 @@
 ---
 title: End-to-end examples
-description: Compare complete Anchored Plug-in MoE workflows, beginning with the exact anchor conversion baseline.
+description: Compare complete Anchored Plug-in MoE workflows, from exact anchor conversion through a packaged anchored top-1 composition.
 order: 13
 group: Learn by example
 source:
   - website-implementation-plan.md
   - feature-implementation-plan.md
   - examples/verify_dense_equivalence.py
+  - examples/train_expert_package.py
+  - examples/fit_router.py
+  - examples/verify_package_runtime.py
   - tests/integration/test_qwen3_equivalence.py
+  - tests/integration/test_package_runtime_composition.py
+  - tests/unit/test_package_export.py
+  - tests/unit/test_calibrated_package_export.py
+  - tests/unit/test_composition_checkpoint.py
+  - src/anchored_moe/training/README.md
+  - src/anchored_moe/calibration/README.md
+  - src/anchored_moe/registry/README.md
+  - src/anchored_moe/inference/README.md
   - src/anchored_moe/evaluation/README.md
 feature_ids:
   - CORE-003
   - CORE-004
+  - CORE-006
+  - EXP-001
+  - TRN-001
+  - RTR-002
+  - POL-001
+  - INF-001
+  - CAL-004
+  - CAL-005
+  - PKG-002
+  - PKG-007
   - EVAL-001
   - NB-002
+  - NB-003
+  - NB-004
+  - NB-005
 last_reviewed: 2026-07-30
 ---
 
 import CodeDisclosure from "../../components/docs/CodeDisclosure.astro";
 import EquationBlock from "../../components/docs/EquationBlock.astro";
 import IntegrationBadge from "../../components/docs/IntegrationBadge.astro";
+import PaperReference from "../../components/docs/PaperReference.astro";
 import StrategyTable from "../../components/docs/StrategyTable.astro";
 
 export const exampleWorkflows = [
@@ -37,7 +62,7 @@ export const exampleWorkflows = [
     expert: "Full MLP",
     lifecycle: { status: "Integrated" },
     bestFor: "Conservative specialization",
-    guide: "Next workflow",
+    guide: "Published below",
   },
   {
     approach: "Weighted top-2",
@@ -84,14 +109,14 @@ export const exampleWorkflows = [
 ## What this page does
 
 These guides connect the framework's individual strategies into inspectable
-workflows. They begin with the conservative dense-equivalence baseline and will
-progress toward package installation, weighted mixtures, adaptive computation,
-delta experts, local training, and hierarchical routing.
+workflows. They begin with the conservative dense-equivalence baseline and then
+add the complete packaged anchored top-1 lifecycle. Later guides will progress
+toward weighted mixtures, adaptive computation, delta experts, local training,
+and hierarchical routing.
 
 The comparison table includes the planned workflow set so that integration
-boundaries are visible from the start. This first published slice documents
-only the exact anchor conversion; later rows remain clearly marked as upcoming
-guides.
+boundaries are visible from the start. Exact conversion and packaged top-1 are
+published below; later rows remain clearly marked as upcoming guides.
 
 ## Compare the workflows
 
@@ -235,3 +260,317 @@ paper-derived algorithm.
 - [Configuration and modeling](/docs/configuration-and-modeling/) describes
   `upper_half`, `forced_anchor`, and the model façade.
 
+## Packaged anchored top-1
+
+<IntegrationBadge status="Integrated" />
+
+### The problem it solves
+
+Exact conversion establishes a safe anchor but does not yet specialize the
+model. This workflow trains a full-MLP code expert without changing the anchor,
+fits and calibrates an independent router head, derives an immutable routed
+package, explicitly synchronizes that package into the model, and saves a
+composition that reloads with the same routed behavior.
+
+This is the primary integrated workflow because every stage is available
+through package APIs. The offline verification scripts exercise the stages
+independently with deterministic temporary fixtures; they do not pass a
+persistent artifact from one script to the next.
+
+### Workflow contract
+
+- **Expert representation:** one full copied-MLP expert, `code:0`, for each
+  converted layer.
+- **Training:** forced-path training sends every training token through the new
+  expert while mechanically freezing the anchor and shared model.
+- **Router:** one append-only affine head per `(layer, expert)` binding, fitted
+  with ridge regression and calibrated with held-out temperature and threshold
+  rows.
+- **Selection:** anchored hard top-1 compares the calibrated specialist score
+  with the anchor's permanent score of zero.
+- **Combination and capacity:** exactly one complete path runs per token. A
+  positive winning specialist runs alone; otherwise the anchor runs alone.
+- **Packaging:** expert tensors, router heads, calibration provenance, hashes,
+  and explicit layer bindings form an immutable package.
+- **Lifecycle:** install, unload, and reinsert update the registry only.
+  `synchronize_registry()` is the explicit boundary that changes model
+  execution.
+- **Serialization:** the composition bundles active package bytes and references
+  the external anchor checkpoint instead of duplicating its weights.
+- **Expected result:** reload restores the same registry identity and exactly
+  the same routed logits on the deterministic CPU fixture.
+
+### How it runs
+
+```text
+Frozen Qwen3 anchor
+  → train full-MLP experts through forced paths
+  → export an immutable expert-only package
+  → fit and calibrate independent affine router heads
+  → derive an immutable routed package
+  → install, then explicitly synchronize anchored top-1
+  → save and reload the composition
+  → require exact routed-logit and registry restoration
+```
+
+Installation and synchronization are deliberately separate. This prevents a
+registry mutation from silently changing live model behavior and keeps router
+recalibration an explicit operation.
+
+### Routing rule
+
+<EquationBlock
+  intuition="The anchor is always candidate zero, so a specialist runs only when its calibrated score is strictly positive and greater than every competing specialist score."
+  equation="r(h) = argmax_{k ∈ {0,…,K}} g_k(h),  with g_0(h) = 0"
+  spokenLabel="The route for hidden state h is the candidate k with the largest calibrated score g; candidate zero is the anchor and its score is always zero."
+  symbols={[
+    { symbol: "h", meaning: "The token representation entering a converted MLP." },
+    { symbol: "g_k", meaning: "The calibrated score for specialist candidate k." },
+    { symbol: "g_0", meaning: "The anchor score, fixed permanently at zero." },
+    { symbol: "r", meaning: "The selected complete MLP path for this token." },
+  ]}
+  consequence="Non-positive evidence falls back exactly to the anchor. Ties prefer the anchor first, then the stable package order, so routing is deterministic."
+/>
+
+### Minimal composition
+
+Once a compatible calibrated package exists, the public lifecycle remains
+short:
+
+```python
+model = AnchoredMoEForCausalLM.from_pretrained(anchor_path, converted_layers=[2, 3])
+package = ExpertPackage.from_directory(package_path)
+model.install(package)
+model.synchronize_registry()
+model.save_pretrained(composition_path)
+reloaded = AnchoredMoEForCausalLM.from_pretrained(composition_path)
+```
+
+The model will reject incompatible base configuration, converted-layer,
+feature-space, payload-binding, or package-integrity metadata rather than
+attaching the package approximately.
+
+### Train and export the expert
+
+Run the deterministic training stage:
+
+```bash
+python examples/train_expert_package.py
+```
+
+It performs one offline training step, proves that both layer experts changed,
+proves that both anchor MLPs remained exact, and validates the exported package
+files.
+
+<CodeDisclosure
+  summary="Show forced-path training and expert-only export"
+  source="examples/train_expert_package.py"
+  verified
+>
+
+```python
+result = trainer.train()
+
+package = export_full_mlp_expert_package(
+    root / "code-expert",
+    bindings=[
+        ExpertPackageExportBinding(
+            binding.layer_index,
+            binding.expert_id,
+            binding.expert,
+        )
+        for binding in training_bindings
+    ],
+    config=ExpertPackageExportConfig(
+        specialization_name="code",
+        specialization_version="1.0.0",
+        base_model_repository="local-random-qwen3",
+        base_model_revision="synthetic-seed-13",
+        base_config_sha256=sha256_json(model.config.to_dict()),
+        base_weight_sha256={"in-memory-anchor-state": base_weight_sha256},
+        tokenizer_repository="local-random-qwen3",
+        tokenizer_revision="synthetic-seed-13",
+        base_model_dtype="float32",
+        runtime_versions={
+            "accelerate": _package_version("accelerate"),
+            "kernels": "torch-default-cpu",
+            "peft": _package_version("peft"),
+            "python": platform.python_version(),
+            "safetensors": _package_version("safetensors"),
+            "torch": torch.__version__,
+            "transformers": _package_version("transformers"),
+        },
+        training_dataset={
+            "dataset_id": "synthetic-local-code",
+            "revision": "1",
+            "split": "train",
+            "filters": [],
+        },
+        router_feature_specification={
+            "feature_type": "identity",
+            "input": "pre_mlp_hidden_state",
+            "output_size": model.config.hidden_size,
+            "version": 1,
+        },
+        expert_parameterization_config={
+            "initialization": "anchor_copy",
+            "training_strategy": "forced_path",
+            "optimizer": "adamw_torch",
+            "max_steps": result.global_step,
+        },
+    ),
+)
+
+assert package.manifest.router_architecture == "none"
+package.validate_live_files()
+```
+
+Expected invariant: only expert parameters change; the immutable anchor retains
+its exact fingerprint. The complete source constructs the export configuration
+from the pinned base, tokenizer, runtime, dataset, and router-feature contracts.
+</CodeDisclosure>
+
+### Fit, calibrate, and derive the routed package
+
+Run the deterministic calibration stage:
+
+```bash
+python examples/fit_router.py
+```
+
+The example fits independent ridge heads, calibrates temperature and activation
+thresholds on disjoint held-out row IDs, derives a new routed package version,
+and proves that both anchor and expert routes occur.
+
+<CodeDisclosure
+  summary="Show router fitting, calibration, and package derivation"
+  source="examples/fit_router.py"
+  verified
+>
+
+```python
+fitted = fit_independent_ridge(
+    fitting_bank,
+    fitting_labels,
+    regularization=1e-6,
+)
+calibrated, report = calibrate_temperature_and_thresholds(
+    fitted,
+    calibration_bank,
+    calibration_labels,
+    temperature_row_ids=[10, 11, 12, 13],
+    threshold_row_ids=[14, 15, 16, 17, 18, 19],
+    false_activation_rate=1.0 / 3.0,
+)
+derived = derive_calibrated_router_package(
+    source,
+    workspace / "code-routed",
+    calibrated_router=calibrated,
+    calibration_report=report,
+    fitting_feature_bank=fitting_bank,
+    fitting_utility_labels=fitting_labels,
+    calibration_feature_bank=calibration_bank,
+    calibration_utility_labels=calibration_labels,
+    config=CalibratedRouterPackageConfig(
+        specialization_version="1.0.0+router.1",
+        calibration_dataset_version="synthetic-router-v1",
+        ridge_regularization=1e-6,
+        runtime_versions=runtime_versions,
+    ),
+)
+```
+
+Expected invariant: derivation leaves the expert-only source package
+byte-for-byte unchanged and creates a new immutable specialization version.
+The complete source defines the destination and configuration from the same
+pinned feature and runtime contracts.
+</CodeDisclosure>
+
+### Install, synchronize, save, and reload
+
+Run the deterministic runtime stage:
+
+```bash
+python examples/verify_package_runtime.py
+```
+
+The fixture installs a safely bound package, explicitly materializes anchored
+top-1, verifies removal to the exact dense anchor, reinserts the package, and
+reloads an immutable composition.
+
+<CodeDisclosure
+  summary="Show explicit synchronization and exact composition reload"
+  source="examples/verify_package_runtime.py"
+  verified
+>
+
+```python
+model.install(package)
+installed = model.synchronize_registry()
+with torch.no_grad():
+    routed_logits = model(input_ids=input_ids).logits
+
+model.save_pretrained(composition_checkpoint)
+reloaded = AnchoredMoEForCausalLM.from_pretrained(
+    composition_checkpoint,
+    local_files_only=True,
+)
+with torch.no_grad():
+    reloaded_logits = reloaded(input_ids=input_ids).logits
+
+assert_tensors_equivalent(
+    reloaded_logits,
+    routed_logits,
+    name="reloaded composition logits",
+    atol=0.0,
+    rtol=0.0,
+)
+assert reloaded.synchronized_registry_sha256 == installed.registry_sha256
+```
+
+Expected invariant: the reloaded composition produces exactly the same routed
+logits and restores the same active-registry hash.
+</CodeDisclosure>
+
+### Current limitations
+
+- The examples use tiny deterministic Qwen3 fixtures and synthetic data. They
+  validate framework behavior, not code-specialization quality.
+- Qwen3 is the only validated model-family backend.
+- Full-MLP experts duplicate each converted MLP. Package-driven LoRA
+  materialization remains separate future work.
+- The composition references a compatible external anchor checkpoint; it does
+  not bundle the anchor weights.
+- The exact reload claim applies to the validated CPU path. Reduced precision,
+  optimized kernels, multi-device execution, and distributed execution need
+  separate validation.
+- Installing or removing a package does not change live execution until
+  synchronization is requested. Router recalibration is never automatic.
+- The offline scripts validate consecutive lifecycle stages independently
+  rather than acting as a persistent multi-process pipeline.
+
+### References and related pages
+
+Anchored top-1 and explicit registry synchronization are project-specific
+framework mechanisms. Ridge fitting follows the classical Hoerl–Kennard method;
+temperature scaling is motivated by the following calibration work, then
+adapted to independent binary utility heads and explicit activation thresholds.
+
+<PaperReference
+  title="On Calibration of Modern Neural Networks"
+  authors="Chuan Guo, Geoff Pleiss, Yu Sun, and Kilian Q. Weinberger"
+  arxivId="1706.04599"
+  purpose="Motivates fitting a post-hoc temperature on held-out predictions."
+  difference="Mutations calibrates each frozen utility head independently, uses disjoint rows for temperature and threshold fitting, and subtracts an explicit activation threshold before anchored routing."
+/>
+
+- [Training](/docs/training/) explains forced-path isolation and anchor
+  preservation.
+- [Calibration](/docs/calibration/) defines feature banks, ridge fitting,
+  temperature scaling, thresholds, and immutable routed-package derivation.
+- [Registry](/docs/registry/) covers package integrity, explicit lifecycle
+  operations, and composition checkpoints.
+- [Inference](/docs/inference/) describes sparse anchored top-1 dispatch and
+  deterministic output reconstruction.
+- [Policies](/docs/policies/) explains fixed-zero anchor semantics and stable
+  tie-breaking.
