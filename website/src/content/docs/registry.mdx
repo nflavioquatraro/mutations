@@ -1,0 +1,460 @@
+---
+title: Registry
+description: Validate immutable expert packages, manage their lifecycle, and keep registry changes separate from model execution.
+order: 10
+group: Workflows
+source:
+  - src/anchored_moe/registry/README.md
+  - src/anchored_moe/registry/manifest.py
+  - src/anchored_moe/registry/package.py
+  - src/anchored_moe/registry/registry.py
+  - src/anchored_moe/registry/bindings.py
+  - src/anchored_moe/registry/compatibility.py
+  - src/anchored_moe/registry/export.py
+  - src/anchored_moe/registry/router_versions.py
+  - src/anchored_moe/registry/composition.py
+  - src/anchored_moe/registry/hub.py
+  - examples/verify_registry_lifecycle.py
+  - examples/verify_package_runtime.py
+  - examples/verify_package_hub.py
+  - examples/verify_registry_router_versions.py
+  - examples/verify_compatibility_top2.py
+  - examples/export_reload_lifecycle.py
+feature_ids:
+  - PKG-001
+  - PKG-002
+  - PKG-003
+  - PKG-004
+  - PKG-005
+  - PKG-006
+  - PKG-007
+  - CORE-006
+  - NB-003
+  - NB-004
+  - NB-007
+last_reviewed: 2026-07-30
+---
+
+import CodeDisclosure from "../../components/docs/CodeDisclosure.astro";
+import EquationBlock from "../../components/docs/EquationBlock.astro";
+import IntegrationBadge from "../../components/docs/IntegrationBadge.astro";
+import StrategyTable from "../../components/docs/StrategyTable.astro";
+
+export const registryStrategies = [
+  {
+    strategy: "Immutable package manifest",
+    feature: "PKG-001",
+    result: "Portable content identity and strict payload closure",
+    boundary: "Required by every installable expert package",
+    status: { status: "Integrated" },
+  },
+  {
+    strategy: "Registry lifecycle",
+    feature: "PKG-002 / PKG-004",
+    result: "Install, unload, reinsert, upgrade, and rollback",
+    boundary: "Registry state changes; execution stays unchanged until synchronization",
+    status: { status: "Integrated" },
+  },
+  {
+    strategy: "Package-driven attachment",
+    feature: "PKG-007",
+    result: "Explicit layer and expert payload ownership",
+    boundary: "Integrated for full-MLP anchored top-1 packages",
+    status: { status: "Integrated" },
+  },
+  {
+    strategy: "Local composition checkpoint",
+    feature: "CORE-006",
+    result: "External anchor reference plus bundled active packages",
+    boundary: "Local anchored top-1 save and reload",
+    status: { status: "Integrated" },
+  },
+  {
+    strategy: "Expert package Hub transfer",
+    feature: "PKG-006",
+    result: "Pinned manifest-first download and staged upload",
+    boundary: "Expert packages only, not complete compositions",
+    status: { status: "Integrated" },
+  },
+  {
+    strategy: "Mixture compatibility index",
+    feature: "PKG-003",
+    result: "Layer-local expert pairs that may be mixed",
+    boundary: "Explicit top-2 selection and sparse dispatch",
+    status: { status: "Composable" },
+  },
+  {
+    strategy: "Registry-specific router version",
+    feature: "PKG-005",
+    result: "Snapshot-bound frozen logical router artifact",
+    boundary: "Explicit persistence and activation; never automatic",
+    status: { status: "Composable" },
+  },
+];
+
+## What this part does
+
+The registry is the trust and lifecycle boundary for specialization packages.
+It proves which immutable files make up a package, records which packages are
+active and in what order, and rejects incompatible or stale transitions before
+they can alter registry state.
+
+<IntegrationBadge status="Integrated" />
+
+The primary anchored top-1 path is complete from validated package export
+through installation, explicit model synchronization, local composition save,
+and exact reload. Compatibility-aware top-2 and registry-specific router
+versions are validated composable paths with deliberately explicit attachment.
+
+## Where it fits
+
+The registry sits between artifact creation and model execution:
+
+1. training exports an expert-only package with explicit payload bindings;
+2. calibration derives a new immutable router-bearing package version;
+3. strict loading validates its manifest, files, hashes, and compatibility;
+4. lifecycle operations change only the active registry snapshot;
+5. explicit synchronization materializes that snapshot into routed MLPs;
+6. composition export preserves the synchronized snapshot while referencing
+   the separately pinned anchor.
+
+The registry does not train experts, fit routers, choose token routes, execute
+MLPs, or silently change a live model. That separation is why a package can be
+inspected, installed, removed, or replaced before a caller deliberately applies
+the resulting registry.
+
+## Implemented approaches
+
+<StrategyTable
+  caption="Package and registry lifecycle strategies"
+  description="Integration labels describe the current end-to-end boundary. Every row is implemented and validated at the stated boundary."
+  columns={[
+    { key: "strategy", label: "Approach" },
+    { key: "feature", label: "Feature" },
+    { key: "result", label: "Produces" },
+    { key: "boundary", label: "Current boundary" },
+    { key: "status", label: "Integration label" },
+  ]}
+  rows={registryStrategies}
+/>
+
+### Immutable package identity
+
+`ExpertPackageManifest` records the pinned base and tokenizer, converted
+layers, expert representation, safe tensor files, router feature contract,
+runtime and dataset provenance, and a SHA-256 digest for every tracked file.
+The manifest itself is serialized as canonical JSON and contributes its own
+digest to `PackageIdentity`.
+
+`ExpertPackage.from_directory()` is the local trust boundary. Strict loading
+rejects symbolic links, untracked files, unsafe paths, executable payload
+formats, malformed metadata, and changed bytes. Loading data never imports or
+executes package code.
+
+### Explicit payload ownership
+
+PKG-007 records each complete runtime slot as
+`(layer_index, expert_id, weight_file)`. The current full-MLP format requires a
+complete layer-by-expert rectangle, unique slots and files, and the same expert
+ID set at every converted layer.
+
+Legacy version-one manifests without bindings remain valid for registry-only
+lifecycle work, but they cannot be attached to a model. Filenames never imply
+expert ownership.
+
+### Stable lifecycle and audit snapshots
+
+`ExpertRegistry` keeps active packages in stable historical slots. Unloading a
+package releases its live descriptor but remembers its slot; reinstalling the
+same immutable identity restores the previous order and registry hash.
+
+An upgrade replaces one active package with a different immutable version of
+the same specialization without moving unrelated packages. Rollback requires
+the exact upgrade record, the exact prior package, and an unchanged upgraded
+snapshot. Every file and compatibility check occurs before the lock-protected
+state transition.
+
+### Explicit model synchronization
+
+Installing, unloading, upgrading, and rolling back packages do not change
+model routes. `AnchoredMoEForCausalLM.synchronize_registry()` separately
+validates the complete intended runtime and then applies it. Synchronizing an
+empty registry restores forced-anchor execution exactly.
+
+This makes stale execution visible rather than surprising: registry state can
+advance while the model continues to use the last successfully synchronized
+snapshot. Composition export rejects that mismatch instead of silently
+repairing it.
+
+### Compatibility-aware mixtures
+
+Packages may declare one `mixture_compatibility_group`. PKG-003 builds an
+immutable layer-local index from stable expert IDs. Two distinct experts can
+mix only when both declare the same non-empty group.
+
+A missing group means “not mixable,” not membership in an implicit default.
+Candidate order may be realigned by expert ID, but the candidate set must match
+exactly. The index supports explicit compatibility-constrained top-2 selection
+and sparse dispatch; automatic package-driven top-2 model attachment remains
+future work.
+
+### Registry-specific routers
+
+Global router recalibration produces behavior tied to one exact active
+registry. `RegistryRouterVersion` stores a frozen logical router, complete
+registry snapshot, feature specification, recalibration report, tensor
+ownership, and tensor digests in one non-executable safetensors artifact.
+
+Loading reconstructs defensive frozen state. Activation succeeds only for an
+exactly equal live snapshot and returns fresh storage. It never installs
+packages, changes a model, or chooses a router version automatically.
+
+### Local compositions and Hub transfer
+
+A CORE-006 composition checkpoint contains anchored and generation
+configuration, byte-identical active packages in registry order, compatibility
+and registry identities, and an external anchor reference. It deliberately
+does not copy anchor tensors into every composition.
+
+PKG-006 transfers individual expert packages through familiar Hugging Face
+methods. Downloads resolve a branch or tag once, pin the immutable commit, and
+fetch only the manifest-declared closure. Uploads stage and strictly revalidate
+an exact regular-file copy before the first remote mutation. Credentials,
+repository permissions, registry installation, and model synchronization stay
+outside the transport layer.
+
+## How it works
+
+The integrated package lifecycle keeps three state boundaries visible:
+
+```text
+Immutable package files
+  → strict descriptor validation
+  → portable PackageIdentity
+
+Active registry
+  → install / unload / upgrade / rollback
+  → ordered RegistrySnapshot
+
+Explicit model synchronization
+  → materialize validated package payloads
+  → routed runtime or exact anchor fallback
+```
+
+A registry change is therefore an auditable proposal for execution, not an
+implicit model mutation. Local composition export is allowed only when the
+proposal and the live runtime agree.
+
+## Mathematical intuition
+
+<EquationBlock
+  intuition="A package identity binds its human-readable specialization and version to the exact canonical manifest bytes."
+  equation="p = (name, version, SHA256(CanonicalJSON(M)))"
+  spokenLabel="Package identity p equals specialization name, immutable version, and the SHA-256 digest of canonical manifest M."
+  symbols={[
+    { symbol: "M", meaning: "The validated manifest containing package metadata and every tracked payload digest." },
+    { symbol: "p", meaning: "The portable identity used by registry lifecycle operations." },
+    { symbol: "SHA256", meaning: "The content digest; local paths and Hub cache locations do not contribute." },
+  ]}
+  consequence="Moving identical package bytes does not change identity, while changing a tracked byte creates different immutable content."
+/>
+
+<EquationBlock
+  intuition="A registry hash identifies both the active package set and its stable execution order."
+  equation="dregistry = SHA256(CanonicalJSON({ format: v, active: [p₁, …, pₙ] }))"
+  spokenLabel="Registry digest equals the SHA-256 digest of format version v and the ordered active package identities p one through p n."
+  symbols={[
+    { symbol: "v", meaning: "The registry format version." },
+    { symbol: "pᵢ", meaning: "The portable identity occupying active position i." },
+    { symbol: "dregistry", meaning: "The snapshot identity bound to synchronization and registry-specific router artifacts." },
+  ]}
+  consequence="Reinserting the same packages into their historical slots restores the same digest; changing order or version changes it."
+/>
+
+<EquationBlock
+  intuition="Compatibility is opt-in: only two different experts with the same explicit non-empty group may form a mixture."
+  equation="compatible(i, j) = 1[i ≠ j ∧ c(i) ≠ ⊥ ∧ c(i) = c(j)]"
+  spokenLabel="Experts i and j are compatible when they are distinct and share the same declared group, which is not missing."
+  symbols={[
+    { symbol: "c(i)", meaning: "The package-declared mixture compatibility group for expert i." },
+    { symbol: "⊥", meaning: "No compatibility group was declared." },
+    { symbol: "1[·]", meaning: "One when every condition is true, otherwise zero." },
+  ]}
+  consequence="Two experts with missing metadata never become accidentally mixable, even if all other package fields agree."
+/>
+
+## Minimal usage
+
+Apply lifecycle changes deliberately and save only synchronized state:
+
+```python
+package = ExpertPackage.from_directory("./code-experts")
+model.install(package)
+snapshot = model.synchronize_registry()
+
+model.save_pretrained("./code-composition")
+reloaded = AnchoredMoEForCausalLM.from_pretrained("./code-composition")
+assert reloaded.synchronized_registry_sha256 == snapshot.registry_sha256
+```
+
+Installation validates and updates the registry. Synchronization is the
+separate operation that changes routed execution.
+
+## Verified implementation details
+
+<CodeDisclosure
+  summary="Show install, removal, reinsertion, upgrade, and exact rollback"
+  source="examples/verify_registry_lifecycle.py"
+  verified
+>
+
+```python
+registry.install(code)
+registry.install(math)
+installed = registry.snapshot()
+
+registry.unload(code.identity)
+registry.install(ExpertPackage.from_directory(code.package_directory))
+assert registry.snapshot().active_packages == (code.identity, math.identity)
+
+upgrade = registry.upgrade(code.identity, code_v2)
+rollback = registry.rollback(upgrade, code)
+assert rollback.after == upgrade.before == installed
+```
+
+Expected invariant: reinsertion restores stable order, upgrade preserves the
+slot, and rollback restores the exact prior registry snapshot.
+</CodeDisclosure>
+
+<CodeDisclosure
+  summary="Show explicit synchronization and local composition reload"
+  source="examples/verify_package_runtime.py"
+  verified
+>
+
+```python
+model.install(package)
+installed = model.synchronize_registry()
+
+model.save_pretrained(composition_checkpoint)
+reloaded = AnchoredMoEForCausalLM.from_pretrained(
+    composition_checkpoint,
+    local_files_only=True,
+)
+assert reloaded.synchronized_registry_sha256 == installed.registry_sha256
+```
+
+Expected invariant: the local composition reloads byte-identical active
+packages, restores the same anchored top-1 runtime, and reproduces routed
+logits exactly while keeping anchor weights external.
+</CodeDisclosure>
+
+<CodeDisclosure
+  summary="Show pinned package download and exact staged upload"
+  source="examples/verify_package_hub.py"
+  verified
+>
+
+```python
+downloaded = ExpertPackage.from_pretrained(
+    "organization/code-experts",
+    revision="release-1",
+    cache_dir=cache_directory,
+    local_files_only=True,
+)
+upload = downloaded.push_to_hub(
+    "organization/code-experts-copy",
+    commit_message="Offline PKG-006 verification",
+)
+```
+
+Expected invariant: the offline fake transport resolves one immutable commit,
+preserves package identity, excludes unrelated repository files, and stages
+only `manifest.json` plus manifest-tracked payloads.
+</CodeDisclosure>
+
+<CodeDisclosure
+  summary="Show a snapshot-bound registry router round trip"
+  source="examples/verify_registry_router_versions.py"
+  verified
+>
+
+```python
+version = RegistryRouterVersion(
+    recalibrated,
+    registry_snapshot=snapshot,
+    feature_specification=feature_specification,
+    recalibration_report=report,
+)
+version.save_safetensors(path)
+loaded = RegistryRouterVersion.from_safetensors(path)
+restored = loaded.activate(snapshot)
+```
+
+Expected invariant: persistence preserves the frozen router exactly, and
+activation succeeds only for the complete matching registry and compatibility
+snapshot without hidden recalibration.
+</CodeDisclosure>
+
+## Current limitations
+
+- Registry transitions are in-memory and process-local. There is no standalone
+  persistent registry history, cross-process lock, or distributed lifecycle.
+- Install, unload, upgrade, and rollback remain registry-only until explicit
+  synchronization. Automatic model mutation is intentionally unsupported.
+- Package-driven model attachment currently covers complete full-MLP experts
+  with independent affine heads and anchored top-1. Other expert
+  representations and model-level top-2 attachment remain future work.
+- Composition checkpoints are local-only, reference an external anchor, and
+  retain active packages rather than inactive slots or rollback records.
+  Remote transfer, optional anchor bundling, and router-history embedding are
+  unsupported.
+- Live anchor configuration is checked, but exact live anchor-weight hashing
+  and runtime-version enforcement remain incomplete.
+- Registry-specific router versions require explicit selection and activation;
+  they are not embedded in compositions or restored automatically after a
+  lifecycle change.
+- Hub support transfers expert packages only. Credentialed service validation,
+  large-package benchmarks, composition transfer, and registry-router artifact
+  transfer remain separate work.
+
+## References
+
+[Safetensors documentation](https://huggingface.co/docs/safetensors/)
+motivates non-executable tensor payloads.
+[Hugging Face Hub download documentation](https://huggingface.co/docs/huggingface_hub/package_reference/file_download)
+defines pinned snapshot transfer and file allow-lists, while the
+[Hub API client documentation](https://huggingface.co/docs/huggingface_hub/package_reference/hf_api)
+defines explicit repository creation and folder upload.
+
+[FIPS PUB 180-4](https://csrc.nist.gov/pubs/fips/180-4/upd1/final) defines
+SHA-256. [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785) motivates stable
+JSON hashing; Mutations uses documented project-local canonical JSON rules
+rather than claiming complete RFC 8785 conformance.
+[Python’s `threading.RLock` documentation](https://docs.python.org/3/library/threading.html#rlock-objects)
+defines the in-process synchronization primitive protecting registry
+transitions.
+
+PKG-001 through PKG-007 and CORE-006 are framework infrastructure, not
+paper-derived training or optimization algorithms. Their security checks,
+ordering rules, compatibility boundary, and explicit lifecycle semantics
+implement the project’s immutable-anchor design. The
+[registry theory README](https://github.com/nflavioquatraro/mutations/blob/main/src/anchored_moe/registry/README.md)
+contains the complete algorithms, invariants, validation coverage, and
+documented format differences. The
+[architecture blueprint](https://github.com/nflavioquatraro/mutations/blob/main/anchored-plugin-moe-architecture.md)
+defines append-only installation, registry-bound recalibration, removal, and
+upgrade choices.
+
+## Related pages
+
+- Read [training](/docs/training/) for expert-only optimization and package
+  export boundaries.
+- Read [calibration](/docs/calibration/) for router-bearing package derivation
+  and explicit registry-wide recalibration.
+- Read [configuration and modeling](/docs/configuration-and-modeling/) for the
+  façade that owns the registry and applies synchronization.
+- Read [policies](/docs/policies/) for compatibility-constrained top-2
+  selection and capacity fallback.
+- The planned **Inference** page will explain package materialization, sparse
+  dispatch, exact anchor restoration, and route telemetry.
