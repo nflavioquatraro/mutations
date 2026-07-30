@@ -1,0 +1,506 @@
+---
+title: Training
+description: Compare isolated expert training, independent expert sets, local mini-MoE optimization, refinement, and optional preservation or balancing objectives.
+order: 8
+group: Workflows
+source:
+  - src/anchored_moe/training/README.md
+  - src/anchored_moe/training/expert_trainer.py
+  - src/anchored_moe/training/independent.py
+  - src/anchored_moe/training/mini_moe.py
+  - src/anchored_moe/training/refinement.py
+  - src/anchored_moe/training/objectives.py
+  - src/anchored_moe/training/balancing.py
+  - src/anchored_moe/training/loss_free.py
+  - src/anchored_moe/training/expert_choice.py
+  - examples/verify_forced_path_training.py
+  - examples/verify_independent_expert_set.py
+  - examples/verify_local_mini_moe.py
+  - examples/verify_mixture_aware_refinement.py
+  - examples/verify_loss_free_bias_balancing.py
+  - examples/verify_expert_choice_routing.py
+feature_ids:
+  - TRN-001
+  - TRN-002
+  - TRN-003
+  - TRN-004
+  - TRN-005
+  - BAL-003
+  - BAL-004
+  - BAL-005
+last_reviewed: 2026-07-30
+---
+
+import CodeDisclosure from "../../components/docs/CodeDisclosure.astro";
+import EquationBlock from "../../components/docs/EquationBlock.astro";
+import IntegrationBadge from "../../components/docs/IntegrationBadge.astro";
+import PaperReference from "../../components/docs/PaperReference.astro";
+import StrategyTable from "../../components/docs/StrategyTable.astro";
+
+export const trainingStrategies = [
+  {
+    strategy: "Forced path",
+    feature: "TRN-001",
+    execution: "One expert for every token and converted layer",
+    trainable: "One expert path",
+    boundary: "Primary package-training path",
+    status: { status: "Integrated" },
+  },
+  {
+    strategy: "Independent expert set",
+    feature: "TRN-002",
+    execution: "One isolated run per expert, in stable order",
+    trainable: "Current expert path only",
+    boundary: "Explicit multi-run orchestration",
+    status: { status: "Composable" },
+  },
+  {
+    strategy: "Local mini-MoE",
+    feature: "TRN-003",
+    execution: "Both package-local experts for every token",
+    trainable: "Two experts and fresh affine heads",
+    boundary: "Explicit two-expert training workflow",
+    status: { status: "Composable" },
+  },
+  {
+    strategy: "Mixture-aware refinement",
+    feature: "TRN-004",
+    execution: "Independent training, then the local mixture",
+    trainable: "Two trained experts and fresh affine heads",
+    boundary: "Requires a completed TRN-002 report",
+    status: { status: "Composable" },
+  },
+  {
+    strategy: "Replay and drift objectives",
+    feature: "TRN-005",
+    execution: "Adds preservation terms to forced-path loss",
+    trainable: "Unchanged expert-only optimizer set",
+    boundary: "Optional TRN-001 configuration",
+    status: { status: "Integrated" },
+  },
+  {
+    strategy: "Auxiliary load balancing",
+    feature: "BAL-003",
+    execution: "Regularizes local pair probabilities",
+    trainable: "Unchanged TRN-003 optimizer set",
+    boundary: "Optional local-mini-MoE objective",
+    status: { status: "Composable" },
+  },
+  {
+    strategy: "Loss-free selection bias",
+    feature: "BAL-004",
+    execution: "Updates non-trainable biases after a batch",
+    trainable: "None",
+    boundary: "No automatic Trainer or sparse runtime hook",
+    status: { status: "Research primitive" },
+  },
+  {
+    strategy: "Expert-choice assignment",
+    feature: "BAL-005",
+    execution: "Each expert selects a fixed token bucket",
+    trainable: "Selected score gradients only",
+    boundary: "Assignment plan without expert execution",
+    status: { status: "Research primitive" },
+  },
+];
+
+## What this part does
+
+Training controls which new expert parameters may change and which execution
+path produces their gradients. Every supported workflow mechanically freezes
+the anchor and shared transformer, proves the exact optimizer-owned parameter
+set, and restores converted layers to anchor-only execution after training.
+
+<IntegrationBadge status="Integrated" />
+
+Forced-path full-MLP training, including optional preservation objectives,
+feeds the validated expert-package lifecycle. Independent, local-mixture, and
+refinement workflows are composable training paths. Loss-free balancing and
+expert-choice assignment remain research primitives with no automatic
+Trainer-to-runtime connection.
+
+## Where it fits
+
+Training begins after a backend has converted the selected MLP layers and
+expert objects have been created:
+
+1. the backend exposes converted `RoutedMLP` wrappers;
+2. expert bindings declare stable layer and expert ownership;
+3. a training topology attaches one path or a local pair temporarily;
+4. Hugging Face Trainer and Accelerate run the ordinary optimization loop;
+5. cleanup clears gradients, freezes artifacts, and restores forced-anchor
+   execution;
+6. package export, router fitting, installation, and inference happen later.
+
+The training package does not partition datasets automatically, generate
+replay teacher logits, fit a global inference router, export packages, or
+decide serving-time capacity.
+
+## Implemented approaches
+
+<StrategyTable
+  caption="Training workflows and objective extensions"
+  description="Labels describe lifecycle integration. Every row is implemented and validated at its stated boundary."
+  columns={[
+    { key: "strategy", label: "Approach" },
+    { key: "feature", label: "Feature" },
+    { key: "execution", label: "Training execution" },
+    { key: "trainable", label: "Trainable state" },
+    { key: "boundary", label: "Current boundary" },
+    { key: "status", label: "Integration label" },
+  ]}
+  rows={trainingStrategies}
+/>
+
+### Forced-path single-expert training
+
+`ForcedPathExpertTrainer` attaches one independently owned expert at every
+converted layer. Every token follows that expert path; no router score,
+selection policy, anchor comparison, or sparse grouping participates in the
+forward pass.
+
+Before Trainer exists, the implementation rejects incomplete layer coverage,
+parameterless experts, shared expert/model storage, and cross-layer expert
+sharing. It then freezes the entire model, enables only the parameters declared
+by each expert, and compares exact parameter object identities with the
+expected optimizer set.
+
+### Independent latent experts
+
+`train_independent_expert_set()` composes two or more forced-path runs. Each
+expert may receive its own data partition, seed, schedule, collator, and
+preservation settings. Runs execute sequentially against the same immutable
+anchor, and only the current expert path is registered on the model.
+
+This is independent optimization, not token routing or one joint loss. The
+coordinator validates the entire expert-by-layer rectangle before the first
+optimizer step so a malformed later run cannot be discovered only after an
+earlier expert has trained.
+
+### Local two-expert mini-MoE
+
+`LocalMiniMoETrainer` attaches exactly two package-local experts and fresh
+affine router heads. Both experts execute every specialization token, and a
+differentiable score softmax combines their outputs. Small deterministic
+opposite router biases break identical anchor-copy symmetry without randomness.
+
+The anchor is not a candidate inside this temporary local mixture. After the
+one supported Trainer run, cleanup freezes both experts and the heads, releases
+captured probability tensors, and restores the exact anchor route.
+
+### Mixture-aware refinement
+
+`refine_independent_expert_set()` links the two stages deliberately:
+
+```text
+Two isolated TRN-002 runs
+    → validated completed report
+    → fresh local affine heads
+    → joint TRN-003 refinement
+```
+
+The source report must prove the same two expert IDs, stable order, converted
+layers, and completed optimizer progress. The second stage then updates the
+caller-owned trained experts and fresh local heads together on a mixture
+dataset.
+
+### Optional objectives and balancing
+
+`ExpertObjectiveConfig` adds replay KL and normalized weight drift to
+forced-path training without changing optimizer ownership. Replay uses
+precomputed, detached immutable-anchor logits; drift compares live expert
+parameters with trainer-construction snapshots.
+
+Local mini-MoE training can add a Switch-style auxiliary balancing loss through
+`load_balancing_weight`. This changes training pressure but not computation:
+both experts still execute for every token.
+
+`LossFreeBiasBalancer` and `ExpertChoiceRouting` address sparse-training
+research questions separately. The former updates persistent, gradient-free
+selection biases from completed-batch loads. The latter creates equal-capacity
+expert token buckets. Neither primitive is wired into `LocalMiniMoETrainer` or
+an expert dispatcher.
+
+## How it works
+
+### Establish ownership before mutation
+
+Bindings are normalized into deterministic layer order. The framework checks
+complete converted-layer coverage and rejects parameter or storage aliases
+across the model, experts, router heads, and feature transformation before
+attaching a route.
+
+### Let Trainer own the ordinary loop
+
+The specialized trainers preserve Hugging Face behavior for data loading,
+loss computation, accumulation, clipping, optimizer and scheduler stepping,
+callbacks, and device placement. They constrain unsafe features:
+`save_strategy` must be `"no"`, full-model saving and Hub push are rejected,
+and checkpoint resume remains unsupported until expert-only optimizer state has
+a versioned format.
+
+### Restore the anchor on every exit
+
+Successful and failed training runs clear gradients, freeze external
+artifacts, detach temporary experts, and return every converted wrapper to
+`forced_anchor`. Cleanup does not roll back expert weights after an optimizer
+step; failure safety protects model routing and ownership, not transactional
+expert history.
+
+## Mathematical intuition
+
+<EquationBlock
+  intuition="Forced-path training replaces only converted MLP execution while every non-expert parameter stays fixed."
+  equation="yₗ,ₜ = Eₗ,ₖ(hₗ,ₜ),  ℓ ∈ C"
+  spokenLabel="Output y at layer l and token t equals expert E for stable expert k applied to hidden state h, for every converted layer l in C."
+  symbols={[
+    { symbol: "C", meaning: "The deterministic set of converted transformer layers." },
+    { symbol: "hₗ,ₜ", meaning: "Token t's representation immediately before layer l's MLP." },
+    { symbol: "Eₗ,ₖ", meaning: "The independently owned expert for stable package identifier k at layer l." },
+    { symbol: "yₗ,ₜ", meaning: "The complete replacement MLP output used by the frozen transformer." },
+  ]}
+  consequence="Every token trains the same specialist path. There is no route discovery, and the anchor receives no gradient."
+/>
+
+<EquationBlock
+  intuition="Independent expert-set training solves one isolated optimization problem for each caller-supplied data partition."
+  equation="θₖ* = argmin θₖ  Lₖ(Dₖ; θₖ, θA)"
+  spokenLabel="Optimal expert parameters theta k minimize expert k loss on dataset partition D k while anchor parameters theta A remain fixed."
+  symbols={[
+    { symbol: "Dₖ", meaning: "The caller-owned specialization partition for expert k." },
+    { symbol: "θₖ", meaning: "Only expert k's declared optimizer parameters." },
+    { symbol: "θA", meaning: "The immutable anchor and shared-backbone parameters." },
+    { symbol: "Lₖ", meaning: "The ordinary causal-language-model loss, optionally extended by TRN-005." },
+  ]}
+  consequence="Runs cannot exchange gradients. Declared order is operationally deterministic but cannot change the frozen anchor."
+/>
+
+<EquationBlock
+  intuition="Local mini-MoE training executes both specialists and learns how strongly each should contribute."
+  equation="yₗ,ₜ = αₗ,ₜ,₁ Eₗ,₁(hₗ,ₜ) + αₗ,ₜ,₂ Eₗ,₂(hₗ,ₜ)"
+  spokenLabel="Local output y is the weighted sum of expert one and expert two outputs for each converted layer and token."
+  symbols={[
+    { symbol: "Eₗ,₁, Eₗ,₂", meaning: "The exactly two package-local complete experts." },
+    { symbol: "αₗ,ₜ,ᵢ", meaning: "Positive score-softmax weight from fresh affine head i; the pair sums to one." },
+    { symbol: "hₗ,ₜ", meaning: "The pre-MLP hidden state shared by both local experts." },
+    { symbol: "yₗ,ₜ", meaning: "The differentiable combined output returned to the frozen transformer." },
+  ]}
+  consequence="Both experts receive gradients and both perform work for every token. This is mixture-aware training, not sparse inference."
+/>
+
+## Minimal usage
+
+Train one bound expert path with ordinary Hugging Face arguments:
+
+```python
+trainer = ForcedPathExpertTrainer(
+    model=model,
+    backend=Qwen3Backend(),
+    expert_bindings=bindings,
+    args=TrainingArguments(
+        output_dir="./expert-run",
+        save_strategy="no",
+    ),
+    train_dataset=dataset,
+)
+trainer.train()
+```
+
+The model must already be converted, and `bindings` must contain one
+independently owned expert for every converted layer.
+
+## Verified implementation details
+
+<CodeDisclosure
+  summary="Show expert-only forced-path training with preservation objectives"
+  source="examples/verify_forced_path_training.py"
+  verified
+>
+
+```python
+trainer = ForcedPathExpertTrainer(
+    model=model,
+    backend=backend,
+    expert_bindings=[ForcedExpertBinding(3, "code:0", expert)],
+    objective_config=ExpertObjectiveConfig(
+        replay_kl_weight=0.5,
+        drift_weight=0.1,
+        replay_temperature=2.0,
+    ),
+    args=training_arguments,
+    train_dataset=dataset,
+)
+trainer.train()
+```
+
+Expected invariant: the expert changes, replay and drift terms are finite and
+positive, and the anchor remains byte-exact.
+</CodeDisclosure>
+
+<CodeDisclosure
+  summary="Show two isolated expert runs with distinct data and seeds"
+  source="examples/verify_independent_expert_set.py"
+  verified
+>
+
+```python
+report = train_independent_expert_set(
+    model,
+    backend=backend,
+    runs=[code_run, code_one_run],
+)
+
+assert report.expert_ids == ("code:0", "code:1")
+assert report.total_global_steps == 2
+assert wrapper.routing_mode == "forced_anchor"
+```
+
+Expected invariant: both experts update in declared order, share no parameters
+or storage, and finish frozen with the anchor route restored.
+</CodeDisclosure>
+
+<CodeDisclosure
+  summary="Show joint local-pair optimization and auxiliary balancing"
+  source="examples/verify_local_mini_moe.py"
+  verified
+>
+
+```python
+trainer = LocalMiniMoETrainer(
+    model=model,
+    backend=backend,
+    expert_bindings=bindings,
+    router_feature_extractor=IdentityRouterFeatureExtractor(16),
+    router_heads=heads,
+    config=LocalMiniMoETrainingConfig(
+        load_balancing_weight=0.05,
+    ),
+    args=training_arguments,
+    train_dataset=dataset,
+)
+trainer.train()
+```
+
+Expected invariant: both experts and the fresh affine heads update, the
+reported loss includes BAL-003, and cleanup restores the byte-exact anchor.
+</CodeDisclosure>
+
+<CodeDisclosure
+  summary="Show independent training followed by mixture-aware refinement"
+  source="examples/verify_mixture_aware_refinement.py"
+  verified
+>
+
+```python
+report = refine_independent_expert_set(
+    model,
+    backend=backend,
+    source_training=independent_report,
+    expert_bindings=local_pair_bindings,
+    router_feature_extractor=features,
+    router_heads=fresh_heads,
+    config=LocalMiniMoETrainingConfig(
+        load_balancing_weight=0.05,
+    ),
+    args=training_arguments,
+    trainer_kwargs={"train_dataset": mixture_dataset},
+)
+```
+
+Expected invariant: the same independently trained pair updates again with
+fresh local heads, while report provenance and exact anchor cleanup remain
+auditable.
+</CodeDisclosure>
+
+## Current limitations
+
+- TRN-001 and TRN-002 train complete expert paths; they do not discover routes
+  or partition data automatically.
+- Independent expert runs are sequential in one process. Concurrent training
+  requires separate models and processes.
+- TRN-003 and TRN-004 support exactly two experts with complete identical layer
+  coverage and fresh, zero-initialized affine heads.
+- Local training always executes both experts. It provides no anchor
+  abstention, sparse capacity, or inference-time compute saving.
+- TRN-005 currently composes with forced-path training, not local mini-MoE
+  training. Full-vocabulary replay logits and full expert drift snapshots can
+  be storage intensive.
+- Full-model checkpoints, Hub push, model reinitialization, and checkpoint
+  resume are rejected. Expert packages are exported through a separate
+  safetensors workflow.
+- Failure cleanup restores safe routing and freezing but does not roll back
+  partially optimized external expert weights.
+- BAL-004 has no automatic Trainer-step hook or distributed load reduction.
+- BAL-005 plans sparse token assignments but does not execute or combine
+  experts and does not support autoregressive decoding.
+- Mixed precision, multi-device, distributed, and gradient-checkpointing
+  acceptance remain future validation work.
+
+## References
+
+<PaperReference
+  title="Distilling the Knowledge in a Neural Network"
+  authors="Geoffrey Hinton, Oriol Vinyals, and Jeff Dean"
+  arxivId="1503.02531"
+  purpose="Motivates temperature-scaled KL preservation against a fixed teacher distribution."
+  difference="TRN-005 consumes precomputed immutable-anchor logits, supports token-level replay masks, and preserves a separate causal-language-model loss."
+/>
+
+<PaperReference
+  title="Explicit Inductive Bias for Transfer Learning with Convolutional Networks"
+  authors="Xuhong Li, Yves Grandvalet, and Franck Davoine"
+  arxivId="1802.01483"
+  purpose="Motivates regularizing trainable parameters toward their optimization starting point."
+  difference="TRN-005 applies drift only to expert-owned parameters and normalizes the squared distance by total expert scalar count."
+/>
+
+<PaperReference
+  title="Switch Transformers: Scaling to Trillion Parameter Models with Simple and Efficient Sparsity"
+  authors="William Fedus, Barret Zoph, and Noam Shazeer"
+  arxivId="2101.03961"
+  purpose="Motivates multiplying preferred-assignment fractions by mean router probabilities for auxiliary load balancing."
+  difference="BAL-003 applies the objective to a dense two-expert local mixture; hard assignments measure preference but do not control execution."
+/>
+
+<PaperReference
+  title="Auxiliary-Loss-Free Load Balancing Strategy for Mixture-of-Experts"
+  authors="Lean Wang et al."
+  arxivId="2408.15664"
+  purpose="Motivates persistent expert-wise selection biases updated from historical load without auxiliary-loss gradients."
+  difference="BAL-004 is a standalone anchored primitive with candidate-zero exclusion, explicit completed-batch updates, and no distributed Trainer integration."
+/>
+
+<PaperReference
+  title="Mixture-of-Experts with Expert Choice Routing"
+  authors="Yanqi Zhou et al."
+  arxivId="2202.09368"
+  purpose="Motivates fixed expert token buckets, token-axis ranking, and variable expert counts per token."
+  difference="BAL-005 returns sparse assignment metadata with explicit integer capacity and anchor fallback, but performs no expert execution or distributed training."
+/>
+
+TRN-001 through TRN-004 are project-specific framework orchestration rather
+than paper-derived training algorithms. Their temporary execution paths,
+ownership assertions, and cleanup rules implement the repository's immutable
+anchor design.
+
+The
+[training theory README](https://github.com/nflavioquatraro/mutations/blob/main/src/anchored_moe/training/README.md)
+contains the complete objectives, algorithms, Hugging Face boundary, tests,
+and documented deviations. The
+[architecture blueprint](https://github.com/nflavioquatraro/mutations/blob/main/anchored-plugin-moe-architecture.md)
+defines forced, independent, local-mixture, and refinement choices in the
+larger post-training workflow.
+
+## Related pages
+
+- Read [experts](/docs/experts/) for the trainable representations consumed by
+  these workflows.
+- Read [policies](/docs/policies/) to distinguish local training mixtures from
+  anchored inference selection and capacity fallback.
+- Return to
+  [configuration and modeling](/docs/configuration-and-modeling/) for layer
+  conversion and the forced-anchor baseline.
+- The planned **Calibration** page will explain post-training feature banks,
+  utility labels, router fitting, temperatures, and thresholds.
+- The planned **Registry** page will cover expert-only package export,
+  compatibility metadata, installation, upgrade, and rollback.
