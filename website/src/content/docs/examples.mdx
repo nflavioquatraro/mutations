@@ -1,6 +1,6 @@
 ---
 title: End-to-end examples
-description: Compare complete Anchored Plug-in MoE workflows, from exact anchor conversion through routed deltas, local training, hierarchical routing, prompt-level shortlisting, compatibility-constrained mixtures, and dynamic expert counts.
+description: Compare complete Anchored Plug-in MoE workflows, from exact anchor conversion through routed deltas, local training, hierarchical routing, prompt-level shortlisting, compatibility-constrained mixtures, dynamic expert counts, and product-key retrieval.
 order: 13
 group: Learn by example
 source:
@@ -20,11 +20,13 @@ source:
   - examples/verify_prompt_shortlisting.py
   - examples/verify_compatibility_top2.py
   - examples/verify_dynamic_k_selection.py
+  - examples/verify_product_key_retrieval.py
   - tests/integration/test_affine_router_dynamic_k.py
   - tests/integration/test_anchor_delta_routed_mlp.py
   - tests/integration/test_hierarchical_top2_dispatch.py
   - tests/integration/test_local_mini_moe_trainer.py
   - tests/integration/test_mixture_aware_refinement_pipeline.py
+  - tests/integration/test_product_key_micro_experts.py
   - tests/integration/test_prompt_shortlisted_routing.py
   - tests/integration/test_registry_compatibility_top2.py
   - tests/integration/test_qwen3_equivalence.py
@@ -46,6 +48,7 @@ source:
   - tests/unit/test_dynamic_k_selection.py
   - tests/unit/test_efficiency.py
   - tests/unit/test_mixture_compatibility.py
+  - tests/unit/test_product_key_retrieval.py
   - tests/unit/test_top2_selection.py
   - tests/unit/test_top2_dispatch.py
   - src/anchored_moe/experts/README.md
@@ -62,6 +65,8 @@ feature_ids:
   - CORE-006
   - EXP-001
   - EXP-002
+  - EXP-004
+  - EXP-005
   - TRN-001
   - TRN-002
   - TRN-003
@@ -183,6 +188,14 @@ export const exampleWorkflows = [
     bestFor: "Confidence-gated compute allocation",
     guide: "Published below",
   },
+  {
+    approach: "Product-key retrieval",
+    active: "Top-k identifiers; no expert execution",
+    expert: "Square fine-grained micro-expert set",
+    lifecycle: { status: "Research primitive" },
+    bestFor: "Exact retrieval from large local sets",
+    guide: "Published below",
+  },
 ];
 
 ## What this page does
@@ -193,14 +206,17 @@ complete packaged anchored top-1 lifecycle, and then introduce explicitly
 composed weighted top-2 execution, adaptive route selection, always-on-anchor
 deltas, package-local two-expert training, and hierarchical package routing.
 Prompt-level shortlisting then shows how an external retrieval stage can bound
-the columns evaluated by token-level routing.
+the columns evaluated by token-level routing. Product-key retrieval closes the
+page by showing how two smaller key tables can retrieve exact top-\(k\)
+micro-expert identifiers from a square package-local index.
 
 The comparison table keeps integration boundaries visible from the start.
 Exact conversion, packaged top-1, weighted top-2, adaptive selection, routed
 LoRA deltas, local mini-MoE training, package-first hierarchy,
 prompt-shortlisted top-1, and compatibility-constrained top-2 are published
-below. The final guide varies the number of selected specialists per token
-under a strict compute cap while keeping the execution boundary explicit.
+below. The final two guides vary the number of selected specialists per token
+under a strict compute cap, then retrieve fine-grained expert identifiers while
+keeping the unimplemented execution boundaries explicit.
 
 ## Compare the workflows
 
@@ -2468,3 +2484,216 @@ mutation of the router scores.
   pair-shaped top-2 dispatchers, not an arbitrary-\(k\) dispatcher.
 - [Evaluation](/docs/evaluation/) separates route determinism and active-work
   accounting from quality or production-efficiency evidence.
+
+## Product-key retrieval over micro-experts
+
+<IntegrationBadge status="Research primitive" />
+
+### The problem it solves
+
+Scoring one independent routing head for every member of a very large
+fine-grained expert set grows linearly with the complete set. Product-key
+retrieval represents a square set of \(C^2\) stable micro-expert identifiers
+with two smaller \(C\)-row key tables, then recovers the exact top-\(k\)
+identifiers from their pairwise scores.
+
+This guide covers retrieval only. A returned identifier names one partial
+micro-expert contribution; it is not yet a complete replacement MLP and the
+current framework does not execute or aggregate the selected subset.
+
+### Workflow contract
+
+- **Expert representation:** `FineGrainedMicroExpertSet` partitions one
+  compatible bias-free gated MLP into an atomic set of narrow channel
+  contributions. EXP-005 version one requires a perfect-square expert count so
+  two equal subkey tables can bind one-to-one to its stable row-major IDs.
+- **Routing and selection:** `ProductKeyMicroExpertRetriever` accepts an
+  already projected query with two equal-width halves. It stable-ranks each
+  subkey table, scores the Cartesian product of their retained rows, and returns
+  the exact global top-\(k\) identifiers, key pairs, masks, and raw scores.
+- **Combination and capacity:** none. The retriever does not execute a
+  micro-expert, assign output weights, aggregate partial contributions, enforce
+  capacity, or fall back to the anchor.
+- **Training and calibration:** the two key tables may be trainable, and
+  selected raw scores remain connected to query and key gradients. Query
+  projection, normalization, retrieval objectives, and training orchestration
+  are caller-owned and not implemented by this primitive.
+- **Active work:** the retriever scores two \(C\)-row tables, then compares at
+  most \(\min(k,C)^2\) candidate pairs instead of materializing all \(C^2\)
+  pair scores. No expert module runs.
+- **Packaging and serialization:** an outer `PromptTopMShortlister` can
+  explicitly choose a package before its local product-key retriever runs.
+  Keys and retrieval configuration are not yet package payloads, registry
+  router versions, or composition-checkpoint state.
+- **Expected result:** bounded search exactly matches exhaustive Cartesian
+  ranking, equal scores prefer the lower row-major ID, gradients and ownership
+  stay explicit, and the anchor plus bound micro-expert set remain unchanged.
+
+### How the split index works
+
+```text
+Caller-projected query q = [q1; q2]
+  → rank rows in the first key table with q1
+  → rank rows in the second key table with q2
+  → score pairs from the two retained row sets
+  → stable-rank the pairs by their global row-major IDs
+  → return top-k IDs, pairs, masks, and graph-connected scores
+```
+
+The first stage cannot exclude a globally top-\(k\) pair: any such pair must
+use a row that appears in the top \(\min(k,C)\) rows of each corresponding
+subkey search. The second stable ranking therefore produces the same ordered
+identifiers as exhaustive scoring.
+
+### Product-key score
+
+<EquationBlock
+  intuition="Split one projected query in half and add its similarity to one row from each key table."
+  equation="s_(i,j)(q) = q₁ᵀc_i + q₂ᵀc′_j;  expert_id(i,j) = iC + j"
+  spokenLabel="Score i j of query q equals the dot product of query half one and first-table key i plus the dot product of query half two and second-table key j. The stable expert identifier is i times C plus j."
+  symbols={[
+    { symbol: "q=[q₁;q₂]", meaning: "One caller-projected query split into two equal-width halves." },
+    { symbol: "c_i, c′_j", meaning: "Rows i and j from the two learned C-row subkey tables." },
+    { symbol: "s_(i,j)(q)", meaning: "The raw retrieval score for product-key pair (i,j)." },
+    { symbol: "iC+j", meaning: "The stable row-major micro-expert index used to resolve equal-score ties." },
+  ]}
+  consequence="The score retrieves an identifier only. It supplies neither an anchor decision nor a valid weight for combining the selected partial micro-expert outputs."
+/>
+
+### Two-query walkthrough
+
+For a readable fixture, let both two-row key tables be the \(2\times2\)
+identity matrix. The four row-major product keys are
+`0=(0,0)`, `1=(0,1)`, `2=(1,0)`, and `3=(1,1)`.
+
+<StrategyTable
+  caption="Deterministic product-key retrieval example"
+  description="Each query is shown as two halves. Top-three identifiers are ordered by their exact summed dot-product scores."
+  columns={[
+    { key: "query", label: "Projected query [q₁; q₂]" },
+    { key: "scores", label: "Scores for IDs 0–3" },
+    { key: "selected", label: "Top-three IDs" },
+    { key: "meaning", label: "Result" },
+  ]}
+  rows={[
+    {
+      query: "[2, 0; 1, 0]",
+      scores: "[3, 2, 1, 0]",
+      selected: "[0, 1, 2]",
+      meaning: "Pairs (0,0), (0,1), then (1,0)",
+    },
+    {
+      query: "[0, 2; 0, 1]",
+      scores: "[0, 1, 2, 3]",
+      selected: "[3, 2, 1]",
+      meaning: "Pairs (1,1), (1,0), then (0,1)",
+    },
+    {
+      query: "All-zero keys",
+      scores: "[0, 0, 0, 0]",
+      selected: "[0, 1, 2]",
+      meaning: "Stable row-major tie order",
+    },
+  ]}
+/>
+
+This \(C=2\) example is intentionally small enough to inspect by hand. The
+retriever's value appears when \(C\) is large and \(k\) stays small: it avoids
+building the complete \(C^2\)-score tensor while preserving exact ranking.
+
+### Minimal explicit retrieval
+
+```python
+retriever = ProductKeyMicroExpertRetriever.from_micro_expert_set(
+    micro_experts,
+    first_subkeys,
+    second_subkeys,
+    config=ProductKeyRetrievalConfig(top_k=3),
+    expert_id_prefix="code-micro",
+)
+retrieval = retriever(projected_queries)
+```
+
+`retrieval.selected_indices`, `selected_pairs`, `selected_scores`, and
+`candidate_mask` describe the decision. A downstream experiment must still
+define how the chosen partial contributions execute and combine.
+
+### Run the verified example
+
+From the repository root, run:
+
+```bash
+python examples/verify_product_key_retrieval.py
+```
+
+The deterministic offline example binds four micro-experts to two two-row key
+tables, requests three results per query, and proves exact exhaustive
+equivalence, stable ties `[0, 1, 2]`, gradient ownership, expert immutability,
+and explicit package shortlisting.
+
+<CodeDisclosure
+  summary="Show exact bounded retrieval and stable tie behavior"
+  source="examples/verify_product_key_retrieval.py"
+  verified
+>
+
+```python
+result = retriever(queries)
+exhaustive = (
+    (queries[..., :3] @ first_subkeys.T).unsqueeze(-1)
+    + (queries[..., 3:] @ second_subkeys.T).unsqueeze(-2)
+).flatten(start_dim=-2)
+expected = torch.argsort(
+    exhaustive, dim=-1, descending=True, stable=True
+)[..., :3]
+assert torch.equal(result.selected_indices, expected)
+assert tied.selected_indices.tolist() == [[0, 1, 2]]
+```
+
+Expected invariants: the bounded and exhaustive rankings are identical, query
+and key gradients exist, the bound micro-expert parameters receive no
+retrieval gradients or mutation, and prompt-level package selection remains an
+explicit outer step.
+</CodeDisclosure>
+
+### Current limitations
+
+- EXP-005 version one supports one retrieval head over a perfect-square
+  micro-expert count and two equal subkey tables. Non-square, ragged, hashed,
+  or multi-head indices are not implemented.
+- Queries must already be projected to two equal halves. Learned query
+  projection, normalization, retrieval loss, score activation, calibration,
+  and trainer integration remain future work.
+- Selected micro-expert dispatch, subset combination, output aggregation,
+  capacity, overflow, shared experts, and exact anchor-preserving execution are
+  not implemented.
+- Product keys and configuration are not exported in expert packages,
+  synchronized through the registry, attached by `RoutedMLP`, or saved in
+  composition checkpoints.
+- The exact search uses ordinary PyTorch operations. It makes no fused-kernel,
+  memory-paging, accelerator-speed, million-expert throughput, or distributed
+  scaling claim.
+- The fixtures validate indexing, exact ranking, ties, gradients, and
+  ownership—not retrieval quality, useful specialization, language-model
+  quality, or production efficiency.
+
+### References and related pages
+
+<PaperReference
+  title="Mixture of A Million Experts"
+  authors="Xu Owen He"
+  arxivId="2407.04153"
+  purpose="Defines PEER's split-query product-key search and proves that the global top-k lies inside the Cartesian product of the two subkey top-k sets."
+  difference="EXP-005 implements one exact retrieval head over caller-projected queries and EXP-004 multi-channel segments. It omits PEER's query projection and normalization, multi-head retrieval, score activation, singleton expert execution, output aggregation, and package persistence."
+/>
+
+- [Experts](/docs/experts/) defines `EXP-004` micro-expert segmentation,
+  `EXP-005` product-key retrieval, tensor shapes, ownership, and API details.
+- [Routers](/docs/routers/) documents `RTR-006` prompt-level shortlisting,
+  which can explicitly choose a package before local product-key retrieval.
+- [Inference](/docs/inference/) explains why existing top-1 and pair-shaped
+  top-2 replacement dispatch cannot execute partial micro-expert subsets.
+- [Training](/docs/training/) describes current expert and router training
+  workflows; none yet orchestrates product-key query or key learning.
+- [Evaluation](/docs/evaluation/) separates exact retrieval correctness from
+  quality, memory, latency, and production-scaling evidence.
