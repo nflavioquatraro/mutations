@@ -1,0 +1,243 @@
+---
+title: Getting started
+description: Install the project, convert a local Qwen3 anchor, and verify exact forced-anchor behavior without downloading model weights.
+order: 2
+group: Introduction
+source:
+  - pyproject.toml
+  - README.md
+  - examples/verify_dense_equivalence.py
+  - notebooks/01_convert_dense_model.ipynb
+feature_ids:
+  - CORE-001
+  - CORE-003
+  - CORE-004
+  - EVAL-001
+  - NB-002
+last_reviewed: 2026-07-30
+---
+
+import CodeDisclosure from "../../components/docs/CodeDisclosure.astro";
+import EquationBlock from "../../components/docs/EquationBlock.astro";
+import IntegrationBadge from "../../components/docs/IntegrationBadge.astro";
+
+## What you will do
+
+This guide takes the shortest verified path from a fresh checkout to a
+converted model. You will install the Python package, replace the upper-half
+Qwen3 MLPs with routed wrappers, and prove that the converted model still
+returns exactly the same hidden states and logits.
+
+<IntegrationBadge status="Integrated" />
+
+The workflow is deliberately local and deterministic. It constructs a tiny,
+randomly initialized Qwen3 model and downloads neither model weights nor
+tokenizer data.
+
+## Before you begin
+
+You need:
+
+- Python 3.10 or newer;
+- a local checkout of this repository;
+- a shell opened at the repository root.
+
+The smoke workflow runs on CPU. A GPU, Hugging Face account, access token, and
+external checkpoint are not required.
+
+## Install the project
+
+Create an isolated environment and install the repository in editable mode:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[dev]"
+```
+
+On Windows PowerShell, activate the environment with
+`.venv\Scripts\Activate.ps1` instead of the `source` command.
+
+Editable installation keeps imports pointed at the current checkout while the
+framework is under active development. The `dev` extra adds the test runner;
+the runtime dependencies come from `pyproject.toml`.
+
+## Make the first conversion
+
+Conversion has two inputs: a supported Hugging Face causal language model and
+an `AnchoredMoEConfig`. The smallest public call is:
+
+```python
+from anchored_moe import AnchoredMoEConfig
+from anchored_moe.backends import Qwen3Backend
+
+report = Qwen3Backend().convert(
+    model,
+    AnchoredMoEConfig(converted_layers="upper_half"),
+)
+```
+
+Here, `model` is an already loaded `Qwen3ForCausalLM`. For a four-layer smoke
+model, `upper_half` resolves to layers 2 and 3. For an odd layer count, the
+upper partition contains the extra layer.
+
+The backend freezes the model and replaces only the selected MLP objects with
+`RoutedMLP` wrappers. Every wrapper starts in `forced_anchor` mode, so
+conversion does not install specialists or evaluate router scores.
+
+## Why the output stays the same
+
+<EquationBlock
+  intuition="A newly converted wrapper calls the same dense MLP once and performs no routing arithmetic around it."
+  equation="H_after = H_before;  Z_after = Z_before"
+  spokenLabel="The hidden states H after conversion equal the hidden states before conversion. The logits Z after conversion equal the logits before conversion."
+  symbols={[
+    { symbol: "H", meaning: "The complete sequence of hidden-state tensors returned by the model." },
+    { symbol: "Z", meaning: "The final vocabulary-logit tensor." },
+    { symbol: "before", meaning: "Dense execution before selected MLPs are wrapped." },
+    { symbol: "after", meaning: "Forced-anchor execution after conversion." },
+  ]}
+  consequence="On the validated CPU smoke path, every element is equal with absolute and relative tolerances both set to zero."
+/>
+
+This equality is the foundation for later package experiments: choosing the
+anchor must remain an exact fallback, not an approximation learned during
+specialist training.
+
+## Run the offline smoke workflow
+
+From the repository root, with the environment active, run:
+
+```bash
+python examples/verify_dense_equivalence.py
+```
+
+A successful run reports converted layers `(2, 3)`, `exact_logits=True`, and a
+maximum absolute logit difference of `0.0`. The process exits with an error if
+any logit or hidden-state tensor differs.
+
+<CodeDisclosure
+  summary="Show the complete verified offline example"
+  source="examples/verify_dense_equivalence.py"
+  verified
+>
+
+```python
+"""Verify exact forced-anchor equivalence on a tiny local Qwen3 model."""
+
+from __future__ import annotations
+
+import torch
+from transformers import Qwen3Config, Qwen3ForCausalLM
+
+from anchored_moe import AnchoredMoEConfig
+from anchored_moe.backends import Qwen3Backend
+from anchored_moe.evaluation import assert_tensors_equivalent
+
+
+def main() -> None:
+    """Construct, convert, and compare a deterministic tiny Qwen3 model."""
+
+    torch.manual_seed(7)
+    base_config = Qwen3Config(
+        vocab_size=64,
+        hidden_size=16,
+        intermediate_size=32,
+        num_hidden_layers=4,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        head_dim=4,
+        max_position_embeddings=32,
+    )
+    model = Qwen3ForCausalLM(base_config).eval()
+    input_ids = torch.tensor([[1, 7, 11, 3]])
+
+    with torch.no_grad():
+        dense = model(input_ids=input_ids, output_hidden_states=True)
+
+    report = Qwen3Backend().convert(
+        model,
+        AnchoredMoEConfig(converted_layers="upper_half"),
+    )
+    with torch.no_grad():
+        converted = model(input_ids=input_ids, output_hidden_states=True)
+
+    logits = assert_tensors_equivalent(
+        converted.logits,
+        dense.logits,
+        name="logits",
+    )
+    for index, (actual, expected) in enumerate(
+        zip(converted.hidden_states, dense.hidden_states, strict=True)
+    ):
+        assert_tensors_equivalent(
+            actual,
+            expected,
+            name=f"hidden_states[{index}]",
+        )
+
+    print(
+        "Dense equivalence passed: "
+        f"layers={report.converted_layers}, "
+        f"exact_logits={logits.exact}, "
+        f"max_abs={logits.max_absolute_difference}"
+    )
+
+
+if __name__ == "__main__":
+    main()
+```
+
+The copied program is the linked repository example. Its expected invariant is
+exact logit equality; it also checks every returned hidden state.
+</CodeDisclosure>
+
+For a cell-by-cell version with configuration hashes, anchor fingerprints, and
+freezing assertions, use
+[`notebooks/01_convert_dense_model.ipynb`](https://github.com/nflavioquatraro/mutations/blob/main/notebooks/01_convert_dense_model.ipynb).
+
+## What conversion does—and does not do
+
+After this workflow:
+
+- the selected Qwen3 MLPs are routed wrappers;
+- the complete anchor is frozen;
+- the active path is still the original dense MLP;
+- forward outputs remain exact on the validated smoke setup.
+
+It does **not** train an expert, install a package, fit a router, or enable
+top-2 and adaptive routing. Those are separate workflows with their own
+integration boundaries.
+
+## Current limitations
+
+- Qwen3 is the only currently validated model-family backend.
+- The tiny random model verifies framework behavior, not language quality.
+- Exact equality is validated on the deterministic CPU path; optimized kernels
+  and other runtimes require their own declared tolerances.
+- Loading a production checkpoint can require network access and credentials.
+  Production work should pin the exact model and tokenizer revisions.
+- Package training, calibration, synchronization, export, and reload are
+  intentionally outside this first-conversion guide.
+
+## References
+
+This foundation workflow is project-specific infrastructure rather than a
+paper-derived algorithm.
+
+- The
+  [Qwen3 model documentation](https://huggingface.co/docs/transformers/model_doc/qwen3)
+  defines the supported Hugging Face model family.
+- The
+  [`PreTrainedConfig` documentation](https://huggingface.co/docs/transformers/main_classes/configuration)
+  defines the configuration contract extended by `AnchoredMoEConfig`.
+- The repository's
+  [evaluation theory README](https://github.com/nflavioquatraro/mutations/blob/main/src/anchored_moe/evaluation/README.md)
+  defines exact equivalence and its known limits.
+
+## Related pages
+
+- Read the [overview](/docs/overview/) for the package lifecycle and integration
+  labels.
+- Return to the [documentation index](/docs/).
+- Configuration and modeling is the next planned foundation page.

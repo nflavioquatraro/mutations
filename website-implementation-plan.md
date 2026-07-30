@@ -574,8 +574,8 @@ future session an unambiguous resume point.
 
 ### 11.2 Current resume point
 
-**Next item:** `WEB-PAGE-003` — write the getting-started page with
-installation, first conversion, and an offline smoke workflow.
+**Next item:** `WEB-PAGE-004` — document configuration, conversion, the model
+façade, and the currently supported routing modes.
 
 The existing four-article documentation interface is a legacy baseline, not
 an implementation of the new package-aligned documentation system.
@@ -599,7 +599,7 @@ an implementation of the new package-aligned documentation system.
 |---|---|---|---|---|---|
 | WEB-PAGE-001 | `/docs/` | This plan and all page metadata | Validated | 2026-07-30 | Metadata-driven grouped landing page built with complete-pages-only rollout messaging; desktop and 390 px layouts, internal navigation, skip-link focus, and zero horizontal overflow validated |
 | WEB-PAGE-002 | `/docs/overview/` | Root `README.md` and architecture blueprint | Validated | 2026-07-30 | Standard page contract, integration boundaries, plain-language routing equation, native disclosures, source links, limitations, and direct arXiv references validated; `verify_dense_equivalence.py` and `verify_package_runtime.py` passed |
-| WEB-PAGE-003 | `/docs/getting-started/` | `pyproject.toml`, examples, and notebooks | Not started | 2026-07-30 | Define installation, first conversion, and offline smoke workflow |
+| WEB-PAGE-003 | `/docs/getting-started/` | `pyproject.toml`, examples, and notebooks | Validated | 2026-07-30 | Added a source-backed local installation, first Qwen3 conversion, exact-equivalence explanation, complete verified disclosure, explicit non-goals, limitations, and implementation references; `.venv/bin/python examples/verify_dense_equivalence.py` passed with layers `(2, 3)`, exact logits, and zero maximum difference; `npm run build` passed with 0 errors, warnings, or hints and generated the new route; `/docs/`, `/docs/overview/`, and `/docs/getting-started/` returned HTTP 200; browser checks at 1440 px, 1024 px, 768 px, and 390 px confirmed metadata-driven navigation, correct desktop/mobile rail transitions, zero page overflow, locally scrollable code, 44 px source targets, 56–60 px disclosure targets, Enter/Space operation, visible keyboard focus, native-details fallback content, and empty warning/error output |
 | WEB-PAGE-004 | `/docs/configuration-and-modeling/` | `configuration.py`, `modeling.py`, root README | Not started | 2026-07-30 | Explain configuration, conversion, model façade, and routing modes |
 | WEB-PAGE-005 | `/docs/backends/` | `backends/README.md` | Not started | 2026-07-30 | Document the backend contract and current Qwen3 implementation |
 | WEB-PAGE-006 | `/docs/experts/` | `experts/README.md` | Not started | 2026-07-30 | Compare full, LoRA, sparse, micro, and retrieval representations |
