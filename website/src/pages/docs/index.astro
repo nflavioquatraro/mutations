@@ -2,17 +2,12 @@
 import Brand from "../../components/Brand.astro";
 import BaseLayout from "../../layouts/BaseLayout.astro";
 import {
-  documentationGroupOrder,
   getOrderedDocs,
+  groupDocumentationEntries,
 } from "../../lib/docs";
 
 const docs = await getOrderedDocs();
-const groupedDocs = documentationGroupOrder
-  .map((group) => ({
-    group,
-    entries: docs.filter((entry) => entry.data.group === group),
-  }))
-  .filter(({ entries }) => entries.length > 0);
+const groupedDocs = groupDocumentationEntries(docs);
 ---
 
 <BaseLayout

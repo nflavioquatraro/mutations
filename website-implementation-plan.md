@@ -574,9 +574,8 @@ future session an unambiguous resume point.
 
 ### 11.2 Current resume point
 
-**Next item:** `WEB-DOC-002` — add the persistent desktop sidebar, right
-table of contents, and previous/next navigation using the validated document
-metadata.
+**Next item:** `WEB-DOC-003` — add responsive disclosure navigation for the
+documentation hierarchy and on-page table of contents.
 
 The existing four-article documentation interface is a legacy baseline, not
 an implementation of the new package-aligned documentation system.
@@ -586,7 +585,7 @@ an implementation of the new package-aligned documentation system.
 | ID | Deliverable | Dependencies | Status | Last update | Next action or evidence |
 |---|---|---|---|---|---|
 | WEB-DOC-001 | Content collection, metadata schema, catch-all route, and `DocsLayout` | — | Validated | 2026-07-30 | Astro 7 content layer, strict schema, source/order validation, catch-all route, MDX integration, and base layout validated; `npm run build` passed with 0 diagnostics and generated `/docs/` plus `/docs/overview/`; desktop and 390 px browser checks passed |
-| WEB-DOC-002 | Desktop sidebar, right table of contents, and previous/next navigation | WEB-DOC-001 | Not started | 2026-07-30 | Implement deterministic navigation from document metadata |
+| WEB-DOC-002 | Desktop sidebar, right table of contents, and previous/next navigation | WEB-DOC-001 | Validated | 2026-07-30 | Metadata-driven grouped sidebar, active-page semantics, heading-derived H2/H3 table of contents, and deterministic adjacent-page navigation implemented; `npm run build` passed with 0 diagnostics; navigation, focus targets, sticky rails, console output, and overflow validated at 1440 px, 1024 px, and 390 px |
 | WEB-DOC-003 | Responsive and accessible mobile documentation navigation | WEB-DOC-002 | Not started | 2026-07-30 | Add disclosure navigation and keyboard/focus validation |
 | WEB-DOC-004 | Expandable verified code component | WEB-DOC-001 | Not started | 2026-07-30 | Implement native-details fallback, highlighting, copy, and source links |
 | WEB-DOC-005 | Equation, integration-status, paper-reference, and strategy-table components | WEB-DOC-001 | Not started | 2026-07-30 | Build reusable MDX components with accessible status labels |

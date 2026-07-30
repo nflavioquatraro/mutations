@@ -1,16 +1,25 @@
 ---
 import Brand from "../components/Brand.astro";
+import DocsSidebar from "../components/docs/DocsSidebar.astro";
+import DocumentPagination from "../components/docs/DocumentPagination.astro";
+import TableOfContents from "../components/docs/TableOfContents.astro";
 import BaseLayout from "./BaseLayout.astro";
 import {
+  getDocumentNeighbors,
+  getOrderedDocs,
   repositorySourceUrl,
   type DocsEntry,
 } from "../lib/docs";
+import type { MarkdownHeading } from "astro";
 
 interface Props {
   entry: DocsEntry;
+  headings: MarkdownHeading[];
 }
 
-const { entry } = Astro.props;
+const { entry, headings } = Astro.props;
+const entries = await getOrderedDocs();
+const neighbors = getDocumentNeighbors(entries, entry.id);
 const reviewed = new Intl.DateTimeFormat("en", {
   day: "numeric",
   month: "long",
@@ -34,33 +43,41 @@ const reviewed = new Intl.DateTimeFormat("en", {
     </nav>
   </header>
 
-  <aside class="article-rail" aria-label="Document context">
+  <aside class="article-mobile-context" aria-label="Document context">
     <a href="/docs/">← Documentation</a>
     <span>{entry.data.group}</span>
     <span>Reviewed {reviewed}</span>
   </aside>
 
-  <main id="main-content" class="article-shell">
-    <header class="article-title">
-      <p class="section-kicker">
-        {String(entry.data.order).padStart(2, "0")} / {entry.data.group}
-      </p>
-      <h1>{entry.data.title}</h1>
-      <p>{entry.data.description}</p>
-      <div class="article-sources" aria-label="Page sources">
-        <span>Sources</span>
-        {entry.data.source.map((source) => (
-          <a href={repositorySourceUrl(source)} rel="noreferrer">
-            {source}
-          </a>
-        ))}
-      </div>
-    </header>
+  <div class="docs-workspace">
+    <DocsSidebar currentEntry={entry} entries={entries} reviewed={reviewed} />
 
-    <article class="prose">
-      <slot />
-    </article>
-  </main>
+    <main id="main-content" class="article-shell">
+      <header class="article-title">
+        <p class="section-kicker">
+          {String(entry.data.order).padStart(2, "0")} / {entry.data.group}
+        </p>
+        <h1>{entry.data.title}</h1>
+        <p>{entry.data.description}</p>
+        <div class="article-sources" aria-label="Page sources">
+          <span>Sources</span>
+          {entry.data.source.map((source) => (
+            <a href={repositorySourceUrl(source)} rel="noreferrer">
+              {source}
+            </a>
+          ))}
+        </div>
+      </header>
+
+      <article class="prose">
+        <slot />
+      </article>
+
+      <DocumentPagination neighbors={neighbors} />
+    </main>
+
+    <TableOfContents headings={headings} />
+  </div>
 
   <script>
     document.addEventListener("keydown", (event) => {

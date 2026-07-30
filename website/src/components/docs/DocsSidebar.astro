@@ -1,0 +1,54 @@
+---
+import {
+  groupDocumentationEntries,
+  type DocsEntry,
+} from "../../lib/docs";
+
+interface Props {
+  currentEntry: DocsEntry;
+  entries: DocsEntry[];
+  reviewed: string;
+}
+
+const { currentEntry, entries, reviewed } = Astro.props;
+const groupedDocs = groupDocumentationEntries(entries);
+---
+
+<aside class="docs-sidebar" aria-label="Documentation sections">
+  <a class="docs-sidebar-home" href="/docs/">
+    <span aria-hidden="true">←</span>
+    Documentation
+  </a>
+
+  <nav aria-label="Documentation pages">
+    {groupedDocs.map(({ group, entries: groupEntries }) => {
+      const groupId = `sidebar-${group.toLowerCase().replaceAll(" ", "-")}`;
+
+      return (
+        <section class="docs-sidebar-group" aria-labelledby={groupId}>
+          <h2 id={groupId}>{group}</h2>
+          <ul>
+            {groupEntries.map((entry) => (
+              <li>
+                <a
+                  href={`/docs/${entry.id}/`}
+                  aria-current={entry.id === currentEntry.id ? "page" : undefined}
+                >
+                  <span aria-hidden="true">
+                    {String(entry.data.order).padStart(2, "0")}
+                  </span>
+                  {entry.data.title}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </section>
+      );
+    })}
+  </nav>
+
+  <div class="docs-sidebar-meta" aria-label="Document status">
+    <span>{currentEntry.data.group}</span>
+    <span>Reviewed {reviewed}</span>
+  </div>
+</aside>
