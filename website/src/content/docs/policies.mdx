@@ -1,0 +1,477 @@
+---
+title: Policies
+description: See how calibrated expert evidence becomes anchored top-1, weighted top-2, adaptive routes, and capacity-safe execution.
+order: 7
+group: Core components
+source:
+  - src/anchored_moe/policies/README.md
+  - src/anchored_moe/policies/selection.py
+  - src/anchored_moe/policies/hierarchical.py
+  - src/anchored_moe/policies/combination.py
+  - src/anchored_moe/policies/learned_combination.py
+  - src/anchored_moe/policies/capacity.py
+  - src/anchored_moe/policies/parameter_merging.py
+  - examples/verify_anchored_top1.py
+  - examples/verify_anchor_veto_top2.py
+  - examples/verify_top2_dispatch.py
+feature_ids:
+  - POL-001
+  - POL-002
+  - POL-003
+  - POL-004
+  - POL-005
+  - POL-006
+  - COM-001
+  - COM-002
+  - COM-003
+  - COM-004
+  - COM-005
+  - BAL-001
+  - BAL-002
+last_reviewed: 2026-07-30
+---
+
+import CodeDisclosure from "../../components/docs/CodeDisclosure.astro";
+import EquationBlock from "../../components/docs/EquationBlock.astro";
+import IntegrationBadge from "../../components/docs/IntegrationBadge.astro";
+import PaperReference from "../../components/docs/PaperReference.astro";
+import StrategyTable from "../../components/docs/StrategyTable.astro";
+
+export const policyStrategies = [
+  {
+    strategy: "Anchored top-1",
+    feature: "POL-001",
+    role: "Select",
+    behavior: "Anchor or one positive specialist",
+    boundary: "Package-driven model lifecycle",
+    status: { status: "Integrated" },
+  },
+  {
+    strategy: "Anchor-veto top-2",
+    feature: "POL-002",
+    role: "Select",
+    behavior: "Anchor unless two specialists are positive",
+    boundary: "Explicit sparse dispatcher",
+    status: { status: "Composable" },
+  },
+  {
+    strategy: "Adaptive top-1/top-2",
+    feature: "POL-003",
+    role: "Select",
+    behavior: "Zero, one, or two specialists by confidence",
+    boundary: "Explicit delta dispatcher",
+    status: { status: "Composable" },
+  },
+  {
+    strategy: "Hierarchical package/local",
+    feature: "POL-004",
+    role: "Select",
+    behavior: "One package, then a package-local pair",
+    boundary: "Manual hierarchy and dispatch",
+    status: { status: "Research primitive" },
+  },
+  {
+    strategy: "Compatibility-constrained top-2",
+    feature: "POL-005",
+    role: "Select",
+    behavior: "Best positive pair in one declared group",
+    boundary: "Explicit compatibility index",
+    status: { status: "Research primitive" },
+  },
+  {
+    strategy: "Dynamic-k",
+    feature: "POL-006",
+    role: "Select",
+    behavior: "Confidence-qualified prefix under a hard cap",
+    boundary: "Selection metadata; no arbitrary-k dispatch",
+    status: { status: "Research primitive" },
+  },
+  {
+    strategy: "Score softmax",
+    feature: "COM-001",
+    role: "Combine",
+    behavior: "Temperature-normalized pair weights",
+    boundary: "Explicit top-2 dispatcher",
+    status: { status: "Composable" },
+  },
+  {
+    strategy: "Equal / positive evidence",
+    feature: "COM-002",
+    role: "Combine",
+    behavior: "Fixed-half or normalized positive weights",
+    boundary: "Pair-shaped comparison baselines",
+    status: { status: "Composable" },
+  },
+  {
+    strategy: "Learned mixture head",
+    feature: "COM-003",
+    role: "Combine",
+    behavior: "Frozen affine map from pair scores to weights",
+    boundary: "Explicit fitting and attachment",
+    status: { status: "Composable" },
+  },
+  {
+    strategy: "Anchor plus routed deltas",
+    feature: "COM-004",
+    role: "Combine",
+    behavior: "Always-on anchor plus zero to two deltas",
+    boundary: "Explicit RoutedMLP mode; no package materialization",
+    status: { status: "Composable" },
+  },
+  {
+    strategy: "LoRA parameter merge",
+    feature: "COM-005",
+    role: "Combine",
+    behavior: "Merge selected effective projection updates",
+    boundary: "Correctness backend; no package attachment",
+    status: { status: "Composable" },
+  },
+  {
+    strategy: "Overflow to anchor",
+    feature: "BAL-001",
+    role: "Capacity",
+    behavior: "Unavailable top-1 routes become anchor routes",
+    boundary: "Caller supplies availability",
+    status: { status: "Composable" },
+  },
+  {
+    strategy: "Top-2 degradation",
+    feature: "BAL-002",
+    role: "Capacity",
+    behavior: "Pair to survivor to anchor, without token loss",
+    boundary: "No capacity estimator or model-level config",
+    status: { status: "Composable" },
+  },
+];
+
+## What this part does
+
+Policies turn calibrated router scores into an execution decision. Selection
+chooses the anchor or specialists, combination determines how approved
+specialist work contributes to the output, and capacity rules preserve a safe
+fallback when selected experts are unavailable.
+
+<IntegrationBadge status="Integrated" />
+
+Anchored top-1 is integrated through the package-to-model lifecycle. The
+top-2, adaptive, combination, and capacity implementations are validated and
+composable, but still require explicit assembly. Hierarchical, compatibility,
+and dynamic-k selection remain research primitives.
+
+## Where it fits
+
+The policy boundary sits between evidence and execution:
+
+1. a router produces calibrated scores in stable registry order;
+2. a selection policy compares those scores with the fixed-zero anchor;
+3. a capacity policy rewrites unavailable routes without adding new experts;
+4. inference executes only the effective paths;
+5. a combination policy mixes approved outputs or anchor-relative deltas.
+
+The policies package does not extract features, fit scores, install packages,
+estimate serving capacity, run MLPs, or record telemetry. Those responsibilities
+belong to routers, calibration, registry, inference, and evaluation.
+
+## Implemented approaches
+
+<StrategyTable
+  caption="Selection, combination, and capacity strategies"
+  description="Every row is validated in the Python framework. Integration labels describe the current assembly boundary, not test maturity."
+  columns={[
+    { key: "strategy", label: "Strategy" },
+    { key: "feature", label: "Feature" },
+    { key: "role", label: "Role" },
+    { key: "behavior", label: "Behavior" },
+    { key: "boundary", label: "Current boundary" },
+    { key: "status", label: "Integration label" },
+  ]}
+  rows={policyStrategies}
+/>
+
+### Core selection policies
+
+`AnchoredTop1Selection` conceptually prepends the anchor's zero score to the
+specialist score bank. A specialist runs only when it has strictly positive
+evidence. Exact zero ties select the anchor, while exact positive expert ties
+follow stable package append order.
+
+`AnchorVetoTop2Selection` ranks the anchor and all specialists together. It
+approves a pair only when the top two candidates are both specialists, which
+is equivalent to requiring two strictly positive specialist scores. One strong
+specialist is not enough.
+
+`AdaptiveTop1Top2Selection` ranks specialists without the anchor, then chooses
+route arity. Non-positive best evidence means anchor; one positive specialist
+means top-1; a second score strictly above the configured mixture threshold
+enables top-2.
+
+### Advanced selection policies
+
+Hierarchical selection chooses one package against the anchor before selecting
+a local pair. Compatibility-constrained top-2 searches only explicit
+same-group pairs. Dynamic-k retains a confidence-qualified prefix up to a
+fixed per-token cap. These strategies expose deterministic, validated
+decisions, but package-driven model attachment or arbitrary-k dispatch is not
+yet implemented.
+
+### Combination policies
+
+Score softmax converts the selected pair's calibrated scores into non-negative
+weights that sum to one. Equal weighting and normalized positive evidence use
+the same pair-shaped contract, so they can be compared without changing
+selection or dispatch.
+
+A learned mixture head deliberately separates pair choice from interpolation:
+selection scores still choose the experts, while a separately fitted frozen
+affine head produces their weights. The always-on-anchor mode instead executes
+the dense anchor for every token and adds zero, one, or two selected deltas.
+Parameter-space LoRA merging combines effective projection updates before one
+logical MLP execution.
+
+### Capacity policies
+
+Capacity rules consume availability supplied by the caller; they do not
+estimate device load. Top-1 overflow returns directly to the anchor. For an
+approved top-2 route, both available specialists remain active, one survivor
+is promoted to weight one, and no survivors means exact anchor fallback.
+Tokens are never dropped and the policy never searches outside the pair that
+selection approved.
+
+## How it works
+
+### Preserve stable candidate meaning
+
+Candidate zero always means the immutable anchor. Candidate `k` means expert
+position `k - 1` in the stable `expert_ids` tuple. Decisions retain selected
+indices, selected scores, masks, and route arity so execution and evaluation
+can audit the same choice.
+
+### Separate choice from weighting
+
+Top-2 selection returns an ordered pair and its original scores. Combination
+receives only the pair that selection approved. This prevents a weighting
+strategy from silently changing which experts execute and lets the dispatcher
+swap score softmax for a baseline or learned head without changing token
+grouping.
+
+### Apply capacity before execution
+
+Availability is composed with the route before any candidate MLP runs.
+Unavailable experts therefore cannot execute accidentally. Effective slots
+remain pair-shaped for stable reconstruction, with zero used only as inactive
+anchor padding.
+
+## Mathematical intuition
+
+<EquationBlock
+  intuition="Anchored top-1 treats the dense MLP as a permanent zero-score candidate and selects the first maximum."
+  equation="r(h) = argmax [0, g₁(h), …, gₖ(h)]"
+  spokenLabel="Route r of h is the arg max over anchor score zero and specialist scores g one through g K."
+  symbols={[
+    { symbol: "h", meaning: "The token representation immediately before the converted MLP." },
+    { symbol: "gₖ(h)", meaning: "The calibrated evidence produced for specialist k." },
+    { symbol: "0", meaning: "The immutable anchor candidate, ordered first for deterministic ties." },
+    { symbol: "r(h)", meaning: "Candidate zero for the anchor or candidate k for specialist position k minus one." },
+  ]}
+  consequence="A specialist must have strictly positive evidence. Empty registries, all-negative scores, and exact zero ties preserve the dense path."
+/>
+
+<EquationBlock
+  intuition="Anchor-veto top-2 mixes specialists only when the two strongest candidates both beat the zero-score anchor."
+  equation="m = 𝟙[c₁ ≠ 0 ∧ c₂ ≠ 0]"
+  spokenLabel="Mixture indicator m is one when first candidate c one and second candidate c two are both not the anchor."
+  symbols={[
+    { symbol: "c₁, c₂", meaning: "The first two candidates after stable descending ranking of the anchor and all specialists." },
+    { symbol: "0", meaning: "The anchor candidate." },
+    { symbol: "m", meaning: "Whether the token is approved for two-specialist execution." },
+  ]}
+  consequence="One isolated positive score cannot activate a specialist. At least two specialists must supply strictly positive evidence."
+/>
+
+<EquationBlock
+  intuition="For an approved pair, score softmax turns relative evidence into normalized activation weights."
+  equation="αᵢ = exp(gᵢ/T) / [exp(gᵢ/T) + exp(gⱼ/T)]"
+  spokenLabel="Weight alpha i equals exponentiated score g i over temperature T divided by the sum of exponentiated selected scores."
+  symbols={[
+    { symbol: "gᵢ, gⱼ", meaning: "The calibrated scores retained in the selected pair's stable rank order." },
+    { symbol: "T", meaning: "A finite positive mixture temperature." },
+    { symbol: "αᵢ", meaning: "Specialist i's non-negative output weight; the pair's weights sum to one." },
+  ]}
+  consequence="Temperature changes interpolation, not pair selection. Capacity degradation replaces the lone surviving specialist's weight with exactly one."
+/>
+
+## Minimal usage
+
+Select an anchored route, then apply explicit availability before dispatch:
+
+```python
+from anchored_moe import AnchoredTop1Selection, OverflowToAnchorCapacity
+
+decision = AnchoredTop1Selection()(scores, expert_ids=expert_ids)
+effective = OverflowToAnchorCapacity()(
+    decision,
+    expert_availability=availability,
+)
+anchor_tokens = effective.effective_routes.anchor_mask
+```
+
+The input scores are already calibrated. Producing them, estimating
+availability, and executing the effective path remain separate steps.
+
+## Verified implementation details
+
+<CodeDisclosure
+  summary="Show anchor-first top-1 decisions and stable expert ties"
+  source="examples/verify_anchored_top1.py"
+  verified
+>
+
+```python
+decision = AnchoredTop1Selection()(
+    scores,
+    expert_ids=router.expert_ids_for_layer(1),
+)
+
+# Candidate zero is anchor; equal positive scores keep append order.
+assert torch.equal(
+    decision.selected_indices,
+    torch.tensor([[1, 0, 2, 1]]),
+)
+assert decision.expert_ids == ("code:0", "math:0")
+```
+
+Expected invariant: the non-positive token uses the anchor, and the final
+positive tie selects the first appended specialist deterministically.
+</CodeDisclosure>
+
+<CodeDisclosure
+  summary="Show two-positive-specialist gating and normalized weights"
+  source="examples/verify_anchor_veto_top2.py"
+  verified
+>
+
+```python
+decision = AnchorVetoTop2Selection()(
+    scores,
+    expert_ids=router.expert_ids_for_layer(1),
+)
+mixed = ScoreSoftmaxCombination()(
+    ranked_outputs,
+    selected_scores=decision.selected_scores[
+        decision.expert_pair_mask
+    ],
+)
+
+assert mixed.output.shape == (2, hidden_states.shape[-1])
+assert torch.allclose(mixed.weights.sum(-1), torch.ones(2))
+```
+
+Expected invariant: only rows with two positive specialists are mixed, and
+every approved pair receives finite non-negative weights summing to one.
+</CodeDisclosure>
+
+<CodeDisclosure
+  summary="Show top-2 to top-1 to anchor capacity degradation"
+  source="examples/verify_top2_dispatch.py"
+  verified
+>
+
+```python
+result = dispatcher.dispatch(
+    hidden_states,
+    expert_scores=scores,
+    expert_ids=("code:0", "math:0"),
+    anchor_mlp=anchor,
+    experts=(code, math),
+    expert_availability=availability,
+)
+
+assert torch.equal(result.capacity.route_arity, torch.tensor([[2, 1, 0]]))
+assert torch.equal(result.mixture_weights[0, 1], torch.tensor([1.0, 0.0]))
+assert torch.equal(result.output[0, 2], hidden_states[0, 2])
+```
+
+Expected invariant: the three rows execute a pair, one surviving specialist,
+and the exact anchor respectively, without dropping or reordering a token.
+</CodeDisclosure>
+
+## Current limitations
+
+- Package-driven model synchronization currently configures anchored top-1;
+  top-2, adaptive, hierarchical, compatibility, and dynamic-k model
+  configuration remain explicit.
+- Capacity policies consume caller-provided availability. They do not measure
+  queue depth, memory pressure, token quotas, or distributed load.
+- Top-2 degradation searches only the selected pair; it does not try a third
+  specialist when both members are unavailable.
+- Hierarchical routing requires rectangular package topology and explicit
+  package/local assembly. Compatibility routing requires a separately built
+  immutable group index.
+- Dynamic-k produces selection metadata only. Arbitrary-k sparse dispatch,
+  combination, compatibility, and capacity are not implemented.
+- Learned mixture weights require an offline fitting plan and are not attached
+  through package manifests.
+- Always-on deltas and parameter-space LoRA merging have explicit routed-layer
+  correctness paths, but no package-driven LoRA materialization or optimized
+  production kernels.
+- Token-aligned auxiliary arguments, telemetry, multi-device execution, and
+  distributed capacity coordination remain future work.
+
+## References
+
+<PaperReference
+  title="Harder Tasks Need More Experts: Dynamic Routing in MoE Models"
+  authors="Quzhe Huang et al."
+  arxivId="2403.07652"
+  purpose="Motivates varying active expert count according to routing confidence."
+  difference="POL-006 uses a fixed calibrated-score threshold and explicit per-token cap rather than learning the paper's dynamic routing mechanism."
+/>
+
+<PaperReference
+  title="DeepSeekMoE: Towards Ultimate Expert Specialization in Mixture-of-Experts Language Models"
+  authors="Damai Dai et al."
+  arxivId="2401.06066"
+  purpose="Motivates separating shared computation from routed specialist computation."
+  difference="COM-004 keeps a pretrained dense MLP immutable and always active, then adds independently trained plug-in deltas instead of jointly training shared and routed experts from scratch."
+/>
+
+<PaperReference
+  title="Soft Merging of Experts with Adaptive Routing"
+  authors="Mohammed Muqeeth, Haokun Liu, and Colin Raffel"
+  arxivId="2306.03745"
+  purpose="Motivates constructing an input-dependent expert by combining parameters before execution."
+  difference="COM-005 is a two-LoRA correctness backend driven by an already fitted frozen mixture head; it does not reproduce SMEAR's training procedure."
+/>
+
+<PaperReference
+  title="X-LoRA: Mixture of Low-Rank Adapter Experts, a Flexible Framework for Large Language Models with Applications in Protein Mechanics and Molecular Design"
+  authors="Eric L. Buehler and Markus J. Buehler"
+  arxivId="2402.07148"
+  purpose="Motivates layerwise, token-dependent composition of frozen LoRA experts."
+  difference="COM-005 merges exactly one selected pair's effective updates and does not implement X-LoRA's scaling network or package lifecycle."
+/>
+
+POL-001 through POL-005, COM-001 through COM-003, BAL-001, and BAL-002 are
+project-specific framework infrastructure rather than paper-derived training
+algorithms. Their exact tie, shape, fallback, and gradient contracts follow
+the linked source implementations and PyTorch operations.
+
+The
+[policy theory README](https://github.com/nflavioquatraro/mutations/blob/main/src/anchored_moe/policies/README.md)
+contains the complete algorithms, tensor shapes, tests, and documented
+research differences. The
+[architecture blueprint](https://github.com/nflavioquatraro/mutations/blob/main/anchored-plugin-moe-architecture.md)
+defines the fixed-zero anchor, reference inference policies, and capacity
+invariants shared across the framework.
+
+## Related pages
+
+- Read [routers](/docs/routers/) for the calibrated score banks consumed here.
+- Read [experts](/docs/experts/) for complete specialist and anchor-relative
+  delta representations.
+- Return to [configuration and modeling](/docs/configuration-and-modeling/) for
+  the current package-driven anchored top-1 synchronization boundary.
+- The planned **Inference** page will explain sparse token dispatch,
+  reconstruction, and telemetry.
+- The planned **Calibration** page will explain score temperatures, thresholds,
+  utility labels, and learned mixture fitting.
