@@ -1,6 +1,6 @@
 ---
 title: End-to-end examples
-description: Compare complete Anchored Plug-in MoE workflows, from exact anchor conversion through a packaged anchored top-1 composition.
+description: Compare complete Anchored Plug-in MoE workflows, from exact anchor conversion through packaged top-1 and explicitly composed weighted top-2 execution.
 order: 13
 group: Learn by example
 source:
@@ -10,11 +10,17 @@ source:
   - examples/train_expert_package.py
   - examples/fit_router.py
   - examples/verify_package_runtime.py
+  - examples/verify_anchor_veto_top2.py
+  - examples/verify_top2_dispatch.py
   - tests/integration/test_qwen3_equivalence.py
+  - tests/integration/test_affine_router_top2.py
   - tests/integration/test_package_runtime_composition.py
+  - tests/integration/test_top2_dispatch_full_mlp.py
   - tests/unit/test_package_export.py
   - tests/unit/test_calibrated_package_export.py
   - tests/unit/test_composition_checkpoint.py
+  - tests/unit/test_top2_selection.py
+  - tests/unit/test_top2_dispatch.py
   - src/anchored_moe/training/README.md
   - src/anchored_moe/calibration/README.md
   - src/anchored_moe/registry/README.md
@@ -28,7 +34,11 @@ feature_ids:
   - TRN-001
   - RTR-002
   - POL-001
+  - POL-002
+  - COM-001
+  - BAL-002
   - INF-001
+  - INF-002
   - CAL-004
   - CAL-005
   - PKG-002
@@ -70,7 +80,7 @@ export const exampleWorkflows = [
     expert: "Compatible complete experts",
     lifecycle: { status: "Composable" },
     bestFor: "Testing expert synergy",
-    guide: "Upcoming",
+    guide: "Published below",
   },
   {
     approach: "Adaptive",
@@ -109,14 +119,15 @@ export const exampleWorkflows = [
 ## What this page does
 
 These guides connect the framework's individual strategies into inspectable
-workflows. They begin with the conservative dense-equivalence baseline and then
-add the complete packaged anchored top-1 lifecycle. Later guides will progress
-toward weighted mixtures, adaptive computation, delta experts, local training,
-and hierarchical routing.
+workflows. They begin with the conservative dense-equivalence baseline, add the
+complete packaged anchored top-1 lifecycle, and then introduce explicitly
+composed weighted top-2 execution. Later guides will progress toward adaptive
+computation, delta experts, local training, and hierarchical routing.
 
 The comparison table includes the planned workflow set so that integration
-boundaries are visible from the start. Exact conversion and packaged top-1 are
-published below; later rows remain clearly marked as upcoming guides.
+boundaries are visible from the start. Exact conversion, packaged top-1, and
+weighted top-2 are published below; later rows remain clearly marked as
+upcoming guides.
 
 ## Compare the workflows
 
@@ -574,3 +585,218 @@ adapted to independent binary utility heads and explicit activation thresholds.
   deterministic output reconstruction.
 - [Policies](/docs/policies/) explains fixed-zero anchor semantics and stable
   tie-breaking.
+
+## Weighted top-2 specialists
+
+<IntegrationBadge status="Composable" />
+
+### The problem it solves
+
+Anchored top-1 cannot combine two specialists whose transformations may be
+useful together. This workflow ranks the fixed-zero anchor beside two affine
+specialist scores, approves a pair only when both specialist scores are
+strictly positive, executes the selected experts sparsely, and mixes their
+activations with score-softmax weights.
+
+The selection, combination, capacity, and dispatch parts are validated through
+public APIs, but they require explicit assembly. Package synchronization does
+not attach this strategy to `RoutedMLP`, and `AnchoredMoEConfig` does not accept
+top-2 as a model-level policy.
+
+### Workflow contract
+
+- **Expert representation:** two compatible complete experts. The verified
+  dispatch example uses frozen full-MLP experts derived from the same anchor.
+- **Router:** append-only affine heads score identity features in stable expert
+  order.
+- **Selection:** anchor-veto top-2 ranks the permanent zero-score anchor with
+  every specialist. The specialist pair runs only when both winning specialist
+  scores are strictly positive.
+- **Combination:** score-softmax converts the ordered specialist scores into
+  non-negative weights that sum to one.
+- **Capacity:** explicit per-token availability is applied only after a pair is
+  approved. Both available experts run as top-2; one survivor runs alone with
+  weight `[1, 0]`; no survivors return to the anchor.
+- **Training and calibration:** this example consumes already constructed
+  experts and affine scores. It does not train experts, fit heads, or establish
+  that the selected mixture improves quality.
+- **Active work:** an anchor token executes one MLP, a capacity-degraded token
+  executes one specialist MLP, and an effective top-2 token executes two
+  specialist MLPs.
+- **Packaging and serialization:** standalone objects are assembled directly.
+  Package-driven top-2 attachment and composition reload are not implemented.
+- **Expected result:** no token is dropped, inactive experts do not execute,
+  original token order is restored, and every effective pair has finite
+  sum-to-one weights.
+
+### How it runs
+
+```text
+Hidden states
+  → append-only affine scores
+  → rank [anchor = 0, specialist scores]
+  → anchor veto unless two specialists are positive
+  → apply explicit expert availability
+  → sparsely execute zero, one, or two specialists
+  → score-softmax effective pairs
+  → reconstruct the original token order
+```
+
+Selection and capacity answer different questions. Anchor veto decides whether
+the evidence supports a specialist pair. Capacity handling then decides how
+much of that already-approved pair is currently available; it never searches
+for a replacement expert outside the selected pair.
+
+### Selection and mixture rule
+
+<EquationBlock
+  intuition="A pair is eligible only when the second-highest specialist score is positive; approved expert activations are then mixed in ranked score order."
+  equation="m = 𝟙[g_(2) > 0];  α_i = exp(g_i/T) / (exp(g_i/T) + exp(g_j/T));  y = α_i E_i(h) + (1 − α_i) E_j(h)"
+  spokenLabel="The pair indicator m is one only when the second specialist score is positive. Alpha for expert i is its temperature-scaled exponential score divided by the sum for experts i and j. The output is alpha times expert i plus one minus alpha times expert j."
+  symbols={[
+    { symbol: "g_(2)", meaning: "The second-highest specialist score after stable descending ranking." },
+    { symbol: "m", meaning: "Whether two specialists, rather than the anchor, are approved." },
+    { symbol: "T", meaning: "A finite positive mixture temperature; the verified example uses 1." },
+    { symbol: "E_i, E_j", meaning: "The two selected complete expert transformations in ranked order." },
+    { symbol: "α_i", meaning: "The first expert's mixture weight; the second weight is one minus this value." },
+  ]}
+  consequence="Because the anchor is fixed at zero and wins zero ties, two positive specialist scores are necessary. They are not sufficient evidence that the pair is semantically compatible or better than either expert alone."
+/>
+
+### Minimal explicit composition
+
+The standalone dispatcher makes every strategy boundary visible:
+
+```python
+result = AnchoredTop2Dispatcher(
+    combination_policy=ScoreSoftmaxCombination(mix_temperature=1.0),
+).dispatch(
+    hidden_states,
+    expert_scores=scores,
+    expert_ids=("code:0", "math:0"),
+    anchor_mlp=anchor,
+    experts=(code_expert, math_expert),
+    expert_availability=availability,
+)
+```
+
+`result.selected_routes` preserves the original anchor-veto decision.
+`result.capacity` records the effective anchor, top-1, or top-2 execution after
+availability is applied, and `result.mixture_weights` keeps pair-shaped weights
+aligned with every input token.
+
+### Verify selection and score-softmax combination
+
+Run the deterministic policy-level example:
+
+```bash
+python examples/verify_anchor_veto_top2.py
+```
+
+Two of its four tokens have two positive specialist scores. The other tokens
+retain anchor-containing ranked metadata and do not enter combination.
+
+<CodeDisclosure
+  summary="Show anchor-veto selection and ranked score-softmax mixing"
+  source="examples/verify_anchor_veto_top2.py"
+  verified
+>
+
+```python
+decision = AnchorVetoTop2Selection()(
+    router(features, layer_index=1),
+    expert_ids=router.expert_ids_for_layer(1),
+)
+approved_outputs = expert_outputs[decision.expert_pair_mask]
+approved_indices = decision.selected_indices[decision.expert_pair_mask] - 1
+ranked_outputs = torch.gather(
+    approved_outputs,
+    dim=1,
+    index=approved_indices.unsqueeze(-1).expand_as(approved_outputs),
+)
+mixed = ScoreSoftmaxCombination()(
+    ranked_outputs,
+    selected_scores=decision.selected_scores[decision.expert_pair_mask],
+)
+assert torch.allclose(mixed.weights.sum(dim=-1), torch.ones(2))
+```
+
+Expected invariant: exactly two tokens are mixed and each receives weights of
+approximately `[0.7311, 0.2689]` in its own ranked expert order.
+</CodeDisclosure>
+
+### Verify sparse dispatch and capacity degradation
+
+Run the complete standalone execution example:
+
+```bash
+python examples/verify_top2_dispatch.py
+```
+
+Its three tokens begin with approved, approved, and vetoed selection metadata.
+Availability retains the first pair, degrades the second pair to its single
+available specialist, and leaves the third token on the anchor.
+
+<CodeDisclosure
+  summary="Show capacity-aware sparse top-2 execution"
+  source="examples/verify_top2_dispatch.py"
+  verified
+>
+
+```python
+result = AnchoredTop2Dispatcher(
+    combination_policy=ScoreSoftmaxCombination(mix_temperature=1.0)
+).dispatch(
+    hidden_states,
+    expert_scores=scores,
+    expert_ids=router.expert_ids_for_layer(1),
+    anchor_mlp=anchor,
+    experts=(code, math),
+    expert_availability=torch.tensor(
+        [[[True, True], [True, False], [False, False]]]
+    ),
+)
+assert result.capacity.route_arity.tolist() == [[2, 1, 0]]
+assert result.mixture_weights[0, 1].tolist() == [1.0, 0.0]
+```
+
+Expected invariant: effective route arity is `[[2, 1, 0]]`; the mixed token's
+weights sum to one, the degraded token receives `[1, 0]`, and the final token
+returns the exact anchor output.
+</CodeDisclosure>
+
+### Current limitations
+
+- This is a standalone composition, not a package-to-model lifecycle.
+  `install()`, `synchronize_registry()`, configuration serialization, and
+  composition reload currently materialize anchored top-1 only.
+- The deterministic fixtures validate routing and tensor behavior, not whether
+  a weighted pair improves language-model quality.
+- Two positive scores do not prove expert compatibility. Use an explicit
+  compatibility-constrained policy when unrelated experts must never mix.
+- Availability is caller-supplied. The dispatcher does not estimate serving
+  capacity or search beyond the already-selected pair.
+- The current dispatcher is not attached to `RoutedMLP`; optimized grouping,
+  top-2 telemetry, token-aligned auxiliary arguments, and distributed execution
+  remain future work.
+- Score-softmax weights are a tested baseline, not learned evidence that the
+  mixture is optimal.
+
+### References and related pages
+
+Anchor-veto selection, fixed-zero abstention, capacity degradation, and the
+standalone dispatcher are project-specific framework mechanisms rather than
+paper-derived algorithms. Score softmax uses the standard PyTorch operation;
+the repository architecture defines how it is applied to ranked expert
+activations.
+
+- [Policies](/docs/policies/) defines stable anchor-veto ranking,
+  score-softmax combination, and top-2-to-top-1 degradation.
+- [Inference](/docs/inference/) explains sparse pair dispatch, differentiable
+  reconstruction, and active-work accounting.
+- [Routers](/docs/routers/) describes append-only affine heads and their stable
+  expert order.
+- [Experts](/docs/experts/) distinguishes complete replacement experts from
+  always-on-anchor deltas.
+- [Evaluation](/docs/evaluation/) covers counterfactual quality comparison and
+  compute measurement without claiming that every mixture is beneficial.
