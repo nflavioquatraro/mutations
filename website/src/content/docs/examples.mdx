@@ -1,6 +1,6 @@
 ---
 title: End-to-end examples
-description: Compare complete Anchored Plug-in MoE workflows, from exact anchor conversion through routed deltas and local two-expert training.
+description: Compare complete Anchored Plug-in MoE workflows, from exact anchor conversion through routed deltas, local training, and hierarchical package routing.
 order: 13
 group: Learn by example
 source:
@@ -16,7 +16,9 @@ source:
   - examples/verify_always_on_anchor_deltas.py
   - examples/verify_local_mini_moe.py
   - examples/verify_mixture_aware_refinement.py
+  - examples/verify_hierarchical_routing.py
   - tests/integration/test_anchor_delta_routed_mlp.py
+  - tests/integration/test_hierarchical_top2_dispatch.py
   - tests/integration/test_local_mini_moe_trainer.py
   - tests/integration/test_mixture_aware_refinement_pipeline.py
   - tests/integration/test_qwen3_equivalence.py
@@ -55,9 +57,12 @@ feature_ids:
   - TRN-003
   - TRN-004
   - RTR-002
+  - RTR-003
+  - RTR-005
   - POL-001
   - POL-002
   - POL-003
+  - POL-004
   - COM-001
   - COM-004
   - BAL-002
@@ -138,7 +143,7 @@ export const exampleWorkflows = [
     expert: "Package-local experts",
     lifecycle: { status: "Research primitive" },
     bestFor: "Larger package collections",
-    guide: "Upcoming",
+    guide: "Published below",
   },
 ];
 
@@ -148,14 +153,12 @@ These guides connect the framework's individual strategies into inspectable
 workflows. They begin with the conservative dense-equivalence baseline, add the
 complete packaged anchored top-1 lifecycle, and then introduce explicitly
 composed weighted top-2 execution, adaptive route selection, always-on-anchor
-deltas, and package-local two-expert training. Later guides will progress
-toward hierarchical routing.
+deltas, package-local two-expert training, and hierarchical package routing.
 
 The comparison table includes the planned workflow set so that integration
 boundaries are visible from the start. Exact conversion, packaged top-1, and
 weighted top-2 are published below, alongside adaptive selection, routed LoRA
-deltas, and local mini-MoE training; the hierarchical row remains clearly
-marked as an upcoming guide.
+deltas, local mini-MoE training, and package-first hierarchical routing.
 
 ## Compare the workflows
 
@@ -1457,3 +1460,273 @@ two-expert local mixture.
   combination.
 - [Evaluation](/docs/evaluation/) explains why these deterministic checks are
   framework evidence rather than specialization-quality measurements.
+
+## Hierarchical package routing
+
+<IntegrationBadge status="Research primitive" />
+
+### The problem it solves
+
+A flat router must compare every specialist for every token, even when
+specialists already belong to distinct packages such as code and mathematics.
+This workflow first asks whether any package has positive evidence over the
+anchor. Only the winning package then scores its local experts and contributes
+a pair, keeping every mixture inside one package.
+
+The hierarchy is useful for studying larger expert collections without
+pretending that package-level and local scores form one globally calibrated
+score bank.
+
+### Workflow contract
+
+- **Expert representation:** two or more globally unique, package-local expert
+  IDs per package. The verified sparse execution fixture uses four deterministic
+  complete expert modules across two packages.
+- **Routing and selection:** anchored package top-1 runs first. Selected
+  non-anchor rows are grouped by package and scored only by that package's
+  frozen local logical router. Stable local top-2 then selects a pair without a
+  second anchor veto.
+- **Combination and capacity:** `AnchoredTop2Dispatcher.dispatch_preselected()`
+  reuses the ordinary top-2 validation, sparse execution, score-softmax
+  combination, and reconstruction path. Capacity policies remain independently
+  composable.
+- **Training and calibration:** this workflow assumes that package and local
+  affine heads already exist. It performs no fitting, calibration, or hidden
+  recalibration.
+- **Active work:** every token receives package scores. An anchor token runs one
+  anchor MLP and receives no local scores; an approved token receives only its
+  winning package's local scores and runs that package's selected expert pair.
+- **Packaging and serialization:** the hierarchy is assembled explicitly in
+  memory from copied, frozen logical routers. There is no hierarchy manifest,
+  package-driven model attachment, or hierarchy checkpoint format.
+- **Expected result:** package selection is anchor-first, local scoring omits
+  anchor rows, selected pairs never cross package boundaries, and sparse
+  execution restores the original token order.
+
+### How the two stages run
+
+```text
+Token features
+  → score every package against the fixed-zero anchor
+  → anchor rows stop at the dense MLP
+  → group approved rows by their winning package
+  → score only that package's local experts
+  → select the package-local top two
+  → reuse sparse top-2 dispatch and score-softmax combination
+```
+
+Package ties follow stable package order after the anchor-first comparison.
+Once a package wins, its local pair is unconditional: negative local scores
+remain eligible because the package gate already made the abstention decision.
+
+### Package gate and local-pair rule
+
+<EquationBlock
+  intuition="The anchor competes only at the package gate; an approved token can mix experts only from its winning package."
+  equation="p(h) = argmax({0, G_1(h), ..., G_P(h)});  S(h) = empty if p(h) = 0, otherwise top2_j L_[p(h),j](h)"
+  spokenLabel="The winning package p of h is the anchor-first maximum over zero and all package scores. The selected expert set is empty for the anchor, otherwise it is the two highest-scoring local experts inside that one package."
+  symbols={[
+    { symbol: "h", meaning: "One token representation at the routed layer." },
+    { symbol: "G_p(h)", meaning: "The calibrated package-level score for package p." },
+    { symbol: "0", meaning: "The immutable anchor candidate and abstention threshold." },
+    { symbol: "L_[p,j](h)", meaning: "The local score for expert j inside the already selected package p." },
+    { symbol: "S(h)", meaning: "Either no specialists or exactly one package-local pair." },
+  ]}
+  consequence="Local scores from different packages are never compared or combined. Anchor-first tie-breaking preserves dense fallback when package evidence is non-positive."
+/>
+
+### Four-token walkthrough
+
+The offline fixture uses code and mathematics package heads. Candidate index
+zero is the anchor; global expert indices `1–2` belong to code and `3–4` belong
+to mathematics.
+
+<StrategyTable
+  caption="Deterministic hierarchical routing example"
+  description="The package gate runs for every row. Local scoring runs only for rows assigned to code or mathematics."
+  columns={[
+    { key: "features", label: "Token features" },
+    { key: "package", label: "Package result" },
+    { key: "pair", label: "Global expert pair" },
+    { key: "meaning", label: "Execution" },
+  ]}
+  rows={[
+    {
+      features: "[2, 0]",
+      package: "code (1)",
+      pair: "[1, 2]",
+      meaning: "Mix code-a and code-b",
+    },
+    {
+      features: "[0, 3]",
+      package: "math (2)",
+      pair: "[3, 4]",
+      meaning: "Mix math-a and math-b",
+    },
+    {
+      features: "[-1, -1]",
+      package: "anchor (0)",
+      pair: "[0, 0]",
+      meaning: "Run only the anchor; skip local scoring",
+    },
+    {
+      features: "[1, 1]",
+      package: "code (1)",
+      pair: "[1, 2]",
+      meaning: "Stable package-order tie selects code",
+    },
+  ]}
+/>
+
+The mathematics local heads deliberately return negative scores. Their pair is
+still valid because the positive mathematics package score has already passed
+the anchor gate. This separates package abstention from local expert ranking.
+
+### Minimal explicit composition
+
+```python
+package_routes = policy.select_packages(package_scores, package_ids=package_ids)
+local_scores = hierarchy.score_selected_locals(
+    hidden_states, package_indices=package_routes.selected_indices,
+    package_ids=package_routes.expert_ids, layer_index=0,
+)
+routes = policy.select_locals(
+    package_routes, local_scores, expert_ids_by_package=expert_ids_by_package,
+)
+result = dispatcher.dispatch_preselected(
+    hidden_states, selected_routes=routes.expert_routes,
+    anchor_mlp=anchor, experts=experts,
+)
+```
+
+The abbreviated listing makes every stage explicit. The verified sources use
+keyword arguments and validate the package-major expert ordering before any
+candidate executes.
+
+### Verify staged selection
+
+From the repository root, run:
+
+```bash
+python examples/verify_hierarchical_routing.py
+```
+
+The example is deterministic and offline. It reports package candidates
+`[1, 2, 0, 1]`, global expert pairs
+`[[1, 2], [3, 4], [0, 0], [1, 2]]`, and three locally scored tokens.
+
+<CodeDisclosure
+  summary="Show package gating and selected-package local scoring"
+  source="examples/verify_hierarchical_routing.py"
+  verified
+>
+
+```python
+package_routes = policy.select_packages(
+    router.score_packages(features, layer_index=0),
+    package_ids=router.package_ids_for_layer(0),
+)
+local_scores = router.score_selected_locals(
+    features,
+    package_indices=package_routes.selected_indices,
+    package_ids=package_routes.expert_ids,
+    layer_index=0,
+)
+decision = policy.select_locals(
+    package_routes,
+    local_scores,
+    expert_ids_by_package={
+        package_id: router.expert_ids_for_package(package_id, layer_index=0)
+        for package_id in router.package_ids
+    },
+)
+assert package_routes.selected_indices.tolist() == [1, 2, 0, 1]
+assert decision.expert_routes.selected_indices.tolist() == [
+    [1, 2],
+    [3, 4],
+    [0, 0],
+    [1, 2],
+]
+```
+
+Expected invariants: the third token never reaches a local router, global
+indices preserve package-major order, and every selected pair belongs to the
+package chosen in the first stage.
+</CodeDisclosure>
+
+### Verify sparse pair execution
+
+The integration test carries the preselected pairs into the existing top-2
+dispatcher. It proves that the anchor sees one token, code experts each see two
+tokens, mathematics experts each see one token, and no output contains a
+cross-package mixture.
+
+<CodeDisclosure
+  summary="Show hierarchical pairs reusing sparse top-2 dispatch"
+  source="tests/integration/test_hierarchical_top2_dispatch.py"
+  verified
+>
+
+```python
+result = AnchoredTop2Dispatcher().dispatch_preselected(
+    hidden_states,
+    selected_routes=decision.expert_routes,
+    anchor_mlp=anchor,
+    experts=experts,
+)
+
+assert torch.equal(result.output[2], hidden_states[2])
+assert anchor.token_count == 1
+assert tuple(expert.token_count for expert in experts) == (2, 2, 1, 1)
+for token_index, package_index in enumerate(
+    package_routes.selected_indices.tolist()
+):
+    pair = result.selected_routes.selected_indices[token_index].tolist()
+    if package_index == 0:
+        assert pair == [0, 0]
+        continue
+    owners = {
+        decision.expert_package_ids[candidate - 1]
+        for candidate in pair
+    }
+    assert owners == {package_routes.expert_ids[package_index - 1]}
+```
+
+Expected invariants: validation completes before candidate execution, anchor
+rows are exact, active experts execute sparsely, and every specialist pair has
+one package owner.
+</CodeDisclosure>
+
+### Current limitations
+
+- `RTR-005` and `POL-004` are validated standalone composition primitives, not
+  a configuration-driven `RoutedMLP` or package-registry lifecycle.
+- The current topology is rectangular: every covered layer has the same stable
+  package order, and every package exposes at least two local experts with
+  globally unique IDs. Ragged layers and single-expert local packages are not
+  supported.
+- The second stage always selects two local experts. Local top-1, adaptive
+  arity, and a second local anchor veto are separate future policies.
+- The hierarchy is rebuilt explicitly from existing affine score banks. It is
+  not serialized in an expert package or composition checkpoint.
+- The deterministic fixtures validate routing, ownership, sparse dispatch,
+  combination, and reconstruction—not routing quality, specialization gains,
+  production latency, accelerator behavior, or distributed execution.
+
+### References and related pages
+
+The two-stage hierarchy is a project-specific framework design from the
+architecture blueprint. It reuses existing affine routing, anchored top-1,
+local top-2, and sparse dispatch primitives rather than claiming a
+paper-derived routing algorithm.
+
+- [Routers](/docs/routers/) defines `RTR-003` logical routers and the `RTR-005`
+  package/local score bank.
+- [Policies](/docs/policies/) specifies `POL-004`, stable tie-breaking, global
+  expert-index translation, and the absence of a second local veto.
+- [Inference](/docs/inference/) documents `INF-002` preselected pair dispatch,
+  score-softmax combination, and exact reconstruction.
+- [Registry](/docs/registry/) explains the package lifecycle that hierarchical
+  routing does not yet automatically join.
+- [Evaluation](/docs/evaluation/) separates deterministic framework evidence
+  from quality and production-efficiency claims.
