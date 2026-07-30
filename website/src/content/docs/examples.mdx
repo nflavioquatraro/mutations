@@ -1,0 +1,237 @@
+---
+title: End-to-end examples
+description: Compare complete Anchored Plug-in MoE workflows, beginning with the exact anchor conversion baseline.
+order: 13
+group: Learn by example
+source:
+  - website-implementation-plan.md
+  - feature-implementation-plan.md
+  - examples/verify_dense_equivalence.py
+  - tests/integration/test_qwen3_equivalence.py
+  - src/anchored_moe/evaluation/README.md
+feature_ids:
+  - CORE-003
+  - CORE-004
+  - EVAL-001
+  - NB-002
+last_reviewed: 2026-07-30
+---
+
+import CodeDisclosure from "../../components/docs/CodeDisclosure.astro";
+import EquationBlock from "../../components/docs/EquationBlock.astro";
+import IntegrationBadge from "../../components/docs/IntegrationBadge.astro";
+import StrategyTable from "../../components/docs/StrategyTable.astro";
+
+export const exampleWorkflows = [
+  {
+    approach: "Exact anchor",
+    active: "1 anchor",
+    expert: "None",
+    lifecycle: { status: "Integrated" },
+    bestFor: "Equivalence baseline",
+    guide: "Published below",
+  },
+  {
+    approach: "Anchored top-1",
+    active: "Anchor or 1 expert",
+    expert: "Full MLP",
+    lifecycle: { status: "Integrated" },
+    bestFor: "Conservative specialization",
+    guide: "Next workflow",
+  },
+  {
+    approach: "Weighted top-2",
+    active: "Anchor or 2 experts",
+    expert: "Compatible complete experts",
+    lifecycle: { status: "Composable" },
+    bestFor: "Testing expert synergy",
+    guide: "Upcoming",
+  },
+  {
+    approach: "Adaptive",
+    active: "Anchor or 1–2 experts",
+    expert: "Compatible complete experts",
+    lifecycle: { status: "Composable" },
+    bestFor: "Variable computation",
+    guide: "Upcoming",
+  },
+  {
+    approach: "Anchor plus deltas",
+    active: "Anchor + 0–2 deltas",
+    expert: "LoRA or sparse delta",
+    lifecycle: { status: "Composable" },
+    bestFor: "Preservation-first adaptation",
+    guide: "Upcoming",
+  },
+  {
+    approach: "Local mini-MoE",
+    active: "2 experts during training",
+    expert: "Package-local pair",
+    lifecycle: { status: "Composable" },
+    bestFor: "Mixture-aware specialization",
+    guide: "Upcoming",
+  },
+  {
+    approach: "Hierarchical",
+    active: "1 package, then a local pair",
+    expert: "Package-local experts",
+    lifecycle: { status: "Research primitive" },
+    bestFor: "Larger package collections",
+    guide: "Upcoming",
+  },
+];
+
+## What this page does
+
+These guides connect the framework's individual strategies into inspectable
+workflows. They begin with the conservative dense-equivalence baseline and will
+progress toward package installation, weighted mixtures, adaptive computation,
+delta experts, local training, and hierarchical routing.
+
+The comparison table includes the planned workflow set so that integration
+boundaries are visible from the start. This first published slice documents
+only the exact anchor conversion; later rows remain clearly marked as upcoming
+guides.
+
+## Compare the workflows
+
+<StrategyTable
+  caption="End-to-end workflow comparison"
+  description="Integration labels describe the current package-to-model lifecycle. The guide column describes documentation availability on this page."
+  columns={[
+    { key: "approach", label: "Approach" },
+    { key: "active", label: "Active paths" },
+    { key: "expert", label: "Expert type" },
+    { key: "lifecycle", label: "Lifecycle integration" },
+    { key: "bestFor", label: "Best for" },
+    { key: "guide", label: "Guide status" },
+  ]}
+  rows={exampleWorkflows}
+/>
+
+Integration labels are not maturity scores. **Integrated** means the behavior
+is available through its intended lifecycle. **Composable** means the tested
+parts require explicit assembly. **Research primitive** identifies a validated
+experimental building block rather than an automatic model-level path.
+
+## Exact anchor conversion
+
+<IntegrationBadge status="Integrated" />
+
+### The problem it solves
+
+Before adding specialists, conversion must prove that wrapping selected dense
+MLPs does not change the model. This workflow creates a tiny local Qwen3 model,
+records its outputs, converts the upper-half MLPs to routed wrappers, and
+compares the result with zero tolerance.
+
+### Workflow contract
+
+- **Expert representation:** none; the original dense MLP remains candidate
+  zero.
+- **Routing and selection:** every converted wrapper starts in
+  `forced_anchor`, so no router score is evaluated.
+- **Combination and capacity:** the anchor output is returned directly;
+  specialist mixing and overflow handling are inactive.
+- **Training and calibration:** neither is required.
+- **Active work:** one anchor MLP per token at every converted layer.
+- **Packaging and serialization:** no expert package is created. The example
+  validates conversion before package lifecycle work begins.
+- **Expected result:** every hidden state and final logit is exactly equal on
+  the deterministic CPU fixture.
+
+### How it runs
+
+```text
+Tiny local Qwen3 anchor
+  → record dense hidden states and logits
+  → wrap upper-half MLPs in forced-anchor mode
+  → execute the same input
+  → require exact tensor equality
+```
+
+The wrapper retains the same original MLP object as `anchor_mlp`. The
+integration test also fingerprints its parameters before conversion and
+requires that fingerprint to remain unchanged.
+
+### Expected invariant
+
+<EquationBlock
+  intuition="A conversion is safe only when the forced-anchor model returns the same values as the dense model."
+  equation="H_converted = H_dense;  Z_converted = Z_dense"
+  spokenLabel="Every converted hidden state H equals its dense counterpart, and every converted output logit Z equals its dense counterpart."
+  symbols={[
+    { symbol: "H", meaning: "The complete ordered sequence of hidden-state tensors." },
+    { symbol: "Z", meaning: "The final vocabulary-logit tensor." },
+    { symbol: "dense", meaning: "Execution before selected MLPs are wrapped." },
+    { symbol: "converted", meaning: "Execution after wrapping, while every route is forced to the anchor." },
+  ]}
+  consequence="The validated CPU path uses absolute and relative tolerances of zero. Optimized runtimes need separately declared tolerances."
+/>
+
+### Run the verified example
+
+From the repository root, run:
+
+```bash
+python examples/verify_dense_equivalence.py
+```
+
+The workflow is offline: it constructs a deterministic random model and
+downloads neither weights nor tokenizer data. A successful run reports layers
+`(2, 3)`, exact logits, and a maximum absolute difference of `0.0`.
+
+<CodeDisclosure
+  summary="Show the core exact-equivalence check"
+  source="examples/verify_dense_equivalence.py"
+  verified
+>
+
+```python
+with torch.no_grad():
+    dense = model(input_ids=input_ids, output_hidden_states=True)
+
+report = Qwen3Backend().convert(
+    model,
+    AnchoredMoEConfig(converted_layers="upper_half"),
+)
+
+with torch.no_grad():
+    converted = model(input_ids=input_ids, output_hidden_states=True)
+
+assert_tensors_equivalent(converted.logits, dense.logits, name="logits")
+```
+
+Expected invariant: final logits are exactly equal. The linked example also
+checks every hidden state; the
+[`test_qwen3_equivalence.py`](https://github.com/nflavioquatraro/mutations/blob/main/tests/integration/test_qwen3_equivalence.py)
+integration test verifies zero-tolerance equality, object identity, and the
+unchanged anchor fingerprint.
+</CodeDisclosure>
+
+The [Getting started](/docs/getting-started/) guide contains installation
+instructions and the complete source listing. This page keeps the workflow
+comparison concise instead of maintaining a second full copy.
+
+### Current limitations
+
+- The fixture proves framework equivalence, not language quality.
+- Qwen3 is the only currently validated backend.
+- Exact equality is established for the deterministic CPU path. Optimized
+  kernels, reduced precision, and other runtimes require separate validation.
+- No specialist, router, package, calibration artifact, or composition
+  checkpoint exists yet; those belong to subsequent workflows.
+
+### References and related pages
+
+This baseline is project-specific verification infrastructure rather than a
+paper-derived algorithm.
+
+- [Getting started](/docs/getting-started/) provides the complete local setup.
+- [Backends](/docs/backends/) explains Qwen3 discovery, replacement, and
+  moved-not-copied anchor identity.
+- [Evaluation](/docs/evaluation/) defines exact tensor comparison and its
+  runtime limits.
+- [Configuration and modeling](/docs/configuration-and-modeling/) describes
+  `upper_half`, `forced_anchor`, and the model façade.
+
