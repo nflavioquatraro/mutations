@@ -1,0 +1,336 @@
+---
+title: Inference
+description: Materialize an active package registry, dispatch tokens through anchored top-1 routes, restore exact anchor fallback, and inspect privacy-safe route telemetry.
+order: 11
+group: Workflows
+source:
+  - src/anchored_moe/inference/README.md
+  - src/anchored_moe/inference/dispatch.py
+  - src/anchored_moe/inference/composition.py
+  - src/anchored_moe/inference/telemetry.py
+  - src/anchored_moe/modeling.py
+  - examples/verify_routed_top1.py
+  - examples/verify_package_runtime.py
+feature_ids:
+  - CORE-005
+  - INF-001
+  - INF-002
+  - BAL-002
+  - COM-004
+  - COM-005
+  - EVAL-002
+  - PKG-007
+last_reviewed: 2026-07-30
+---
+
+import CodeDisclosure from "../../components/docs/CodeDisclosure.astro";
+import EquationBlock from "../../components/docs/EquationBlock.astro";
+import IntegrationBadge from "../../components/docs/IntegrationBadge.astro";
+import StrategyTable from "../../components/docs/StrategyTable.astro";
+
+export const inferenceStrategies = [
+  {
+    strategy: "Package-driven anchored top-1",
+    feature: "INF-001 / PKG-007",
+    execution: "Anchor or one full-MLP expert per token",
+    attachment: "Explicit registry synchronization",
+    status: { status: "Integrated" },
+  },
+  {
+    strategy: "Bounded route telemetry",
+    feature: "EVAL-002",
+    execution: "Copies route metadata to bounded CPU history",
+    attachment: "Opt-in direct top-1 configuration",
+    status: { status: "Composable" },
+  },
+  {
+    strategy: "Pair-shaped top-2",
+    feature: "INF-002 / BAL-002",
+    execution: "Anchor, one survivor, or two mixed experts",
+    attachment: "Standalone dispatcher; no package-driven model mode",
+    status: { status: "Composable" },
+  },
+  {
+    strategy: "Always-on anchor plus deltas",
+    feature: "COM-004",
+    execution: "Anchor plus zero, one, or two sparse deltas",
+    attachment: "Explicit RoutedMLP configuration",
+    status: { status: "Composable" },
+  },
+  {
+    strategy: "Parameter-space LoRA merge",
+    feature: "COM-005",
+    execution: "Anchor projection with up to two weighted LoRA updates",
+    attachment: "Explicit two-expert RoutedMLP configuration",
+    status: { status: "Composable" },
+  },
+];
+
+## What this part does
+
+Inference turns frozen router scores and expert modules into token outputs. The
+primary runtime selects the immutable anchor or one specialist for every token,
+executes only the required paths, and reconstructs the original token order
+without dropping work.
+
+<IntegrationBadge status="Integrated" />
+
+The complete package-to-model path is integrated for full-MLP experts,
+independent affine heads, and anchored top-1. Installation remains a registry
+operation; `synchronize_registry()` is the explicit boundary that changes
+model execution.
+
+## Where it fits
+
+Inference is the last stage of the package lifecycle:
+
+1. training produces frozen expert payloads;
+2. calibration adds immutable affine router heads;
+3. the registry validates packages and records their stable active order;
+4. explicit synchronization materializes those payloads into routed layers;
+5. each routed layer scores, selects, dispatches, and reconstructs tokens;
+6. optional telemetry summarizes the routes that actually executed.
+
+The inference package does not install packages implicitly, fit routers,
+estimate serving capacity, or change expert weights. Registry state may move
+ahead of runtime state until the caller deliberately synchronizes the model.
+
+## Implemented approaches
+
+<StrategyTable
+  caption="Inference execution and attachment boundaries"
+  description="The integrated slice is package-driven anchored top-1. Other validated execution modes require explicit assembly and are summarized here without implying automatic lifecycle support."
+  columns={[
+    { key: "strategy", label: "Approach" },
+    { key: "feature", label: "Feature" },
+    { key: "execution", label: "Active execution" },
+    { key: "attachment", label: "Current boundary" },
+    { key: "status", label: "Integration label" },
+  ]}
+  rows={inferenceStrategies}
+/>
+
+### Package-driven anchored top-1
+
+PKG-007 reads explicit `(layer, expert ID, payload)` bindings from every active
+package. It validates the complete intended runtime first, materializes
+full-MLP experts against their immutable layer anchors, and compiles
+package-owned affine heads into one frozen logical score bank per layer.
+
+Only after every layer passes validation does synchronization replace the
+current routed runtime. Active package order and package-local router order
+determine expert append order, so equal-score ties and later audit reports are
+deterministic.
+
+### Sparse dispatch and reconstruction
+
+For each routed layer, INF-001 applies anchored hard top-1 selection and
+availability fallback. Candidate zero is always the anchor. Positive candidate
+indices map to experts in stable router order.
+
+Tokens are flattened only across their token-leading dimensions, grouped by
+effective route, and gathered into one sparse call per non-empty candidate.
+`torch.index_copy` then restores every output to its original token position.
+Inactive experts are never executed, and overflow always returns to the anchor.
+
+### Explicit synchronization and exact removal
+
+`model.install()` and `model.unload()` change the active registry, not the
+already configured routed layers. `model.synchronize_registry()` is the
+separate operation that applies the complete registry snapshot.
+
+Synchronizing an empty registry clears loaded experts and router heads and
+restores the exact forced-anchor path. Reinserting the same immutable package
+into its historical slot and synchronizing again restores the same registry
+identity and routed behavior.
+
+### Privacy-safe route telemetry
+
+`RouteTelemetry` is an optional bounded in-memory recorder for direct anchored
+top-1 attachment. Each record contains the layer, selected and effective
+candidate indices, selected scores, overflow flags, and stable expert IDs.
+
+Records are detached, cloned to CPU storage, and capped by invocation count.
+They deliberately exclude token IDs, token text, hidden states, logits, and
+expert activations. Summaries expose only anchor, expert, overflow, token, and
+invocation counts.
+
+### Advanced composable paths
+
+The inference package also validates standalone top-2 dispatch, hierarchical
+preselected pairs, always-on anchor-relative deltas, and two-expert LoRA
+parameter merging. These modes preserve explicit fallback and ordering
+contracts, but package-driven attachment and declarative model configuration
+remain future work.
+
+## How it works
+
+The integrated runtime has two deliberately separate transitions:
+
+```text
+Active registry snapshot
+  → validate every package, payload binding, and router key
+  → build every layer runtime without changing the model
+  → atomically apply the complete synchronized runtime
+
+Hidden states at one routed layer
+  → frozen feature extraction and router scores
+  → anchored top-1 plus availability fallback
+  → sparse anchor or expert execution
+  → deterministic output reconstruction
+  → optional bounded route record
+```
+
+That separation prevents a partially valid package collection from changing
+only some layers. It also makes stale registry/runtime state observable instead
+of silently repairing it during a forward pass.
+
+## Mathematical intuition
+
+<EquationBlock
+  intuition="Every token executes exactly one effective MLP: candidate zero is the immutable anchor, and positive candidates are specialists."
+  equation="yₜ = A(hₜ) if r′ₜ = 0; otherwise yₜ = Eᵣ′ₜ(hₜ)"
+  spokenLabel="Output y at token t equals the anchor applied to hidden state h when the effective route is zero; otherwise it equals the selected expert applied to that hidden state."
+  symbols={[
+    { symbol: "hₜ", meaning: "The token representation entering the routed MLP." },
+    { symbol: "r′ₜ", meaning: "The effective route after availability or capacity fallback." },
+    { symbol: "A", meaning: "The frozen original MLP, permanently assigned candidate zero." },
+    { symbol: "Eₖ", meaning: "Specialist k in stable router and registry order." },
+  ]}
+  consequence="A token is never dropped. If no specialist has positive evidence or the selected specialist is unavailable, the exact anchor path executes."
+/>
+
+<EquationBlock
+  intuition="Telemetry keeps only the decision needed to audit a routed layer, not the model input or activation."
+  equation="Rℓ = (ℓ, r, gᵣ, r′, o, expert IDs)"
+  spokenLabel="Route record R for layer l contains the layer, selected route, selected score, effective route, overflow flag, and expert identifiers."
+  symbols={[
+    { symbol: "r", meaning: "The candidate selected before availability fallback." },
+    { symbol: "gᵣ", meaning: "The calibrated score associated with that selected candidate." },
+    { symbol: "r′", meaning: "The candidate that actually executed." },
+    { symbol: "o", meaning: "Whether a specialist selection overflowed to the anchor." },
+  ]}
+  consequence="Aggregate route use and fallback can be inspected without retaining token text, token IDs, hidden states, logits, or expert outputs."
+/>
+
+## Minimal usage
+
+Install a validated package, then explicitly apply the new registry snapshot:
+
+```python
+package = ExpertPackage.from_directory("./code-experts")
+model.install(package)
+report = model.synchronize_registry()
+
+output = model(input_ids=input_ids)
+assert report.configured_layers == model.config.resolved_converted_layers
+```
+
+Installing the package alone does not alter the forward path. The call to
+`synchronize_registry()` is what materializes and applies anchored top-1
+execution.
+
+## Verified implementation details
+
+<CodeDisclosure
+  summary="Show sparse top-1 execution, anchor fallback, and telemetry"
+  source="examples/verify_routed_top1.py"
+  verified
+>
+
+```python
+telemetry = RouteTelemetry(layer_index=1)
+routed_mlp.configure_anchored_top1(
+    layer_index=1,
+    router_feature_extractor=IdentityRouterFeatureExtractor(2),
+    router_heads=heads,
+    experts={"math:0": math, "code:0": code},
+    route_telemetry=telemetry,
+)
+output = routed_mlp(hidden_states, expert_availability=availability)
+summary = telemetry.summarize()
+assert summary.anchor_count == 2
+assert summary.overflow_count == 1
+```
+
+Expected invariant: the selected code tokens, ordinary anchor token, and
+overflowed math token all return to their original positions; only route
+metadata enters the bounded telemetry history.
+</CodeDisclosure>
+
+<CodeDisclosure
+  summary="Show explicit package synchronization, removal, and reinsertion"
+  source="examples/verify_package_runtime.py"
+  verified
+>
+
+```python
+model.install(package)
+installed = model.synchronize_registry()
+routed_logits = model(input_ids=input_ids).logits
+
+model.unload(package.identity)
+model.synchronize_registry()
+assert_tensors_equivalent(model(input_ids=input_ids).logits, dense_logits)
+
+model.install(ExpertPackage.from_directory(package.package_directory))
+reinserted = model.synchronize_registry()
+assert reinserted.registry_sha256 == installed.registry_sha256
+```
+
+Expected invariant: removal does nothing until synchronization, an empty
+synchronized registry restores exact dense logits, and deterministic
+reinsertion restores the same registry identity and routed logits.
+</CodeDisclosure>
+
+## Current limitations
+
+- Package-driven synchronization supports complete full-MLP experts,
+  identity features, independent affine heads, and anchored top-1 only.
+- Route telemetry is opt-in for direct top-1 configuration. Package
+  synchronization does not attach a recorder automatically, and top-2
+  telemetry is not implemented.
+- Standalone top-2, hierarchical pair dispatch, anchor-relative deltas, and
+  parameter-space LoRA merging are validated composable paths rather than
+  package-driven model modes.
+- Capacity is supplied as explicit availability. The runtime does not estimate
+  load, search beyond an unavailable selected route, or manage distributed
+  all-to-all execution.
+- Token-aligned auxiliary MLP arguments, optimized batched grouping,
+  multi-device materialization, and production serving kernels remain future
+  work.
+- Telemetry is process-local and in-memory. It is not a persistent route log
+  or distributed aggregation service.
+
+## References
+
+The [architecture paper](/paper.pdf) and repository blueprint listed in the
+page sources define the fixed-zero anchor, deterministic routing,
+no-token-dropping rule, capacity fallback, and reference top-1 execution
+policy.
+
+[PyTorch `index_select`](https://docs.pytorch.org/docs/stable/generated/torch.index_select.html)
+defines sparse token gathering, while
+[`index_copy`](https://docs.pytorch.org/docs/stable/generated/torch.index_copy.html)
+defines differentiable reconstruction in original token order.
+[`ModuleList`](https://docs.pytorch.org/docs/stable/generated/torch.nn.ModuleList.html)
+provides stable expert registration without encoding expert IDs as attribute
+names.
+
+INF-001, PKG-007, CORE-005, and EVAL-002 are project infrastructure rather
+than paper-derived training or optimization algorithms. Their behavior follows
+the repository’s immutable-anchor architecture and the cited PyTorch tensor
+contracts.
+
+## Related pages
+
+- Read [registry](/docs/registry/) for package validation, lifecycle state,
+  stable ordering, and composition checkpoints.
+- Read [routers](/docs/routers/) for affine heads, logical router compilation,
+  and append-preserving score order.
+- Read [policies](/docs/policies/) for anchored selection, combination, and
+  availability fallback.
+- Read [configuration and modeling](/docs/configuration-and-modeling/) for the
+  causal-LM façade that owns the registry and exposes explicit synchronization.
+- The planned **Evaluation** page will cover route agreement, dense
+  equivalence, quality, lifecycle, and efficiency measurements.
