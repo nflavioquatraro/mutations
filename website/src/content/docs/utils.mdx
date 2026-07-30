@@ -1,0 +1,224 @@
+---
+title: Utilities
+description: Build deterministic content identities for JSON metadata and local payload files without loading complete artifacts into memory.
+order: 13
+group: Project
+source:
+  - src/anchored_moe/utils/README.md
+  - src/anchored_moe/utils/__init__.py
+  - src/anchored_moe/utils/hashing.py
+  - tests/unit/test_hashing.py
+feature_ids:
+  - PKG-001
+last_reviewed: 2026-07-30
+---
+
+import CodeDisclosure from "../../components/docs/CodeDisclosure.astro";
+import EquationBlock from "../../components/docs/EquationBlock.astro";
+import IntegrationBadge from "../../components/docs/IntegrationBadge.astro";
+import StrategyTable from "../../components/docs/StrategyTable.astro";
+
+export const utilityStrategies = [
+  {
+    strategy: "Canonical JSON bytes",
+    api: "canonical_json_bytes",
+    input: "JSON-compatible metadata",
+    result: "Deterministic UTF-8 bytes",
+    status: { status: "Integrated" },
+  },
+  {
+    strategy: "Canonical JSON digest",
+    api: "sha256_json",
+    input: "JSON-compatible metadata",
+    result: "Lowercase SHA-256 digest",
+    status: { status: "Integrated" },
+  },
+  {
+    strategy: "Streamed file digest",
+    api: "sha256_file",
+    input: "One regular local file",
+    result: "Lowercase SHA-256 digest",
+    status: { status: "Integrated" },
+  },
+];
+
+## What this part does
+
+Utilities give the rest of the framework a small, deterministic way to identify
+metadata and payload bytes. The current public surface canonicalizes JSON,
+hashes that canonical representation, and hashes local files in bounded chunks.
+
+<IntegrationBadge status="Integrated" />
+
+These helpers support the validated PKG-001 package format and are used across
+configuration checks, package manifests, registries, calibration artifacts,
+composition checkpoints, and evaluation reports. They provide content identity
+and integrity checks; they do not define those higher-level formats.
+
+## Where it fits
+
+Hashing sits underneath several lifecycle boundaries:
+
+1. a producer converts metadata to deterministic bytes before computing its
+   identity;
+2. package export hashes each payload file without reading the whole artifact
+   into memory;
+3. loaders recompute the same digests before trusting a manifest or restoring
+   a composition;
+4. registries and reports use hashes to bind their observations to one ordered
+   set of artifacts.
+
+The utilities do not discover files, sign packages, fetch remote content, or
+decide whether two packages are compatible. Their only job is to turn explicit
+caller-owned content into repeatable digests without mutating it.
+
+## Implemented approaches
+
+<StrategyTable
+  caption="Deterministic hashing utilities and their integration boundary"
+  description="All three public helpers are integrated infrastructure for PKG-001. Higher-level modules decide which metadata and files belong to an artifact."
+  columns={[
+    { key: "strategy", label: "Approach" },
+    { key: "api", label: "Public API" },
+    { key: "input", label: "Input" },
+    { key: "result", label: "Result" },
+    { key: "status", label: "Integration label" },
+  ]}
+  rows={utilityStrategies}
+/>
+
+### Canonical JSON
+
+`canonical_json_bytes` sorts object keys, removes insignificant separators,
+preserves Unicode text, encodes with UTF-8, and rejects `NaN` and infinities.
+As a result, mappings with the same supported JSON content produce the same
+bytes even when their insertion order differs.
+
+`sha256_json` hashes those bytes and returns the standard 64-character
+lowercase hexadecimal representation. Callers therefore do not need to
+duplicate or subtly vary the serialization rules.
+
+### Streamed file hashing
+
+`sha256_file` accepts one regular local file and updates SHA-256 from fixed-size
+binary chunks. Its default chunk is one mebibyte; callers may provide another
+positive integer when a different memory bound is useful.
+
+The digest depends only on the file bytes, not the chunk size. Missing paths,
+directories, Boolean chunk sizes, non-integer chunk sizes, zero, and negative
+sizes are rejected instead of producing ambiguous results.
+
+## How it works
+
+The metadata and file paths deliberately converge on the same digest format:
+
+```text
+JSON metadata
+  → deterministic serialization
+  → UTF-8 bytes
+  → SHA-256
+  → lowercase digest
+
+Local payload file
+  → bounded binary chunks
+  → SHA-256
+  → lowercase digest
+```
+
+This makes digests easy to store in JSON manifests while keeping ownership
+clear: canonicalization belongs to the utility, and artifact membership belongs
+to the package, registry, calibration, or evaluation layer that calls it.
+
+## Mathematical intuition
+
+<EquationBlock
+  intuition="Streaming keeps memory tied to the chosen chunk size rather than to the total size of a model artifact."
+  equation="M_peak = O(B), while T = O(F)"
+  spokenLabel="Peak working memory grows with chunk size B, while hashing time grows with total file size F."
+  symbols={[
+    { symbol: "B", meaning: "The positive number of file bytes read in one iteration." },
+    { symbol: "F", meaning: "The total number of bytes in the file." },
+    { symbol: "M_peak", meaning: "The helper's peak working memory for file content." },
+    { symbol: "T", meaning: "The total hashing work." },
+  ]}
+  consequence="A multi-gigabyte safetensors file can be verified without allocating a multi-gigabyte in-memory copy, although every byte still has to be read once."
+/>
+
+## Minimal usage
+
+Create a stable metadata identity and verify one package payload:
+
+```python
+from anchored_moe.utils import sha256_file, sha256_json
+
+manifest_id = sha256_json({"version": 1, "specialization": "code"})
+payload_id = sha256_file("experts/model.safetensors")
+
+assert len(manifest_id) == len(payload_id) == 64
+```
+
+The caller chooses the metadata fields and payload path. Both results use the
+same lowercase SHA-256 representation expected by package and registry
+validation.
+
+## Verified implementation details
+
+<CodeDisclosure
+  summary="Show deterministic JSON and bounded file hashing tests"
+  source="tests/unit/test_hashing.py"
+  verified
+>
+
+```python
+first = {"z": 1, "message": "caffè", "nested": {"b": 2, "a": 1}}
+second = {"nested": {"a": 1, "b": 2}, "message": "caffè", "z": 1}
+
+assert canonical_json_bytes(first) == canonical_json_bytes(second)
+assert sha256_json(first) == sha256_json(second)
+
+payload = b"anchored-moe" * 10
+path.write_bytes(payload)
+assert sha256_file(path, chunk_size=7) == hashlib.sha256(payload).hexdigest()
+```
+
+Expected invariant: object insertion order does not change canonical bytes or
+the JSON digest, and reading the file in seven-byte chunks produces the same
+digest as hashing its bytes directly.
+</CodeDisclosure>
+
+## Current limitations
+
+- SHA-256 detects changed content but does not prove who created it. Package
+  authenticity would require a separate signature and trust policy.
+- Canonical JSON follows a deliberately smaller project-specific contract. It
+  does not claim full RFC 8785 number serialization or cross-language
+  conformance.
+- JSON compatibility is the caller's responsibility. Arbitrary Python objects
+  and non-finite floating-point values are not accepted.
+- File hashing supports regular local files only. Remote streams, directories,
+  symbolic artifact trees, and parallel hashing are outside this utility.
+- The helper reads every file byte once and does not provide progress events,
+  cancellation, or hardware-accelerated hashing.
+
+## References
+
+[FIPS 180-4: Secure Hash Standard](https://doi.org/10.6028/NIST.FIPS.180-4)
+defines SHA-256 and the digest used by all three helpers.
+
+[RFC 8785: JSON Canonicalization Scheme](https://www.rfc-editor.org/rfc/rfc8785)
+motivates deterministic JSON serialization. This project adopts sorted keys,
+compact separators, preserved Unicode, UTF-8 encoding, and rejection of
+non-finite values, but it does not claim the RFC's complete canonicalization
+algorithm.
+
+These utilities are framework infrastructure rather than a paper-derived
+algorithm.
+
+## Related pages
+
+- [Registry](/docs/registry/) explains how manifests, payload bindings, active
+  package order, and composition checkpoints consume these digests.
+- [Evaluation](/docs/evaluation/) uses fingerprints to test exact restoration
+  and bounded registry composition without retaining sensitive content.
+- [Configuration and modeling](/docs/configuration-and-modeling/) shows how a
+  live anchor configuration is checked before conversion and reload.
