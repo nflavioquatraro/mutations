@@ -1,0 +1,532 @@
+---
+title: Calibration
+description: Build aligned router data, fit utility heads, control false activation, and measure route regret without changing the anchor.
+order: 9
+group: Workflows
+source:
+  - src/anchored_moe/calibration/README.md
+  - src/anchored_moe/calibration/features.py
+  - src/anchored_moe/calibration/labels.py
+  - src/anchored_moe/calibration/ridge.py
+  - src/anchored_moe/calibration/temperature.py
+  - src/anchored_moe/calibration/margins.py
+  - src/anchored_moe/calibration/pairs.py
+  - src/anchored_moe/calibration/oracle.py
+  - src/anchored_moe/calibration/mixture.py
+  - src/anchored_moe/calibration/global_recalibration.py
+  - examples/verify_router_feature_bank.py
+  - examples/verify_router_label_banks.py
+  - examples/verify_independent_ridge.py
+  - examples/verify_temperature_thresholds.py
+  - examples/verify_stability_margins.py
+  - examples/verify_pair_utilities.py
+  - examples/verify_top1_top2_oracle.py
+  - examples/verify_learned_mixture_weights.py
+  - examples/verify_registry_router_versions.py
+  - examples/fit_router.py
+feature_ids:
+  - CAL-001
+  - CAL-002
+  - CAL-003
+  - CAL-004
+  - CAL-005
+  - CAL-006
+  - CAL-007
+  - COM-003
+  - RTR-004
+  - NB-004
+last_reviewed: 2026-07-30
+---
+
+import CodeDisclosure from "../../components/docs/CodeDisclosure.astro";
+import EquationBlock from "../../components/docs/EquationBlock.astro";
+import IntegrationBadge from "../../components/docs/IntegrationBadge.astro";
+import PaperReference from "../../components/docs/PaperReference.astro";
+import StrategyTable from "../../components/docs/StrategyTable.astro";
+
+export const calibrationStrategies = [
+  {
+    strategy: "Router feature bank",
+    feature: "CAL-001",
+    result: "Immutable layer-local design matrices",
+    boundary: "Primary packaged top-1 data path",
+    status: { status: "Integrated" },
+  },
+  {
+    strategy: "Aligned label banks",
+    feature: "CAL-002",
+    result: "Domain classes or signed expert utilities",
+    boundary: "Utility labels feed packaged top-1 fitting",
+    status: { status: "Integrated" },
+  },
+  {
+    strategy: "Independent ridge fitting",
+    feature: "CAL-004",
+    result: "Frozen affine head per layer and expert",
+    boundary: "Primary packaged top-1 fitting path",
+    status: { status: "Integrated" },
+  },
+  {
+    strategy: "Temperature and threshold",
+    feature: "CAL-005",
+    result: "Calibrated evidence with a false-activation budget",
+    boundary: "Primary packaged top-1 calibration path",
+    status: { status: "Integrated" },
+  },
+  {
+    strategy: "Calibrated package derivation",
+    feature: "NB-004",
+    result: "New immutable router-bearing package version",
+    boundary: "Validated package-to-model lifecycle",
+    status: { status: "Integrated" },
+  },
+  {
+    strategy: "Pair utility",
+    feature: "CAL-003",
+    result: "Bounded pair plan and measured pair gains",
+    boundary: "Explicit top-2 evaluation data",
+    status: { status: "Composable" },
+  },
+  {
+    strategy: "Stability-margin refinement",
+    feature: "CAL-006",
+    result: "Candidate heads refined against an incumbent",
+    boundary: "Explicit post-calibration transform",
+    status: { status: "Composable" },
+  },
+  {
+    strategy: "Counterfactual route oracle",
+    feature: "CAL-007",
+    result: "Best measured route and non-negative regret",
+    boundary: "Offline evaluation over supplied losses",
+    status: { status: "Composable" },
+  },
+  {
+    strategy: "Learned mixture-weight head",
+    feature: "COM-003",
+    result: "Frozen pair-weight map from two scores",
+    boundary: "Explicit fitting and top-2 attachment",
+    status: { status: "Composable" },
+  },
+  {
+    strategy: "Global router recalibration",
+    feature: "RTR-004",
+    result: "New registry-bound logical router",
+    boundary: "Explicit fit, persistence, and activation",
+    status: { status: "Composable" },
+  },
+];
+
+## What this part does
+
+Calibration turns frozen hidden-state features and measured route outcomes into
+router scores that have an operational meaning. It owns the offline data,
+fitting, calibration, refinement, and oracle contracts; it does not execute
+model paths or silently change a live registry.
+
+<IntegrationBadge status="Integrated" />
+
+The primary end-to-end path is feature bank → utility labels → independent
+ridge heads → held-out temperature and threshold calibration → immutable
+router-bearing package. Pair-aware and registry-wide methods are implemented
+and validated as explicit composable workflows.
+
+## Where it fits
+
+Calibration connects expert training to package installation:
+
+1. a frozen router feature extractor produces pre-MLP features;
+2. an external deterministic evaluation loop measures anchor and expert losses;
+3. aligned banks bind those measurements to stable row, layer, and expert IDs;
+4. offline fitting produces frozen router heads;
+5. held-out calibration gives score scale and activation thresholds meaning;
+6. package derivation publishes a new immutable specialization version;
+7. registry synchronization later attaches those artifacts to a model.
+
+The calibration package never downloads a model, captures hidden states through
+hooks, executes counterfactual paths, installs a package, or mutates an
+incumbent router in place.
+
+## Implemented approaches
+
+<StrategyTable
+  caption="Calibration data, fitting, and evaluation strategies"
+  description="Integration labels describe the current lifecycle boundary, not implementation quality. Every row is validated at the stated boundary."
+  columns={[
+    { key: "strategy", label: "Approach" },
+    { key: "feature", label: "Feature" },
+    { key: "result", label: "Produces" },
+    { key: "boundary", label: "Current boundary" },
+    { key: "status", label: "Integration label" },
+  ]}
+  rows={calibrationStrategies}
+/>
+
+### Immutable feature banks
+
+`RouterFeatureBank` stores one finite CPU design matrix for every converted
+layer. All matrices share the same row count, feature size, dtype, and unique
+non-negative row IDs. Dataset identifier, exact revision, split, filters,
+collection seed, feature specification, tensor digests, and a canonical
+metadata hash make the bank auditable without storing prompts.
+
+The version-one format uses non-executable safetensors. Save and load reject
+unsafe paths, accidental overwrites, unexpected tensors, incompatible feature
+spaces, malformed metadata, and digest mismatches.
+
+### Domain and utility labels
+
+`DomainLabelBank` stores deterministic categorical targets. It sorts unique
+class names lexicographically, so class indices do not depend on encounter
+order.
+
+`UtilityLabelBank` stores continuous anchor-relative utility for each
+layer-expert column. Its row IDs and feature-bank metadata hash must exactly
+match the feature bank; expert columns use the same stable order expected by
+append-only router heads.
+
+Domain labels and utility labels are intentionally different types. The
+current ridge fitter accepts utility labels only; it does not silently reinterpret
+domain classes as regression targets.
+
+### Independent ridge heads
+
+`fit_independent_ridge()` fits all expert utility columns for one layer in a
+single deterministic CPU float64 solve. Features and targets are centered, so
+the positive ridge penalty regularizes weights while leaving the intercept
+unregularized.
+
+The result is an `AppendOnlyRouterHeads` object with one frozen affine head per
+layer and expert. Parameters are copied to the feature-bank dtype, ordered
+deterministically, and rejected if reduced-precision deployment would produce
+non-finite state.
+
+### Temperature and activation thresholds
+
+`calibrate_temperature_and_thresholds()` requires a separate held-out bank and
+two explicit, non-empty, disjoint row partitions:
+
+- temperature rows fit one positive scale per head against the binary
+  positive-utility target;
+- threshold rows choose the most sensitive activation boundary that satisfies
+  the requested false-activation budget.
+
+The method never mutates the ridge heads. It returns independent frozen heads
+and a JSON-compatible report containing row partitions, metrics, fallbacks,
+temperatures, and thresholds. Single-class partitions have explicit
+deterministic fallback behavior.
+
+### Immutable package handoff
+
+`derive_calibrated_router_package()` binds already fitted and calibrated heads
+to their exact fitting and calibration bank identities. It verifies globally
+disjoint data IDs, feature topology, expert order, head ownership, dtype,
+report contents, and source-package payload hashes.
+
+The source expert-only package remains byte-for-byte unchanged. The output is a
+new immutable version with router payload, thresholds, calibration provenance,
+and runtime metadata. No fitting or hidden registry synchronization occurs
+during derivation.
+
+### Pair utility and route oracles
+
+`plan_expert_pairs()` can enumerate every expert pair explicitly or choose a
+deterministic bounded subset without materializing the full pair universe.
+`compute_pair_utilities()` aligns supplied anchor, single-expert, and pair
+losses with that plan and records:
+
+- gain over the anchor;
+- improvement over the best individual expert;
+- stable best-pair targets;
+- an optional strict mixture-improvement mask.
+
+`CounterfactualRouteLosses` stores the anchor first, then every single expert,
+then the evaluated sparse pairs. `evaluate_counterfactual_oracle()` compares a
+selected route with the first minimum-loss candidate in that canonical order.
+It evaluates supplied losses; it does not run experts or claim that an
+unevaluated pair is suboptimal.
+
+### Explicit refinement and recalibration
+
+`refine_stability_margins()` adjusts newly calibrated candidate affine state
+against the fixed-zero anchor and an optional frozen incumbent score bank.
+Separate stability rows protect incumbent behavior while positive-utility win
+rows encourage the candidate to clear a declared margin. Temperature,
+threshold, ownership, and append order stay fixed.
+
+`recalibrate_global_router()` is a separate registry-wide mode. It jointly
+refits one frozen logical router against anchored best-route targets, preserves
+column order and calibration metadata, and returns a new registry-bound router
+version. It never activates that router automatically.
+
+`fit_learned_mixture_head()` consumes caller-supplied oracle pair weights
+aligned to a CAL-003 plan. The learned head controls interpolation between an
+already selected pair; it does not change which experts were selected.
+
+## How it works
+
+The integrated anchored top-1 workflow keeps three data boundaries visible:
+
+```text
+Fitting rows
+  → feature bank + utility labels
+  → frozen ridge heads
+
+Held-out calibration rows
+  → temperature partition + threshold partition
+  → frozen calibrated heads + report
+
+Immutable package boundary
+  → expert-only package + exact bank identities
+  → new router-bearing package version
+```
+
+Fitting and calibration rows must be globally disjoint before the package is
+published. Later pair, stability, or registry-wide experiments use explicit
+additional inputs and produce new artifacts rather than modifying this history.
+
+## Mathematical intuition
+
+<EquationBlock
+  intuition="An expert is useful on a row only when its forced path lowers loss relative to the declared incumbent."
+  equation="aₗ,ₜ,ₖ = Lincumbent,ₗ,ₜ − Lexpert k,ₗ,ₜ"
+  spokenLabel="Utility a at layer l, row t, and expert k equals incumbent loss minus forced expert loss."
+  symbols={[
+    { symbol: "Lincumbent", meaning: "The measured loss of the anchor or explicitly declared incumbent route." },
+    { symbol: "Lexpert k", meaning: "The measured loss when complete expert k is forced for the aligned row." },
+    { symbol: "aₗ,ₜ,ₖ", meaning: "Signed utility stored in expert column k of the layer-local label bank." },
+  ]}
+  consequence="Positive utility is evidence for specialization; zero or negative utility is evidence for anchor fallback."
+/>
+
+<EquationBlock
+  intuition="Ridge fitting learns a stable linear predictor of each expert's measured utility from frozen router features."
+  equation="Wₗ = (Xₗ,cᵀ Xₗ,c + λI)⁻¹ Xₗ,cᵀ Yₗ,c"
+  spokenLabel="Layer l ridge weights equal the inverse regularized centered feature covariance times centered feature utility covariance."
+  symbols={[
+    { symbol: "Xₗ,c", meaning: "Centered layer-l feature matrix with shape rows by feature size." },
+    { symbol: "Yₗ,c", meaning: "Centered utility matrix with one column per expert." },
+    { symbol: "λ", meaning: "A finite strictly positive weight penalty; the recovered intercept is not regularized." },
+    { symbol: "Wₗ", meaning: "One fitted affine weight column per layer-local expert." },
+  ]}
+  consequence="All expert heads share the same aligned rows but remain independently appendable and frozen after fitting."
+/>
+
+<EquationBlock
+  intuition="A calibrated specialist supplies positive evidence only after its scaled score clears its own activation threshold."
+  equation="gₗ,ₖ(h) = (wₗ,ₖᵀ φₗ(h) + bₗ,ₖ) / Tₗ,ₖ − τₗ,ₖ"
+  spokenLabel="Calibrated score g equals affine utility score divided by positive temperature T, minus threshold tau."
+  symbols={[
+    { symbol: "φₗ(h)", meaning: "The frozen router feature for hidden state h at layer l." },
+    { symbol: "Tₗ,ₖ", meaning: "Positive per-head temperature fitted on its declared held-out partition." },
+    { symbol: "τₗ,ₖ", meaning: "Per-head threshold selected under the requested false-activation budget." },
+    { symbol: "gₗ,ₖ(h)", meaning: "Evidence compared with the anchor's fixed score of zero." },
+  ]}
+  consequence="Temperature changes confidence scale; the threshold changes the activation boundary. Neither changes the immutable anchor."
+/>
+
+<EquationBlock
+  intuition="Counterfactual regret measures how much loss the selected route leaves on the table among routes that were actually evaluated."
+  equation="Rₜ = Lₜ(selected) − min c∈C Lₜ(c) ≥ 0"
+  spokenLabel="Regret on row t equals selected-route loss minus the minimum loss among evaluated candidates C, and is non-negative."
+  symbols={[
+    { symbol: "C", meaning: "Canonical anchor, complete single-expert, and explicitly evaluated sparse-pair candidates." },
+    { symbol: "Lₜ(c)", meaning: "Caller-supplied finite loss for candidate c on row t." },
+    { symbol: "Rₜ", meaning: "Router regret with stable first-minimum tie-breaking." },
+  ]}
+  consequence="The oracle is only as complete as the supplied candidate table; it never infers missing pair outcomes."
+/>
+
+## Minimal usage
+
+Fit utility heads and calibrate them on explicitly partitioned held-out rows:
+
+```python
+fitted = fit_independent_ridge(
+    fitting_bank,
+    fitting_utilities,
+    regularization=1e-3,
+)
+calibrated, report = calibrate_temperature_and_thresholds(
+    fitted, held_out_bank, held_out_utilities,
+    temperature_row_ids=temperature_rows,
+    threshold_row_ids=threshold_rows,
+    false_activation_rate=0.01,
+)
+```
+
+The fitting and held-out banks must have compatible feature specifications but
+different row identities.
+
+## Verified implementation details
+
+<CodeDisclosure
+  summary="Show a safely serialized feature bank with reproducibility metadata"
+  source="examples/verify_router_feature_bank.py"
+  verified
+>
+
+```python
+bank = RouterFeatureBank.from_feature_batches(
+    {2: [first_batch, second_batch]},
+    feature_specification=extractor.feature_specification,
+    dataset_provenance={
+        "dataset_id": "synthetic/router-reference",
+        "revision": "1",
+        "split": "train",
+        "filters": [],
+    },
+    seed=17,
+)
+bank.save_safetensors(payload_path)
+```
+
+Expected invariant: safe reload reproduces the exact tensors, row order,
+feature specification, provenance, and canonical metadata identity.
+</CodeDisclosure>
+
+<CodeDisclosure
+  summary="Show deterministic ridge fitting and anchor-aware decisions"
+  source="examples/verify_independent_ridge.py"
+  verified
+>
+
+```python
+router = fit_independent_ridge(
+    feature_bank,
+    utilities,
+    regularization=1e-6,
+)
+scores = router(features, layer_index=2)
+decision = AnchoredTop1Selection()(
+    scores,
+    expert_ids=router.expert_ids_for_layer(2),
+)
+```
+
+Expected invariant: negative, zero, and positive feature regions select the
+intended expert, anchor, and other expert; every fitted head is frozen.
+</CodeDisclosure>
+
+<CodeDisclosure
+  summary="Show held-out temperature and false-activation threshold fitting"
+  source="examples/verify_temperature_thresholds.py"
+  verified
+>
+
+```python
+calibrated, report = calibrate_temperature_and_thresholds(
+    fitted,
+    calibration_bank,
+    calibration_utilities,
+    temperature_row_ids=[10, 11, 12, 13],
+    threshold_row_ids=[14, 15, 16, 17, 18, 19],
+    false_activation_rate=1.0 / 3.0,
+)
+```
+
+Expected invariant: partitions are disjoint and canonical, the source router
+stays unchanged, deployed decisions match the expected anchor/expert routes,
+and the report is finite JSON.
+</CodeDisclosure>
+
+<CodeDisclosure
+  summary="Show bounded pair utility and sparse oracle evaluation"
+  source="examples/verify_pair_utilities.py"
+  verified
+>
+
+```python
+plan = plan_expert_pairs(
+    expert_ids,
+    max_pairs=3,
+    seed=17,
+)
+pair_utility = compute_pair_utilities(
+    plan,
+    anchor_losses=anchor_losses,
+    single_losses=single_losses,
+    pair_losses=pair_losses,
+    loss_name="cross_entropy",
+)
+oracle = evaluate_counterfactual_oracle(
+    pair_utility.to_counterfactual_route_losses(),
+    selected_pair_columns,
+)
+```
+
+Expected invariant: the bounded plan is deterministic, all losses become
+detached CPU storage, and regret is non-negative over exactly the evaluated
+candidates.
+</CodeDisclosure>
+
+## Current limitations
+
+- Feature and label formats are unsharded, in-memory, and CPU-oriented. They
+  have no streaming writer, memory mapping, compression, or distributed merge.
+- Model hooks, hidden-state collection, forced-path counterfactual execution,
+  and automatic dataset splitting remain caller-owned workflows.
+- Ridge fitting accepts aligned utility targets only. Domain-target fitting,
+  weighting, incremental updates, and accelerator fitting are unsupported.
+- Temperature calibration is independent per head and binary. It does not
+  provide joint multiclass confidence calibration or confidence intervals.
+- Threshold fitting requires explicit disjoint partitions. It controls the
+  observed held-out false-activation rate, not a population guarantee.
+- Stability refinement changes affine parameters without re-enforcing the
+  earlier CAL-005 false-activation budget; its new report becomes
+  authoritative.
+- Pair planning stores no persistent pair-utility bank and cannot assess
+  unevaluated pairs. Counterfactual model execution and learned oracle mixture
+  weights remain external.
+- Global recalibration has no pair-aware top-2 objective and never activates
+  its output automatically.
+- Package-driven top-2 attachment, mixed precision, multi-device fitting, and
+  production-scale Qwen3 calibration remain future validation work.
+
+## References
+
+<PaperReference
+  title="On Calibration of Modern Neural Networks"
+  authors="Chuan Guo, Geoff Pleiss, Yu Sun, and Kilian Q. Weinberger"
+  arxivId="1706.04599"
+  purpose="Motivates post-hoc temperature scaling on held-out predictions."
+  difference="CAL-005 fits one binary positive-utility temperature per expert, then applies a separate false-activation-constrained threshold policy."
+/>
+
+Hoerl and Kennard,
+[“Ridge Regression: Biased Estimation for Nonorthogonal
+Problems”](https://doi.org/10.1080/00401706.1970.10488634), motivate the
+strictly positive weight penalty used by CAL-004. The original primary paper
+is linked through its DOI because it predates arXiv. Mutations leaves the
+intercept unregularized, solves layer-local multi-output utility targets
+together, and publishes frozen affine router heads rather than a general
+regression estimator.
+
+[Safetensors](https://huggingface.co/docs/safetensors/) motivates the
+non-executable bank and router formats.
+[Hugging Face Datasets](https://huggingface.co/docs/datasets/loading)
+motivates explicit dataset identifiers, revisions, splits, and filters.
+[FIPS 180-4](https://doi.org/10.6028/NIST.FIPS.180-4) defines the SHA-256
+integrity primitive used for canonical metadata and tensor digests.
+
+CAL-001, CAL-002, CAL-003, CAL-006, CAL-007, COM-003, and RTR-004 are
+project-specific framework mechanisms rather than algorithms attributed to a
+paper. Their objectives, deterministic choices, ownership boundaries, and
+deviations are documented in the
+[calibration theory README](https://github.com/nflavioquatraro/mutations/blob/main/src/anchored_moe/calibration/README.md).
+The
+[architecture blueprint](https://github.com/nflavioquatraro/mutations/blob/main/anchored-plugin-moe-architecture.md)
+defines their role in the immutable-anchor design.
+
+## Related pages
+
+- Read [routers](/docs/routers/) for feature extraction, package-owned heads,
+  logical compilation, and global recalibration boundaries.
+- Read [policies](/docs/policies/) for anchored top-1, top-2 selection, learned
+  pair combination, and capacity fallback.
+- Read [training](/docs/training/) for the workflows that produce expert
+  parameters before calibration.
+- Read [experts](/docs/experts/) for the representations whose forced-path
+  losses become utility labels.
+- The planned **Registry** page will explain calibrated package manifests,
+  compatibility checks, explicit synchronization, upgrades, and rollback.
