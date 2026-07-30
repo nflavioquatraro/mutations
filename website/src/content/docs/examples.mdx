@@ -1,6 +1,6 @@
 ---
 title: End-to-end examples
-description: Compare complete Anchored Plug-in MoE workflows, from exact anchor conversion through routed deltas, local training, hierarchical routing, and prompt-level shortlisting.
+description: Compare complete Anchored Plug-in MoE workflows, from exact anchor conversion through routed deltas, local training, hierarchical routing, prompt-level shortlisting, and compatibility-constrained mixtures.
 order: 13
 group: Learn by example
 source:
@@ -18,11 +18,13 @@ source:
   - examples/verify_mixture_aware_refinement.py
   - examples/verify_hierarchical_routing.py
   - examples/verify_prompt_shortlisting.py
+  - examples/verify_compatibility_top2.py
   - tests/integration/test_anchor_delta_routed_mlp.py
   - tests/integration/test_hierarchical_top2_dispatch.py
   - tests/integration/test_local_mini_moe_trainer.py
   - tests/integration/test_mixture_aware_refinement_pipeline.py
   - tests/integration/test_prompt_shortlisted_routing.py
+  - tests/integration/test_registry_compatibility_top2.py
   - tests/integration/test_qwen3_equivalence.py
   - tests/integration/test_affine_router_adaptive.py
   - tests/integration/test_affine_router_top2.py
@@ -37,8 +39,10 @@ source:
   - tests/unit/test_package_export.py
   - tests/unit/test_prompt_shortlisting.py
   - tests/unit/test_calibrated_package_export.py
+  - tests/unit/test_compatibility_top2_selection.py
   - tests/unit/test_composition_checkpoint.py
   - tests/unit/test_efficiency.py
+  - tests/unit/test_mixture_compatibility.py
   - tests/unit/test_top2_selection.py
   - tests/unit/test_top2_dispatch.py
   - src/anchored_moe/experts/README.md
@@ -67,6 +71,7 @@ feature_ids:
   - POL-002
   - POL-003
   - POL-004
+  - POL-005
   - COM-001
   - COM-004
   - BAL-002
@@ -76,6 +81,7 @@ feature_ids:
   - CAL-004
   - CAL-005
   - PKG-002
+  - PKG-003
   - PKG-007
   - EVAL-001
   - EVAL-005
@@ -157,6 +163,14 @@ export const exampleWorkflows = [
     bestFor: "Bounding flat-router work",
     guide: "Published below",
   },
+  {
+    approach: "Compatibility-constrained top-2",
+    active: "Anchor or 2 compatible experts",
+    expert: "Complete experts in one declared group",
+    lifecycle: { status: "Research primitive" },
+    bestFor: "Preventing invalid global mixtures",
+    guide: "Published below",
+  },
 ];
 
 ## What this page does
@@ -172,7 +186,8 @@ the columns evaluated by token-level routing.
 The comparison table keeps integration boundaries visible from the start.
 Exact conversion, packaged top-1, weighted top-2, adaptive selection, routed
 LoRA deltas, local mini-MoE training, package-first hierarchy, and
-prompt-shortlisted top-1 are published below.
+prompt-shortlisted top-1 are published below. The final guide adds a global
+top-2 policy that rejects cross-group pairs before sparse execution.
 
 ## Compare the workflows
 
@@ -1991,3 +2006,238 @@ paper-derived retrieval algorithm.
   that prompt shortlisting does not yet automatically join.
 - [Evaluation](/docs/evaluation/) separates deterministic routing evidence
   from retrieval quality and production-efficiency claims.
+
+## Compatibility-constrained global top-2
+
+<IntegrationBadge status="Research primitive" />
+
+### The problem it solves
+
+Ordinary global top-2 can combine the two highest-scoring specialists even
+when they were trained independently and should never run as one mixture.
+Compatibility-constrained top-2 keeps global candidate scoring, but permits a
+pair only when both experts declare the same non-empty compatibility group.
+
+The rule is conservative in two ways. Two positive scores are required, and a
+missing group means “not mixable” rather than membership in an implicit
+default group. When no eligible pair exists, the fixed-zero anchor vetoes
+specialist execution.
+
+### Workflow contract
+
+- **Expert representation:** complete experts with stable IDs and explicit
+  package payload bindings. Every expert considered at a converted layer must
+  appear exactly once in the compatibility index.
+- **Routing and selection:** calibrated scores retain global expert order.
+  `CompatibilityConstrainedTop2Selection` evaluates distinct, positive,
+  same-group pairs and ranks them lexicographically by their stronger and
+  weaker member scores. Stable append order resolves exact ties.
+- **Combination and capacity:** an eligible pair uses the existing
+  score-softmax combination and `INF-002` sparse pair dispatcher. If no
+  eligible pair exists, selection produces an anchor-containing decision and
+  the dispatcher executes the dense anchor exactly.
+- **Training and calibration:** the policy consumes frozen scores and declared
+  metadata. It does not learn compatibility, recalibrate router heads, or
+  change expert parameters.
+- **Active work:** all \(K\) specialist scores remain inputs, compatibility
+  filtering considers candidate pairs, and execution remains bounded to the
+  anchor or two specialists per token.
+- **Packaging and serialization:** `ExpertRegistry.mixture_compatibility()`
+  derives an immutable layer-local index from active packages. Selection and
+  dispatch are then assembled explicitly; they are not automatically attached
+  to `RoutedMLP` or saved in a composition checkpoint.
+- **Expected result:** higher-scoring incompatible or ungrouped specialists
+  never execute, compatible selected pairs preserve score gradients and sparse
+  calls, and registry changes produce a new exact index or anchor fallback.
+
+### How compatibility filters global routing
+
+```text
+Active package manifests and payload bindings
+  → derive a layer-local compatibility index
+  → score specialists in stable global order
+  → keep distinct positive pairs in one explicit group
+  → choose the lexicographically strongest eligible pair
+  → mix that pair, or execute the anchor exactly
+```
+
+Compatibility is an eligibility rule, not a second router. It prevents invalid
+mixtures but does not reduce the number of router columns scored.
+
+### Eligible-pair rule
+
+<EquationBlock
+  intuition="Form pairs only from two positive specialists that explicitly share a compatibility group, then choose the strongest permitted pair."
+  equation="P(h) = {(i,j): i < j ∧ c_i = c_j ≠ ⊥ ∧ g_i(h) > 0 ∧ g_j(h) > 0};  (i*,j*) = arg max_lex (g_(1), g_(2))"
+  spokenLabel="The eligible set P of h contains distinct expert pairs whose declared groups match and whose two scores are positive. The selected pair maximizes the stronger score first and the weaker score second."
+  symbols={[
+    { symbol: "h", meaning: "One token representation presented to the routed MLP." },
+    { symbol: "g_i(h)", meaning: "The calibrated score for specialist i." },
+    { symbol: "c_i", meaning: "Specialist i's explicit compatibility-group identifier." },
+    { symbol: "⊥", meaning: "A missing group declaration, which is never mixable." },
+    { symbol: "P(h)", meaning: "The token's set of eligible compatible pairs." },
+    { symbol: "g_(1), g_(2)", meaning: "The stronger and weaker score of one eligible pair." },
+  ]}
+  consequence="If P(h) is empty, the decision includes the fixed-zero anchor and sparse dispatch runs the dense MLP. Permission to mix does not imply that the mixture improves model quality."
+/>
+
+### Two-token walkthrough
+
+The deterministic fixture has code, two mathematics experts, and one ungrouped
+general expert. Only the two mathematics experts share `math-v1`.
+
+<StrategyTable
+  caption="Compatibility-constrained top-2 example"
+  description="High individual scores cannot override explicit mixture compatibility. Candidate indices are global and keep index 0 for the anchor."
+  columns={[
+    { key: "token", label: "Token scores" },
+    { key: "eligible", label: "Eligible pair" },
+    { key: "decision", label: "Recorded decision" },
+    { key: "execution", label: "Execution" },
+  ]}
+  rows={[
+    {
+      token: "[0.95, 0.80, 0.70, 1.10]",
+      eligible: "math:0 + math:1",
+      decision: "[2, 3]",
+      execution: "Mix the two mathematics experts",
+    },
+    {
+      token: "[0.60, 0.20, -0.10, 0.90]",
+      eligible: "None",
+      decision: "[4, 0]",
+      execution: "Anchor veto; run the dense MLP",
+    },
+  ]}
+/>
+
+For the first token, the ungrouped general expert and incompatible code expert
+have higher individual scores than at least one mathematics expert, but neither
+can enter a valid pair. For the second token, only one mathematics score is
+positive, so the decision records the strongest specialist beside the anchor
+and the dispatcher executes only the anchor.
+
+### Minimal explicit composition
+
+```python
+compatibility = registry.mixture_compatibility(layer_index=2)
+dispatcher = AnchoredTop2Dispatcher(
+    selection_policy=CompatibilityConstrainedTop2Selection(compatibility),
+)
+result = dispatcher.dispatch(
+    hidden_states, expert_scores=scores,
+    expert_ids=compatibility.expert_ids,
+    anchor_mlp=anchor, experts=experts,
+)
+```
+
+The registry supplies immutable compatibility metadata; the caller explicitly
+connects it to the validated pair selection, combination, and dispatch path.
+
+### Verify compatible selection and sparse execution
+
+From the repository root, run:
+
+```bash
+python examples/verify_compatibility_top2.py
+```
+
+The deterministic offline example reports pair decisions
+`[[2, 3], [4, 0]]` and anchor fallback `[false, true]`. The incompatible code
+expert and ungrouped general expert are never executed.
+
+<CodeDisclosure
+  summary="Show incompatible high scores being excluded"
+  source="examples/verify_compatibility_top2.py"
+  verified
+>
+
+```python
+compatibility = MixtureCompatibilityIndex(
+    expert_ids=("code:0", "math:0", "math:1", "general:0"),
+    group_ids=("code-v1", "math-v1", "math-v1", None),
+)
+result = AnchoredTop2Dispatcher(
+    selection_policy=CompatibilityConstrainedTop2Selection(compatibility),
+).dispatch(hidden, expert_scores=scores, expert_ids=compatibility.expert_ids,
+           anchor_mlp=anchor, experts=experts)
+assert result.selected_routes.selected_indices.tolist() == [[2, 3], [4, 0]]
+assert code.calls == general.calls == 0
+```
+
+Expected invariants: only the explicit same-group pair executes, ungrouped and
+incompatible experts remain inactive despite higher scores, mixture weights
+come from the retained scores, and the second token is exactly the anchor
+output.
+</CodeDisclosure>
+
+### Verify registry lifecycle behavior
+
+The focused integration test derives compatibility from three installed
+packages. It first selects a declared code-and-mathematics pair, then unloads
+one member and proves that the remaining incompatible candidates return to the
+anchor.
+
+<CodeDisclosure
+  summary="Show package unload removing pair eligibility"
+  source="tests/integration/test_registry_compatibility_top2.py"
+  verified
+>
+
+```python
+index = registry.mixture_compatibility(layer_index=2)
+assert index.group_ids == ("reasoning-v1", "reasoning-v1", None)
+
+registry.unload(math.identity)
+reduced = registry.mixture_compatibility(layer_index=2)
+fallback = AnchoredTop2Dispatcher(
+    selection_policy=CompatibilityConstrainedTop2Selection(reduced),
+).dispatch(hidden, expert_scores=torch.tensor([[0.9, 1.2]]),
+           expert_ids=reduced.expert_ids, anchor_mlp=anchor, experts=experts)
+assert fallback.selected_routes.anchor_mask.item()
+assert torch.equal(fallback.output, hidden)
+```
+
+Expected invariants: the index follows the active registry snapshot, stable
+expert IDs rather than filenames determine alignment, unload removes pair
+eligibility without hidden recalibration, and exact anchor behavior is
+restored.
+</CodeDisclosure>
+
+### Current limitations
+
+- Compatibility requires explicit package payload bindings and complete,
+  unambiguous layer coverage. Legacy binding-free packages cannot supply an
+  index.
+- A package-level group is a coarse permission. Version 1 does not learn
+  pairwise utility, express layer-specific group membership, or prove that an
+  allowed mixture is beneficial.
+- Pair filtering does not reduce flat-router score work and a straightforward
+  global pair search scales quadratically with the candidate count.
+- The validated path is explicit standalone composition. Package-driven
+  top-2 `RoutedMLP` attachment, model-level strategy configuration,
+  composition-checkpoint persistence, and route telemetry remain future work.
+- Capacity degradation beyond the existing pair-shaped dispatcher,
+  accelerator performance, distributed execution, and production-scale
+  registries are not validated here.
+- The fixtures establish deterministic eligibility, lifecycle updates, sparse
+  calls, gradients, and exact fallback—not specialization quality or gains
+  from expert synergy.
+
+### References and related pages
+
+Compatibility-constrained top-2 is project-specific framework infrastructure
+from the architecture blueprint. It applies declared metadata to the existing
+anchored pair policy and does not claim a paper-derived compatibility-learning
+method.
+
+- [Registry](/docs/registry/) defines `PKG-003`, immutable compatibility
+  indices, stable expert-ID alignment, and install/unload behavior.
+- [Policies](/docs/policies/) specifies `POL-005` positive-pair eligibility,
+  lexicographic ranking, deterministic ties, and anchor fallback.
+- [Inference](/docs/inference/) documents `INF-002` sparse pair execution,
+  score-softmax combination, and exact token reconstruction.
+- [Calibration](/docs/calibration/) explains where the frozen specialist scores
+  come from; compatibility filtering does not recalibrate them.
+- [Evaluation](/docs/evaluation/) separates deterministic framework evidence
+  from mixture-quality and production-scaling claims.
