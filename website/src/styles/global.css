@@ -9,6 +9,7 @@
   --hairline: rgba(32, 85, 141, 0.16);
   --font-sans: "Helvetica Neue", "Avenir Next", Arial, sans-serif;
   --font-mono: "SFMono-Regular", "SF Mono", "Roboto Mono", Menlo, Consolas, monospace;
+  --docs-reading-measure: 74ch;
   --page-x: clamp(2rem, 3.5vw, 4.25rem);
   --header-h: 7rem;
   --section-progress: 0;
@@ -1136,14 +1137,17 @@ a {
   font-weight: 400;
   letter-spacing: -0.06em;
   line-height: 0.96;
+  overflow-wrap: break-word;
+  text-wrap: balance;
 }
 
 .article-title > p:not(.section-kicker) {
-  max-width: 37rem;
+  max-width: 62ch;
   margin: 1.8rem 0 0;
   color: var(--ink-soft);
   font-size: 1.05rem;
   line-height: 1.6;
+  text-wrap: pretty;
 }
 
 .article-sources {
@@ -1164,6 +1168,7 @@ a {
 }
 
 .article-sources a {
+  overflow-wrap: anywhere;
   text-decoration: underline;
   text-decoration-color: rgba(22, 70, 125, 0.25);
   text-underline-offset: 0.2em;
@@ -1216,11 +1221,14 @@ a {
 .prose h2,
 .prose h3,
 .prose h4 {
+  max-width: var(--docs-reading-measure);
   color: var(--ink-dark);
   font-weight: 500;
   letter-spacing: -0.035em;
   line-height: 1.15;
+  overflow-wrap: break-word;
   scroll-margin-top: 8rem;
+  text-wrap: balance;
 }
 
 .prose h2 {
@@ -1243,17 +1251,65 @@ a {
 .prose p,
 .prose ul,
 .prose ol {
-  max-width: 48rem;
+  max-width: var(--docs-reading-measure);
+}
+
+.prose p {
+  margin: 0 0 1.35rem;
+  text-wrap: pretty;
+}
+
+.prose ul,
+.prose ol {
+  margin: 0 0 1.6rem;
+  padding-left: 1.4rem;
+}
+
+.prose li {
+  padding-left: 0.2rem;
+}
+
+.prose li + li {
+  margin-top: 0.48rem;
+}
+
+.prose li > ul,
+.prose li > ol {
+  margin-top: 0.48rem;
+  margin-bottom: 0.55rem;
+}
+
+.prose li::marker {
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-weight: 700;
+}
+
+.prose strong {
+  color: var(--ink-dark);
+  font-weight: 650;
+}
+
+.prose em {
+  color: #355a7d;
 }
 
 .prose a {
   color: var(--ink);
   text-decoration: underline;
   text-decoration-color: rgba(22, 70, 125, 0.32);
+  text-decoration-thickness: 0.08em;
   text-underline-offset: 0.2em;
+  transition: color 160ms ease, text-decoration-color 160ms ease;
+}
+
+.prose a:hover {
+  color: var(--ink-dark);
+  text-decoration-color: currentColor;
 }
 
 .prose code {
+  overflow-wrap: break-word;
   padding: 0.12em 0.35em;
   border: 1px solid rgba(23, 73, 126, 0.12);
   border-radius: 0.18rem;
@@ -1267,25 +1323,34 @@ a {
   margin: 1.75rem 0;
   padding: 1.35rem;
   overflow: auto;
+  overscroll-behavior-inline: contain;
   border: 1px solid var(--hairline);
   border-radius: 0;
   background: rgba(242, 246, 250, 0.9) !important;
   font-size: 0.82rem;
   line-height: 1.65;
+  scrollbar-width: thin;
 }
 
 .prose pre code {
+  overflow-wrap: normal;
   padding: 0;
   border: 0;
   background: transparent;
+  white-space: pre;
 }
 
 .prose blockquote {
+  max-width: var(--docs-reading-measure);
   margin: 2rem 0;
   padding: 0.5rem 0 0.5rem 1.5rem;
   border-left: 2px solid var(--ink);
   color: var(--ink-soft);
   font-size: 1.1rem;
+}
+
+.prose blockquote > :last-child {
+  margin-bottom: 0;
 }
 
 .prose table {
@@ -1294,8 +1359,10 @@ a {
   max-width: 100%;
   margin: 2rem 0;
   overflow-x: auto;
+  overscroll-behavior-inline: contain;
   border-collapse: collapse;
   font-size: 0.88rem;
+  scrollbar-width: thin;
 }
 
 .prose th,
@@ -1490,6 +1557,20 @@ a {
   .article-shell {
     width: 100%;
   }
+
+  .article-sources {
+    gap: 0.2rem 0.8rem;
+  }
+
+  .article-sources > span {
+    width: 100%;
+  }
+
+  .article-sources a {
+    display: inline-flex;
+    min-height: 2.75rem;
+    align-items: center;
+  }
 }
 
 @media (max-width: 720px) {
@@ -1668,12 +1749,32 @@ a {
     font-size: clamp(2.8rem, 13vw, 4.3rem);
   }
 
+  .article-title > p:not(.section-kicker) {
+    font-size: 1rem;
+    line-height: 1.65;
+  }
+
   .prose {
     font-size: 0.94rem;
+    line-height: 1.72;
   }
 
   .prose h2 {
     font-size: 1.75rem;
+  }
+
+  .prose h3 {
+    font-size: 1.35rem;
+  }
+
+  .prose ul,
+  .prose ol {
+    padding-left: 1.2rem;
+  }
+
+  .prose blockquote {
+    padding-left: 1rem;
+    font-size: 1rem;
   }
 
   .prose pre,
