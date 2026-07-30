@@ -1,0 +1,101 @@
+---
+import type { MarkdownHeading } from "astro";
+import {
+  groupDocumentationEntries,
+  type DocsEntry,
+} from "../../lib/docs";
+
+interface Props {
+  currentEntry: DocsEntry;
+  entries: DocsEntry[];
+  headings: MarkdownHeading[];
+  reviewed: string;
+}
+
+const { currentEntry, entries, headings, reviewed } = Astro.props;
+const groupedDocs = groupDocumentationEntries(entries);
+const visibleHeadings = headings.filter(
+  (heading) => heading.depth === 2 || heading.depth === 3,
+);
+---
+
+<aside class="mobile-docs-navigation" aria-label="Document navigation">
+  <details class="mobile-docs-disclosure" data-docs-disclosure="hierarchy">
+    <summary>
+      <span>
+        <small>Documentation</small>
+        <strong>{currentEntry.data.title}</strong>
+      </span>
+      <span class="mobile-disclosure-marker" aria-hidden="true">
+        <span class="when-closed">+</span>
+        <span class="when-open">−</span>
+      </span>
+    </summary>
+
+    <div class="mobile-docs-panel">
+      <a class="mobile-docs-home" href="/docs/">← Documentation index</a>
+      <nav aria-label="Documentation pages">
+        {groupedDocs.map(({ group, entries: groupEntries }) => {
+          const groupId = `mobile-sidebar-${group
+            .toLowerCase()
+            .replaceAll(" ", "-")}`;
+
+          return (
+            <section class="mobile-docs-group" aria-labelledby={groupId}>
+              <h2 id={groupId}>{group}</h2>
+              <ul>
+                {groupEntries.map((entry) => (
+                  <li>
+                    <a
+                      href={`/docs/${entry.id}/`}
+                      aria-current={
+                        entry.id === currentEntry.id ? "page" : undefined
+                      }
+                    >
+                      <span aria-hidden="true">
+                        {String(entry.data.order).padStart(2, "0")}
+                      </span>
+                      {entry.data.title}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          );
+        })}
+      </nav>
+    </div>
+  </details>
+
+  {
+    visibleHeadings.length > 0 && (
+      <details class="mobile-docs-disclosure" data-docs-disclosure="toc">
+        <summary>
+          <span>
+            <small>On this page</small>
+            <strong>{visibleHeadings.length} sections</strong>
+          </span>
+          <span class="mobile-disclosure-marker" aria-hidden="true">
+            <span class="when-closed">+</span>
+            <span class="when-open">−</span>
+          </span>
+        </summary>
+
+        <nav class="mobile-toc-panel" aria-label="On this page">
+          <ol>
+            {visibleHeadings.map((heading) => (
+              <li class:list={{ "toc-subheading": heading.depth === 3 }}>
+                <a href={`#${heading.slug}`}>{heading.text}</a>
+              </li>
+            ))}
+          </ol>
+        </nav>
+      </details>
+    )
+  }
+
+  <div class="mobile-docs-meta" aria-label="Document status">
+    <span>{currentEntry.data.group}</span>
+    <span>Reviewed {reviewed}</span>
+  </div>
+</aside>

@@ -2,6 +2,7 @@
 import Brand from "../components/Brand.astro";
 import DocsSidebar from "../components/docs/DocsSidebar.astro";
 import DocumentPagination from "../components/docs/DocumentPagination.astro";
+import MobileDocsNavigation from "../components/docs/MobileDocsNavigation.astro";
 import TableOfContents from "../components/docs/TableOfContents.astro";
 import BaseLayout from "./BaseLayout.astro";
 import {
@@ -43,11 +44,12 @@ const reviewed = new Intl.DateTimeFormat("en", {
     </nav>
   </header>
 
-  <aside class="article-mobile-context" aria-label="Document context">
-    <a href="/docs/">← Documentation</a>
-    <span>{entry.data.group}</span>
-    <span>Reviewed {reviewed}</span>
-  </aside>
+  <MobileDocsNavigation
+    currentEntry={entry}
+    entries={entries}
+    headings={headings}
+    reviewed={reviewed}
+  />
 
   <div class="docs-workspace">
     <DocsSidebar currentEntry={entry} entries={entries} reviewed={reviewed} />
@@ -92,6 +94,8 @@ const reviewed = new Intl.DateTimeFormat("en", {
       const details = event.target.parentElement;
       if (!(details instanceof HTMLDetailsElement)) return;
 
+      // Preserve native disclosure behavior while normalizing keyboard
+      // activation in browser environments that do not toggle summary keys.
       event.preventDefault();
       details.open = !details.open;
     });
