@@ -1,0 +1,365 @@
+---
+title: Configuration and modeling
+description: Configure converted layers, load or wrap an immutable anchor, and understand which routing modes are integrated through the model façade.
+order: 3
+group: Introduction
+source:
+  - src/anchored_moe/configuration.py
+  - src/anchored_moe/modeling.py
+  - README.md
+  - tests/unit/test_configuration.py
+  - tests/integration/test_anchored_causal_lm.py
+  - examples/verify_dense_equivalence.py
+  - examples/verify_package_runtime.py
+feature_ids:
+  - CORE-001
+  - CORE-003
+  - CORE-004
+  - CORE-005
+  - CORE-006
+  - INF-001
+  - PKG-007
+last_reviewed: 2026-07-30
+---
+
+import CodeDisclosure from "../../components/docs/CodeDisclosure.astro";
+import EquationBlock from "../../components/docs/EquationBlock.astro";
+import IntegrationBadge from "../../components/docs/IntegrationBadge.astro";
+import StrategyTable from "../../components/docs/StrategyTable.astro";
+
+export const modelingStrategies = [
+  {
+    approach: "Forced anchor",
+    entryPoint: "Configuration and every newly converted routed wrapper",
+    status: { status: "Integrated" },
+    boundary:
+      "The only declarative model-level strategy. It executes the original dense MLP exactly.",
+  },
+  {
+    approach: "Packaged anchored top-1",
+    entryPoint: "Install followed by explicit registry synchronization",
+    status: { status: "Integrated" },
+    boundary:
+      "The complete package lifecycle can attach, remove, save, and reload full-MLP specialists.",
+  },
+  {
+    approach: "Weighted top-2 and adaptive routing",
+    entryPoint: "Explicit policies and sparse dispatchers",
+    status: { status: "Composable" },
+    boundary:
+      "Tested components can be assembled directly, but packages do not configure this model-level runtime.",
+  },
+  {
+    approach: "Anchor plus deltas and parameter merging",
+    entryPoint: "Explicit routed-wrapper configuration methods",
+    status: { status: "Composable" },
+    boundary:
+      "The wrapper supports controlled LoRA experiments; package-driven delta materialization is separate work.",
+  },
+  {
+    approach: "Local mini-MoE and forced-expert training",
+    entryPoint: "Training-specific routed-wrapper configuration methods",
+    status: { status: "Composable" },
+    boundary:
+      "Temporary training runtimes restore forced-anchor behavior after success or failure.",
+  },
+  {
+    approach: "Hierarchical, dynamic-k, shortlisting, and expert choice",
+    entryPoint: "Standalone research interfaces",
+    status: { status: "Research primitive" },
+    boundary:
+      "Validated for experiments without a declarative model façade or package-to-model lifecycle.",
+  },
+];
+
+## What this part does
+
+Configuration records the identity of the immutable anchor, chooses a
+model-family backend, and selects which decoder MLPs become routed wrappers.
+The model façade then preserves the anchor's native forward and generation
+behavior while exposing an explicit package lifecycle.
+
+<IntegrationBadge status="Integrated" />
+
+The integrated model-level path is intentionally conservative: conversion
+starts in exact forced-anchor mode, and packaged anchored top-1 routing becomes
+active only after an explicit synchronization call.
+
+## Where it fits
+
+`AnchoredMoEConfig` and `AnchoredMoEForCausalLM` connect the framework's
+otherwise independent parts:
+
+1. configuration pins the anchor and resolves converted layers;
+2. a backend validates the model family and locates its MLPs;
+3. conversion freezes the complete anchor and wraps only the selected MLPs;
+4. the façade delegates `forward()` and `generate()` to that converted anchor;
+5. registry operations update package state without changing execution;
+6. synchronization materializes the supported anchored top-1 runtime;
+7. local composition export records the synchronized result without copying
+   the anchor weights.
+
+The configuration does not contain live modules, tensors, or package payloads.
+It is a serializable contract that can be compared with the model and package
+metadata before runtime mutation occurs.
+
+## Implemented approaches
+
+<StrategyTable
+  caption="Routing and modeling integration boundaries"
+  description="A validated primitive is listed separately from a mode available through AnchoredMoEConfig and the complete package lifecycle."
+  columns={[
+    { key: "approach", label: "Approach" },
+    { key: "entryPoint", label: "Current entry point" },
+    { key: "status", label: "Integration label" },
+    { key: "boundary", label: "Current boundary" },
+  ]}
+  rows={modelingStrategies}
+/>
+
+### The executable configuration boundary
+
+The resolved foundation configuration contains five independent blocks:
+
+| Block | Current executable value | Practical effect |
+|---|---|---|
+| `router` | `architecture: none` | No specialist score is evaluated after conversion. |
+| `selection` | `policy: forced_anchor` | Every token selects candidate zero. |
+| `combination` | `policy: hard` | The selected path is returned without interpolation. |
+| `capacity` | `overflow: anchor` | The permanent fallback remains the dense MLP. |
+| `registry` | `recalibration: none` | No hidden router fitting occurs. |
+
+These are strict executable defaults, not a catalogue of every implemented
+strategy. Passing `anchored_top1`, top-2, adaptive, or another advanced value
+through `strategy_config` currently raises an error instead of silently
+falling back to the anchor.
+
+Packaged anchored top-1 is nevertheless integrated: it is activated from
+validated package artifacts by `synchronize_registry()`. This separate entry
+point keeps the serialized foundation configuration honest about what it can
+construct by itself.
+
+## How it works
+
+### Choose the anchor and layers
+
+`AnchoredMoEConfig` can record:
+
+- the base-model repository or local path and exact revision;
+- an optional SHA-256 digest of the resolved base configuration;
+- tokenizer identity and revision;
+- the backend name, currently `qwen3`;
+- either `upper_half` or an explicit list of zero-based decoder layers;
+- the five independent strategy blocks.
+
+Explicit layer indices are sorted, deduplicated, and checked against the model
+depth. Invalid or empty selections fail before conversion. When a live
+configuration digest is supplied, the façade verifies it before any MLP is
+wrapped.
+
+### Load or wrap the model
+
+Use `from_anchor_model()` when a supported Hugging Face causal language model
+is already in memory. Conversion happens in place, and the façade derives a
+configuration digest when a complete `AnchoredMoEConfig` is not supplied.
+
+Use `from_pretrained()` for either:
+
+- a base checkpoint, which is loaded through `AutoModelForCausalLM` and then
+  converted; or
+- a local Mutations composition checkpoint, whose immutable saved
+  configuration, packages, and anchor reference are validated before the
+  anchored top-1 runtime is restored.
+
+In both cases, the native model-family implementation still owns forward and
+generation behavior. The façade rejects replacement of the frozen input and
+output embeddings.
+
+### Apply registry changes deliberately
+
+`install()`, `unload()`, `upgrade()`, and `rollback()` change only the in-memory
+registry. The routed wrappers continue to represent the last successfully
+synchronized registry until the caller invokes `synchronize_registry()`.
+
+Synchronization validates every candidate artifact and constructs the
+replacement runtime before changing a wrapper. Synchronizing an empty registry
+returns every converted layer to exact forced-anchor execution.
+
+This separation means that inspecting or preparing registry state cannot
+silently alter model outputs.
+
+## Mathematical intuition
+
+<EquationBlock
+  intuition="The upper-half selector converts the final half of the decoder, including the middle layer when the depth is odd."
+  equation="C(L) = {⌊L / 2⌋, ⌊L / 2⌋ + 1, …, L − 1}"
+  spokenLabel="The converted-layer set C of L starts at the floor of L divided by two and continues through L minus one."
+  symbols={[
+    { symbol: "L", meaning: "The positive number of decoder layers in the anchor model." },
+    { symbol: "C(L)", meaning: "The ordered set of zero-based MLP layer indices selected for conversion." },
+    { symbol: "⌊L / 2⌋", meaning: "Integer floor division, which starts at layer 2 for a five-layer model." },
+  ]}
+  consequence="A five-layer model converts layers 2, 3, and 4; an explicit list remains available when a different placement is required."
+/>
+
+Layer selection changes where routing can happen, not the initial computation.
+Immediately after conversion, each selected wrapper still evaluates its
+original dense MLP once.
+
+## Minimal usage
+
+Load and convert a pinned checkpoint through the model façade:
+
+```python
+from anchored_moe import AnchoredMoEForCausalLM
+
+model = AnchoredMoEForCausalLM.from_pretrained(
+    "Qwen/Qwen3-4B",
+    revision="<immutable-commit>",
+    converted_layers="upper_half",
+)
+```
+
+The returned model is frozen and starts in forced-anchor mode. Loading a remote
+checkpoint requires network access and any credentials required by its
+repository; the verified examples below instead use tiny local Qwen3 models.
+
+## Verified implementation details
+
+<CodeDisclosure
+  summary="Show deterministic configuration resolution and round-trip"
+  source="tests/unit/test_configuration.py"
+  verified
+>
+
+```python
+config = AnchoredMoEConfig(
+    base_model_name_or_path="Qwen/Qwen3-4B",
+    base_model_revision="pinned-revision",
+    converted_layers=[3, 1],
+)
+
+restored = AnchoredMoEConfig.from_dict(config.to_dict())
+
+assert restored.converted_layers == [1, 3]
+assert restored.resolve_converted_layers(4) == (1, 3)
+assert restored.resolved_strategies.selection["policy"] == "forced_anchor"
+assert restored.base_model_revision == "pinned-revision"
+```
+
+The linked test also proves that empty, duplicated, Boolean, unknown, and
+out-of-range layer selectors are rejected. Its expected invariant is a stable,
+JSON-serializable configuration with deterministic layer order.
+</CodeDisclosure>
+
+<CodeDisclosure
+  summary="Show the explicit package-to-runtime boundary"
+  source="examples/verify_package_runtime.py"
+  verified
+>
+
+```python
+package = _export_package(root / "package", model)
+model.install(package)
+installed = model.synchronize_registry()
+
+with torch.no_grad():
+    routed_logits = model(input_ids=input_ids).logits
+
+model.unload(package.identity)
+model.synchronize_registry()
+
+with torch.no_grad():
+    removed_logits = model(input_ids=input_ids).logits
+
+assert_tensors_equivalent(
+    removed_logits,
+    dense_logits,
+    name="unloaded anchor logits",
+    atol=0.0,
+    rtol=0.0,
+)
+```
+
+The complete offline example constructs a tiny local anchor and package. It
+verifies routed execution, exact dense restoration after unload, deterministic
+reinsertion, and the registry hash applied to the model.
+</CodeDisclosure>
+
+<CodeDisclosure
+  summary="Show composition export and exact local reload"
+  source="examples/verify_package_runtime.py"
+  verified
+>
+
+```python
+composition_checkpoint = root / "composition"
+model.save_pretrained(composition_checkpoint)
+reloaded = AnchoredMoEForCausalLM.from_pretrained(
+    composition_checkpoint,
+    local_files_only=True,
+)
+
+with torch.no_grad():
+    reloaded_logits = reloaded(input_ids=input_ids).logits
+
+assert_tensors_equivalent(
+    reloaded_logits,
+    routed_logits,
+    name="reloaded composition logits",
+    atol=0.0,
+    rtol=0.0,
+)
+```
+
+The expected invariant is exact routed-logit equality before and after the
+local composition round-trip. Export is accepted only when the active registry
+and routed wrappers are synchronized.
+</CodeDisclosure>
+
+## Current limitations
+
+- Qwen3 is the only built-in and validated model-family backend.
+- `strategy_config` currently accepts only the forced-anchor foundation
+  values; it cannot declaratively attach anchored top-1 or advanced modes.
+- Package synchronization supports full-MLP anchored top-1, not package-driven
+  top-2, adaptive, delta, hierarchical, or dynamic-k execution.
+- Composition checkpoints reference an external pinned anchor and do not
+  bundle its weights.
+- Composition export and reload are local-only; inactive registry history and
+  rollback records are not included.
+- Remote production checkpoints, optimized kernels, multiple devices, and
+  distributed execution require validation in their own declared environments.
+- Explicit `RoutedMLP` experimental modes are lower-level interfaces and must
+  not be presented as automatic model lifecycle behavior.
+
+## References
+
+Configuration and modeling are project-specific framework infrastructure, not
+paper-derived algorithms.
+
+- The
+  [Hugging Face configuration documentation](https://huggingface.co/docs/transformers/main_classes/configuration)
+  defines the `PretrainedConfig` serialization contract extended by
+  `AnchoredMoEConfig`.
+- The
+  [Hugging Face model documentation](https://huggingface.co/docs/transformers/main_classes/model)
+  defines the `PreTrainedModel`, checkpoint-loading, and generation conventions
+  preserved by the façade.
+- The
+  [Qwen3 model documentation](https://huggingface.co/docs/transformers/model_doc/qwen3)
+  describes the first supported model family.
+- The repository's
+  [architecture blueprint](https://github.com/nflavioquatraro/mutations/blob/main/anchored-plugin-moe-architecture.md)
+  defines anchor immutability, exact fallback, deterministic routing, and
+  auditable installation.
+
+## Related pages
+
+- Start with [getting started](/docs/getting-started/) for the smallest offline
+  conversion and exact-equivalence check.
+- Read the [overview](/docs/overview/) for the full package lifecycle and the
+  integration-label definitions.
+- Inspect the
+  [feature implementation tracker](https://github.com/nflavioquatraro/mutations/blob/main/feature-implementation-plan.md)
+  for acceptance evidence and remaining work for each referenced feature ID.
