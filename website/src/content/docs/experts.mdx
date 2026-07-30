@@ -1,0 +1,495 @@
+---
+title: Experts
+description: Compare full, LoRA, block-sparse, fine-grained, and retrieval-backed expert representations without confusing validated primitives with integrated package support.
+order: 5
+group: Core components
+source:
+  - src/anchored_moe/experts/README.md
+  - src/anchored_moe/experts/base.py
+  - src/anchored_moe/experts/full_mlp.py
+  - src/anchored_moe/experts/low_rank.py
+  - src/anchored_moe/experts/structured_sparse.py
+  - src/anchored_moe/experts/micro.py
+  - src/anchored_moe/experts/retrieval.py
+  - examples/verify_full_mlp_expert.py
+  - examples/verify_lora_expert.py
+  - examples/verify_block_sparse_expert.py
+  - examples/verify_micro_experts.py
+  - examples/verify_product_key_retrieval.py
+  - tests/unit/test_full_mlp_expert.py
+  - tests/unit/test_low_rank_expert.py
+  - tests/unit/test_structured_sparse_expert.py
+  - tests/unit/test_micro_expert.py
+  - tests/unit/test_product_key_retrieval.py
+feature_ids:
+  - EXP-001
+  - EXP-002
+  - EXP-003
+  - EXP-004
+  - EXP-005
+last_reviewed: 2026-07-30
+---
+
+import CodeDisclosure from "../../components/docs/CodeDisclosure.astro";
+import EquationBlock from "../../components/docs/EquationBlock.astro";
+import IntegrationBadge from "../../components/docs/IntegrationBadge.astro";
+import PaperReference from "../../components/docs/PaperReference.astro";
+import StrategyTable from "../../components/docs/StrategyTable.astro";
+
+export const expertStrategies = [
+  {
+    representation: "Full copied MLP",
+    trainableState: "Every copied MLP parameter",
+    output: "Complete replacement",
+    lifecycle: "Package export, materialization, routing, and reload",
+    status: { status: "Integrated" },
+  },
+  {
+    representation: "PEFT/LoRA",
+    trainableState: "Low-rank adapter factors",
+    output: "Complete replacement or anchor-relative delta",
+    lifecycle: "Explicit expert and routed-delta assembly",
+    status: { status: "Composable" },
+  },
+  {
+    representation: "Block-sparse delta",
+    trainableState: "Fixed, compact block values",
+    output: "Complete replacement or anchor-relative delta",
+    lifecycle: "Explicit expert and forced-path assembly",
+    status: { status: "Composable" },
+  },
+  {
+    representation: "Fine-grained micro-experts",
+    trainableState: "One atomic set of narrow MLP segments",
+    output: "Complete set, or partial child contributions",
+    lifecycle: "Atomic training and serialization only",
+    status: { status: "Research primitive" },
+  },
+  {
+    representation: "Product-key retrieval",
+    trainableState: "Two subkey tables",
+    output: "Selected IDs and scores; no expert output",
+    lifecycle: "Manual retrieval after caller-side query projection",
+    status: { status: "Research primitive" },
+  },
+];
+
+## What this part does
+
+Experts are the independently owned transformations that specialize a converted
+MLP layer. The subpackage defines how an expert executes, which parameters it
+may train, what it serializes, and how it proves that the live dense anchor
+remains unchanged.
+
+<IntegrationBadge status="Integrated" />
+
+Full copied MLPs support the complete package-to-model lifecycle. Compact
+LoRA and block-sparse experts can be assembled through public interfaces, while
+fine-grained segmentation and product-key retrieval remain research building
+blocks with deliberately narrower runtime boundaries.
+
+## Where it fits
+
+An expert sits between the immutable anchor and the routing runtime:
+
+1. a backend moves the original MLP into a `RoutedMLP` wrapper;
+2. an expert representation creates independently owned specialist state;
+3. training updates only the state declared by that representation;
+4. a router and selection policy decide whether the expert is useful;
+5. inference executes or combines the selected expert paths;
+6. registry support packages only representations with a validated wire format.
+
+The experts subpackage does not score tokens, choose routes, manage capacity,
+install packages, or decide how several outputs are combined. Those boundaries
+remain separate so the same expert can be studied under different routing and
+training strategies.
+
+## Implemented approaches
+
+<StrategyTable
+  caption="Expert representations and their current integration boundaries"
+  description="Validated mathematics and serialization do not automatically imply package-driven model attachment."
+  columns={[
+    { key: "representation", label: "Representation" },
+    { key: "trainableState", label: "Trainable state" },
+    { key: "output", label: "Execution result" },
+    { key: "lifecycle", label: "Current lifecycle" },
+    { key: "status", label: "Integration label" },
+  ]}
+  rows={expertStrategies}
+/>
+
+### Full copied MLP
+
+`FullMLPExpert` deep-copies one compatible anchor MLP. It begins with exactly
+the same parameters and buffers, but every tensor has independent storage.
+Ordinary forced-path training can therefore update the complete specialist
+without allowing gradients or optimizer state to reach the anchor.
+
+This is the conservative baseline and the only representation currently
+supported by package export, package materialization across converted layers,
+anchored top-1 synchronization, and composition reload.
+
+### PEFT/LoRA expert
+
+`PEFTLoRAExpert` injects low-rank adapters into a private frozen copy of the
+anchor MLP. Only adapter tensors train or enter its safetensors payload. The
+expert still returns a complete MLP output, preserving the common `Expert`
+interface, and it can also expose its difference from an already-computed live
+anchor output. Its low-rank parameterization follows
+[LoRA](https://arxiv.org/abs/2106.09685), with the private-copy execution
+difference documented explicitly.
+
+That delta interface supports explicit always-on-anchor and parameter-merging
+experiments. Package export and package-driven LoRA materialization are not yet
+implemented, so LoRA is composable rather than integrated.
+
+### Block-sparse delta expert
+
+`BlockSparseDeltaExpert` targets configurable linear projections with a fixed
+set of trainable blocks. Their coordinates are selected deterministically from
+the configuration and stored explicitly; the implementation multiplies only
+the compact blocks instead of constructing one dense delta matrix.
+
+Like LoRA, it owns a private frozen base and returns a complete output while
+also satisfying the anchor-relative delta contract. Its ordinary PyTorch path
+makes no fused-kernel or speedup claim, and package binding remains future work.
+
+### Fine-grained micro-expert set
+
+`FineGrainedMicroExpertSet` partitions the intermediate channels of a
+compatible bias-free gated MLP into deterministic contiguous segments. Each
+child maps back to the full hidden width, but one child is only a partial
+contribution. The complete set is the atomic `Expert`, training, and
+serialization boundary. The segmentation idea is motivated by
+[DeepSeekMoE](https://arxiv.org/abs/2401.06066), while the anchored
+initialization and all-segment execution are project-specific.
+
+Executing every segment in original channel order reconstructs the anchor
+exactly at initialization. Selecting an arbitrary subset, assigning mixture
+weights, balancing load, or attaching children to existing top-1/top-2
+replacement dispatch is not implemented.
+
+### Product-key retrieval
+
+`ProductKeyMicroExpertRetriever` indexes a square collection of micro-expert
+identifiers using two learned subkey tables. It accepts an already projected
+query, performs an exact bounded top-k search, and returns stable expert
+indices, key pairs, masks, and differentiable selected scores. The bounded
+search follows the product-key construction in
+[Mixture of A Million Experts](https://arxiv.org/abs/2407.04153).
+
+Retrieval deliberately stops before execution. Query projection, selected
+micro-expert dispatch, output aggregation, capacity, and package persistence
+remain outside the version-one primitive.
+
+## How it works
+
+### Preserve one execution contract
+
+Complete experts accept the same hidden-state shape as the anchor MLP and
+return the same output shape, dtype, and device. They may store a full copy or
+only compact trainable updates, but callers do not need a new forward contract
+for each parameterization.
+
+Construction is failure-atomic: target paths, tensor structure, configuration,
+and serialization metadata are validated before the supplied live anchor is
+frozen. Loading is strict across keys, shapes, dtypes, topology, and finite
+values.
+
+### Make trainability representation-specific
+
+The public `Expert.set_trainable()` boundary delegates parameter ownership to
+the representation:
+
+- a full expert toggles every copied parameter;
+- a LoRA expert toggles adapter factors only;
+- a block-sparse expert toggles compact block values only;
+- a micro-expert set toggles its complete segmented parameter set atomically;
+- a product-key retriever may toggle only its two key tables.
+
+This explicit ownership lets trainers assert the optimizer contents rather
+than relying on naming conventions in notebook code.
+
+### Keep payloads independent from the anchor
+
+Expert safetensors contain only expert-owned state and non-executable metadata.
+They do not duplicate the live anchor checkpoint. Compact experts reconstruct
+their private frozen base from a separately supplied compatible anchor during
+strict loading.
+
+## Mathematical intuition
+
+<EquationBlock
+  intuition="A specialist can be viewed as the immutable anchor plus an expert-owned change, even when its public forward method returns a complete replacement output."
+  equation="Eₖ(h) = A(h) + Δₖ(h)"
+  spokenLabel="Expert k of hidden state h equals anchor A of h plus expert delta k of h."
+  symbols={[
+    { symbol: "h", meaning: "Hidden states with shape batch by sequence by model width." },
+    { symbol: "A(h)", meaning: "The immutable dense MLP output." },
+    { symbol: "Δₖ(h)", meaning: "The change contributed by specialist k; it is implicit for a full copy and compact for LoRA or sparse experts." },
+    { symbol: "Eₖ(h)", meaning: "The complete replacement output exposed through the Expert interface." },
+  ]}
+  consequence="At zero-update initialization, LoRA and sparse deltas are zero, so their complete expert output equals the compatible anchor exactly on the validated Qwen3 path."
+/>
+
+For LoRA, a targeted frozen projection \(W\) receives a rank-\(r\) update
+\(sBA\). Only the two factors train; the private base weight does not:
+
+<EquationBlock
+  intuition="LoRA learns two small matrices whose product changes a frozen projection."
+  equation="Wₖh = Wh + sBₖAₖh"
+  spokenLabel="Expert projection k applied to h equals frozen W h plus scaling s times B k times A k times h."
+  symbols={[
+    { symbol: "W", meaning: "A frozen private copy of one anchor projection." },
+    { symbol: "Aₖ", meaning: "The rank by input-width LoRA factor for expert k." },
+    { symbol: "Bₖ", meaning: "The output-width by rank LoRA factor for expert k." },
+    { symbol: "s", meaning: "The configured LoRA scaling, normally alpha divided by rank." },
+  ]}
+  consequence="With PEFT's validated zero-update initialization, the update term is zero while adapter storage and gradients remain independent."
+/>
+
+Fine-grained experts divide one gated MLP's intermediate channels into
+non-overlapping ranges \(I_i\). Every child is narrow, but the complete set
+retains all original channels:
+
+<EquationBlock
+  intuition="The original gated MLP is the sum of every channel segment; one segment alone is only a partial contribution."
+  equation="Σᵢ Eᵢ(h) = A(h)"
+  spokenLabel="The sum over all micro-expert segment outputs E i of h equals anchor A of h."
+  symbols={[
+    { symbol: "Eᵢ(h)", meaning: "The full-hidden-width contribution produced from intermediate-channel range I i." },
+    { symbol: "Σᵢ", meaning: "The sum over every exhaustive, non-overlapping segment in stable order." },
+    { symbol: "A(h)", meaning: "The original compatible bias-free gated MLP output." },
+  ]}
+  consequence="Exact initialization belongs to the complete atomic set. Routing one child as though it were a complete replacement would change the meaning of the computation."
+/>
+
+Product-key retrieval splits a projected query and scores a Cartesian pair of
+subkeys:
+
+<EquationBlock
+  intuition="Two smaller searches identify the same best product keys as an exhaustive search over the square expert index."
+  equation="sᵢⱼ(q) = q₁ᵀcᵢ + q₂ᵀc′ⱼ"
+  spokenLabel="Score i j of query q equals the dot product of first query half q one and subkey c i plus the dot product of second query half q two and subkey c prime j."
+  symbols={[
+    { symbol: "q=[q₁;q₂]", meaning: "A caller-projected query split into two equal-width halves." },
+    { symbol: "cᵢ, c′ⱼ", meaning: "Rows from the two learned subkey tables." },
+    { symbol: "sᵢⱼ(q)", meaning: "The raw score for row-major micro-expert identifier iC+j." },
+  ]}
+  consequence="Stable tie-breaking prefers the lower row-major expert index, but the result still needs a separate dispatch and combination stage before it can change model output."
+/>
+
+## Minimal usage
+
+Create one complete expert from a converted layer's anchor MLP:
+
+```python
+from anchored_moe import FullMLPExpert
+
+wrapper = model.anchor_model.model.layers[2].mlp
+expert = FullMLPExpert.from_anchor(wrapper.anchor_mlp)
+
+assert expert.parameter_count == sum(
+    parameter.numel() for parameter in wrapper.anchor_mlp.parameters()
+)
+```
+
+The copied values begin equal, but their storage and trainable state are
+independent. Attaching or packaging the expert is a separate explicit step.
+
+## Verified implementation details
+
+<CodeDisclosure
+  summary="Show exact full-copy initialization and gradient isolation"
+  source="examples/verify_full_mlp_expert.py"
+  verified
+>
+
+```python
+anchor_output = anchor_mlp(hidden_states)
+expert = FullMLPExpert.from_anchor(anchor_mlp)
+initial_output = expert(hidden_states)
+
+assert torch.equal(initial_output, anchor_output)
+expert(hidden_states).square().mean().backward()
+assert all(p.grad is None for p in anchor_mlp.parameters())
+assert any(p.grad is not None for p in expert.parameters())
+```
+
+Expected invariant: the independent full copy starts exactly equal, then
+receives gradients without changing the anchor. The linked example also proves
+exact safetensors reload.
+</CodeDisclosure>
+
+<CodeDisclosure
+  summary="Show adapter-only LoRA ownership"
+  source="examples/verify_lora_expert.py"
+  verified
+>
+
+```python
+expert = PEFTLoRAExpert.from_anchor(
+    anchor_mlp,
+    config=LoRAExpertConfig(
+        rank=4,
+        alpha=8,
+        target_modules=("gate_proj", "up_proj", "down_proj"),
+    ),
+)
+
+assert torch.equal(expert(hidden_states), anchor_mlp(hidden_states))
+assert expert.adapter_parameter_count < expert.base_parameter_count
+```
+
+Expected invariant: the zero-update adapter preserves the Qwen3 MLP output
+exactly while only adapter factors are trainable and serialized. The linked
+example also optimizes and reloads the adapter without anchor drift.
+</CodeDisclosure>
+
+<CodeDisclosure
+  summary="Show deterministic block-sparse construction"
+  source="examples/verify_block_sparse_expert.py"
+  verified
+>
+
+```python
+expert = BlockSparseDeltaExpert.from_anchor(
+    anchor_mlp,
+    config=BlockSparseDeltaConfig(
+        block_shape=(4, 4),
+        blocks_per_module=2,
+        seed=29,
+    ),
+)
+
+assert torch.equal(expert(hidden_states), anchor_mlp(hidden_states))
+assert expert.delta_parameter_count < expert.dense_delta_parameter_count
+```
+
+Expected invariant: zero-initialized compact blocks preserve the anchor output
+and occupy fewer trainable values than dense updates to the same projections.
+The linked example also verifies sparse-only gradients and exact reload.
+</CodeDisclosure>
+
+<CodeDisclosure
+  summary="Show exact reconstruction by an atomic micro-expert set"
+  source="examples/verify_micro_experts.py"
+  verified
+>
+
+```python
+expert_set = FineGrainedMicroExpertSet.from_anchor(
+    anchor_mlp,
+    config=FineGrainedMicroExpertConfig(segmentation_factor=4),
+)
+
+assert expert_set.expert_count == 4
+assert torch.equal(expert_set(hidden_states), anchor_mlp(hidden_states))
+segmented_count = sum(
+    parameter.numel()
+    for child in expert_set.micro_experts
+    for parameter in child.parameters()
+)
+assert segmented_count == expert_set.parameter_count
+```
+
+Expected invariant: four non-overlapping children preserve the complete
+parameter count and reconstruct the anchor exactly when executed as one set.
+The linked example also proves atomic optimization and strict safe reload.
+</CodeDisclosure>
+
+<CodeDisclosure
+  summary="Show exact product-key search and stable ties"
+  source="examples/verify_product_key_retrieval.py"
+  verified
+>
+
+```python
+result = retriever(queries)
+exhaustive = (
+    (queries[..., :3] @ first_subkeys.T).unsqueeze(-1)
+    + (queries[..., 3:] @ second_subkeys.T).unsqueeze(-2)
+).flatten(start_dim=-2)
+
+expected = torch.argsort(
+    exhaustive, dim=-1, descending=True, stable=True
+)[..., :3]
+assert torch.equal(result.selected_indices, expected)
+```
+
+Expected invariant: the bounded two-stage search returns the same ordered
+indices as exhaustive Cartesian scoring. The linked example also verifies
+query/key gradients, row-major ties, expert-set immutability, and manual
+package shortlisting.
+</CodeDisclosure>
+
+## Current limitations
+
+- Only full copied MLP experts have package export, multi-layer
+  materialization, anchored top-1 synchronization, and composition-reload
+  support.
+- LoRA currently computes a complete private-base expert before subtracting
+  the live anchor output; it does not provide a native delta-only kernel.
+- LoRA and block-sparse payloads are standalone expert artifacts rather than
+  package wire formats.
+- The block-sparse implementation uses ordinary PyTorch slicing and small
+  matrix operations. It does not claim fused sparse execution or a runtime
+  speedup.
+- Micro-expert children cannot yet be routed or combined as an arbitrary
+  subset. The complete set is the only replacement-expert boundary.
+- Product-key retrieval accepts preprojected queries and returns selection
+  metadata only. It does not execute experts or aggregate their outputs.
+- Mixed parameterizations, non-default LoRA initialization, learned or ragged
+  sparse masks, biased micro-expert MLPs, non-square retrieval indices,
+  accelerator kernels, and distributed validation remain future work.
+
+## References
+
+<PaperReference
+  title="LoRA: Low-Rank Adaptation of Large Language Models"
+  authors="Edward J. Hu et al."
+  arxivId="2106.09685"
+  purpose="Defines the frozen-weight low-rank update used for compact EXP-002 adapter state."
+  difference="Mutations injects LoRA into a private MLP copy so the expert can return a complete replacement output and expose an explicit anchor-relative delta."
+/>
+
+<PaperReference
+  title="DeepSeekMoE: Towards Ultimate Expert Specialization in Mixture-of-Experts Language Models"
+  authors="DeepSeek-AI"
+  arxivId="2401.06066"
+  purpose="Motivates splitting one feed-forward intermediate dimension into more narrowly focused experts."
+  difference="DeepSeekMoE jointly trains routed fine-grained and shared experts; Mutations partitions a pinned dense anchor and executes the complete set with unit contribution for exact initialization."
+/>
+
+<PaperReference
+  title="Mixture of A Million Experts"
+  authors="Xu Owen He"
+  arxivId="2407.04153"
+  purpose="Defines the split-query product-key search used to retrieve from a large expert identifier space."
+  difference="The current primitive provides one exact retrieval head over caller-projected queries and multi-channel micro-experts, without PEER's query stack, singleton execution, aggregation, or package persistence."
+/>
+
+Full copied experts and the fixed-mask block-sparse representation are
+project-specific framework infrastructure rather than implementations of a
+paper-derived MoE or pruning algorithm. Block-coordinate ordering uses
+[SHA-256 as standardized by NIST](https://doi.org/10.6028/NIST.FIPS.180-4)
+only for deterministic ranking, not for security or statistical randomness.
+
+The
+[expert theory README](https://github.com/nflavioquatraro/mutations/blob/main/src/anchored_moe/experts/README.md)
+contains the complete equations, algorithms, assumptions, tests, and documented
+differences. The
+[architecture blueprint](https://github.com/nflavioquatraro/mutations/blob/main/anchored-plugin-moe-architecture.md)
+defines the shared immutable-anchor and expert-modularity invariants.
+
+## Related pages
+
+- Read [backends](/docs/backends/) to see how the live anchor MLP is discovered
+  and moved into a routed wrapper.
+- Continue to **Routers** when that page is published to learn how expert
+  utility scores are constructed.
+- The planned **Policies** page will distinguish selecting experts from
+  combining their outputs.
+- The planned **Training** and **Registry** pages will cover optimizer
+  ownership, package formats, and lifecycle support in detail.
