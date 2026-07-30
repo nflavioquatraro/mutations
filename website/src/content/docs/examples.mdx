@@ -1,6 +1,6 @@
 ---
 title: End-to-end examples
-description: Compare complete Anchored Plug-in MoE workflows, from exact anchor conversion through adaptive routing and always-on-anchor LoRA deltas.
+description: Compare complete Anchored Plug-in MoE workflows, from exact anchor conversion through routed deltas and local two-expert training.
 order: 13
 group: Learn by example
 source:
@@ -14,7 +14,11 @@ source:
   - examples/verify_top2_dispatch.py
   - examples/verify_adaptive_selection.py
   - examples/verify_always_on_anchor_deltas.py
+  - examples/verify_local_mini_moe.py
+  - examples/verify_mixture_aware_refinement.py
   - tests/integration/test_anchor_delta_routed_mlp.py
+  - tests/integration/test_local_mini_moe_trainer.py
+  - tests/integration/test_mixture_aware_refinement_pipeline.py
   - tests/integration/test_qwen3_equivalence.py
   - tests/integration/test_affine_router_adaptive.py
   - tests/integration/test_affine_router_top2.py
@@ -23,6 +27,9 @@ source:
   - tests/unit/test_anchor_delta_combination.py
   - tests/unit/test_anchor_delta_dispatch.py
   - tests/unit/test_adaptive_selection.py
+  - tests/unit/test_auxiliary_load_balancing.py
+  - tests/unit/test_local_mini_moe_training.py
+  - tests/unit/test_mixture_aware_refinement.py
   - tests/unit/test_package_export.py
   - tests/unit/test_calibrated_package_export.py
   - tests/unit/test_composition_checkpoint.py
@@ -44,6 +51,9 @@ feature_ids:
   - EXP-001
   - EXP-002
   - TRN-001
+  - TRN-002
+  - TRN-003
+  - TRN-004
   - RTR-002
   - POL-001
   - POL-002
@@ -51,6 +61,7 @@ feature_ids:
   - COM-001
   - COM-004
   - BAL-002
+  - BAL-003
   - INF-001
   - INF-002
   - CAL-004
@@ -119,7 +130,7 @@ export const exampleWorkflows = [
     expert: "Package-local pair",
     lifecycle: { status: "Composable" },
     bestFor: "Mixture-aware specialization",
-    guide: "Upcoming",
+    guide: "Published below",
   },
   {
     approach: "Hierarchical",
@@ -136,14 +147,15 @@ export const exampleWorkflows = [
 These guides connect the framework's individual strategies into inspectable
 workflows. They begin with the conservative dense-equivalence baseline, add the
 complete packaged anchored top-1 lifecycle, and then introduce explicitly
-composed weighted top-2 execution, adaptive route selection, and always-on
-anchor deltas. Later guides will progress toward local training and
-hierarchical routing.
+composed weighted top-2 execution, adaptive route selection, always-on-anchor
+deltas, and package-local two-expert training. Later guides will progress
+toward hierarchical routing.
 
 The comparison table includes the planned workflow set so that integration
 boundaries are visible from the start. Exact conversion, packaged top-1, and
-weighted top-2 are published below, alongside adaptive selection and routed
-LoRA deltas; later rows remain clearly marked as upcoming guides.
+weighted top-2 are published below, alongside adaptive selection, routed LoRA
+deltas, and local mini-MoE training; the hierarchical row remains clearly
+marked as an upcoming guide.
 
 ## Compare the workflows
 
@@ -1207,3 +1219,241 @@ immutable pretrained anchor.
   anchor guarantees.
 - [Evaluation](/docs/evaluation/) defines active-MLP accounting without
   converting reference semantics into unsupported performance claims.
+
+## Two-expert local mini-MoE training
+
+<IntegrationBadge status="Composable" />
+
+### The problem it solves
+
+Independently trained experts can each be useful while still combining poorly.
+This workflow trains exactly two package-local experts and fresh affine router
+heads together, allowing their transformations and mixture weights to
+co-adapt without changing the anchor or shared backbone.
+
+There are two supported entry points. `TRN-003` starts the local pair directly
+from compatible expert objects. `TRN-004` first trains the same pair
+independently through `TRN-002`, then applies the identical joint local
+runtime as a mixture-aware refinement stage. Both paths are composable
+training workflows rather than package-driven deployment paths.
+
+### Workflow contract
+
+- **Expert representation:** exactly two complete experts cover the same
+  converted layers in the same stable order. The verified examples use
+  full-MLP experts copied from the immutable anchor.
+- **Router:** fresh zero-initialized affine heads are owned by the local pair.
+  Small opposite biases break the symmetry between anchor-copied experts
+  deterministically before optimization begins.
+- **Selection and combination:** no sparse top-1 decision occurs during local
+  training. Both experts execute every specialization token, and COM-001
+  score-softmax weights mix their activations.
+- **Training:** ordinary Hugging Face `Trainer` optimization updates only the
+  expert-declared parameter subsets and local affine heads. The anchor,
+  backbone, feature extractor, and incumbent artifacts remain frozen.
+- **Optional balancing:** BAL-003 adds a Switch-style auxiliary objective from
+  local mixture probabilities. It changes training pressure but not execution;
+  both experts still run for every eligible token.
+- **Active work:** two specialist MLPs per specialization token at every
+  converted layer. There is no anchor abstention, capacity overflow, or token
+  dropping inside this dense local training path.
+- **Lifecycle cleanup:** success and failure both clear gradients, freeze the
+  local artifacts, release retained objective observations, and restore every
+  converted wrapper to exact `forced_anchor` execution.
+- **Packaging and serialization:** training reports record immutable topology,
+  optimizer ownership, progress, and final objectives. Packaging the trained
+  local router with its expert pair and attaching it for inference remain
+  future work.
+- **Expected result:** both experts and router heads train, the anchor remains
+  byte-exact, and no local training route remains attached after the run.
+
+### How the two paths run
+
+```text
+Direct local training (TRN-003)
+  compatible two-expert rectangle + fresh heads
+  → validate ownership and storage isolation
+  → jointly train dense score-softmax mixtures
+  → freeze artifacts and restore forced anchor
+
+Mixture-aware refinement (TRN-004)
+  train the same two experts independently (TRN-002)
+  → verify report order and layer topology
+  → run the unchanged TRN-003 joint stage
+  → return one immutable report linking both stages
+```
+
+The refinement coordinator does not infer historical identity from mutable
+objects. It requires the caller-owned bindings to match the completed
+independent report's stable expert order and complete layer rectangle before
+it attaches the local route.
+
+### Dense local mixture
+
+<EquationBlock
+  intuition="Every specialization token runs both local experts; the router controls their relative contribution rather than deciding which one executes."
+  equation="α_(ℓ,t) = softmax(g_(ℓ,t) / T);  y_(ℓ,t) = α_(ℓ,t,1) E_(ℓ,1)(h_(ℓ,t)) + α_(ℓ,t,2) E_(ℓ,2)(h_(ℓ,t))"
+  spokenLabel="At layer ell and token t, alpha is the softmax of the two local router scores divided by temperature T. The output is alpha one times expert one plus alpha two times expert two."
+  symbols={[
+    { symbol: "h_(ℓ,t)", meaning: "The token representation entering converted layer ℓ." },
+    { symbol: "g_(ℓ,t)", meaning: "The ordered pair of affine scores produced by the package-local router heads." },
+    { symbol: "T", meaning: "The finite positive mixture temperature; the verified examples use 1." },
+    { symbol: "E_(ℓ,1), E_(ℓ,2)", meaning: "The two complete local expert transformations at layer ℓ." },
+    { symbol: "α_(ℓ,t,1), α_(ℓ,t,2)", meaning: "Positive mixture weights that sum to one for the token." },
+  ]}
+  consequence="This is dense two-expert training: a small weight does not skip an expert execution. The learned heads are training artifacts until an explicit inference and packaging path is implemented."
+/>
+
+Fresh heads begin with zero weights and biases, then receive opposite
+`+ε` and `−ε` biases in stable expert order. This deterministic perturbation
+prevents two identical anchor copies from beginning with perfectly symmetric
+router behavior without introducing calibrated routing evidence.
+
+### Optional balancing objective
+
+<EquationBlock
+  intuition="The optional objective discourages one local expert from receiving nearly all of the router probability while leaving the causal-language-model loss in control."
+  equation="L = L_CLM + λ_balance · (1 / |C|) Σ_(ℓ ∈ C) [2 Σ_(i=1)^2 f_(ℓ,i) P_(ℓ,i)]"
+  spokenLabel="Total loss equals causal-language-model loss plus lambda balance times the average over converted layers of two times the sum of hard assignment fraction f times mean router probability P for each of the two experts."
+  symbols={[
+    { symbol: "C", meaning: "The set of converted layers participating in the local training run." },
+    { symbol: "P_(ℓ,i)", meaning: "Expert i's mean graph-connected router probability over eligible tokens at layer ℓ." },
+    { symbol: "f_(ℓ,i)", meaning: "The detached fraction of eligible tokens whose larger probability belongs to expert i." },
+    { symbol: "λ_balance", meaning: "The configured non-negative load-balancing weight; zero disables BAL-003 exactly." },
+    { symbol: "L_CLM", meaning: "The ordinary specialization causal-language-model loss." },
+  ]}
+  consequence="A balanced pair has auxiliary loss one and complete two-expert preference approaches two. Hard assignments measure preference only; they do not make this training path sparse."
+/>
+
+### Train the local pair directly
+
+Run the deterministic two-step CPU example:
+
+```bash
+python examples/verify_local_mini_moe.py
+```
+
+It constructs one converted tiny-Qwen3 layer, two full-MLP experts, fresh
+heads, and a masked synthetic dataset. After training, it proves that both
+experts changed, the heads became non-zero, the optional balancing objective
+was composed correctly, and the anchor remained exact.
+
+<CodeDisclosure
+  summary="Show direct two-expert local training"
+  source="examples/verify_local_mini_moe.py"
+  verified
+>
+
+```python
+trainer = LocalMiniMoETrainer(
+    model=model,
+    backend=backend,
+    expert_bindings=bindings,
+    router_feature_extractor=IdentityRouterFeatureExtractor(16),
+    router_heads=heads,
+    config=LocalMiniMoETrainingConfig(load_balancing_weight=0.05),
+    args=training_arguments,
+    train_dataset=dataset,
+)
+trainer.train()
+objectives = trainer.training_report.final_objectives
+assert objectives.load_balancing_loss > 0
+```
+
+Expected invariant: the optimizer owns exactly the expert-declared parameters
+and affine heads. On return, every local parameter is frozen with no retained
+gradient, the wrapper is back in `forced_anchor`, and the model's anchor state
+is byte-for-byte unchanged. The complete source also verifies
+`total_loss = specialization_loss + 0.05 × load_balancing_loss`.
+</CodeDisclosure>
+
+### Refine an independently trained pair
+
+Run the deterministic three-stage CPU example:
+
+```bash
+python examples/verify_mixture_aware_refinement.py
+```
+
+The first two steps train `code:0` and `code:1` independently on distinct
+synthetic partitions. The final step binds the same expert objects and stable
+IDs to fresh local heads, jointly refines them, and returns a report linking
+the independent and local stages.
+
+<CodeDisclosure
+  summary="Show independent training followed by joint refinement"
+  source="examples/verify_mixture_aware_refinement.py"
+  verified
+>
+
+```python
+report = refine_independent_expert_set(
+    model,
+    backend=backend,
+    source_training=independent_report,
+    expert_bindings=local_bindings,
+    router_feature_extractor=IdentityRouterFeatureExtractor(16),
+    router_heads=fresh_heads,
+    config=LocalMiniMoETrainingConfig(load_balancing_weight=0.05),
+    args=refinement_arguments,
+    trainer_kwargs={"train_dataset": refinement_dataset},
+)
+assert report.expert_ids == independent_report.expert_ids
+assert report.total_global_steps > independent_report.total_global_steps
+```
+
+Expected invariant: both experts change again during the joint stage, the
+fresh heads train, and the linked report preserves exact expert order and
+converted-layer topology. The anchor remains exact and all local artifacts are
+frozen after cleanup.
+</CodeDisclosure>
+
+### Current limitations
+
+- Local mini-MoE training supports exactly two experts with identical complete
+  converted-layer coverage. Larger or ragged local expert sets are not
+  implemented.
+- Both experts execute for every specialization token. There is no discrete
+  local top-k, anchor fallback, capacity handling, token dropping, or sparse
+  training-compute claim.
+- Router heads must be fresh, temperature-one, threshold-zero affine heads.
+  Previously calibrated or trained heads are rejected rather than silently
+  overwritten.
+- TRN-004 validates report topology and stable IDs, not cryptographic identity
+  of caller-owned expert objects. Artifact hashes belong to later export and
+  package boundaries.
+- Training reports do not serialize expert weights or local router heads.
+  Package-local router bundling, registry synchronization, model-level
+  attachment, and composition reload are not implemented for this workflow.
+- The optional balancing term measures preference while execution stays dense.
+  It does not demonstrate reduced serving load or balanced sparse capacity.
+- The deterministic tiny-Qwen3 fixtures validate ownership, gradients,
+  objectives, and cleanup—not language quality, beneficial specialization,
+  production memory, latency, mixed precision, multi-device, or distributed
+  training.
+
+### References and related pages
+
+Joint local training and the independent-then-refine coordinator are
+project-specific framework workflows defined by the architecture blueprint.
+The balancing term adapts the Switch auxiliary objective to a dense
+two-expert local mixture.
+
+<PaperReference
+  title="Switch Transformers: Scaling to Trillion Parameter Models with Simple and Efficient Sparsity"
+  authors="William Fedus, Barret Zoph, and Noam Shazeer"
+  arxivId="2101.03961"
+  purpose="Motivates the assignment-fraction and mean-router-probability auxiliary load-balancing objective."
+  difference="Mutations computes the objective independently at each converted layer, supports token weights, averages layer losses, and applies it to a dense two-expert local training path rather than sparse global top-1 dispatch."
+/>
+
+- [Training](/docs/training/) defines `TRN-002`, `TRN-003`, `TRN-004`, and
+  `BAL-003`, including parameter ownership and failure-safe cleanup.
+- [Experts](/docs/experts/) explains full-MLP expert copying, independent
+  storage, and declared trainable subsets.
+- [Routers](/docs/routers/) documents affine heads, stable expert order, and
+  frozen feature extraction.
+- [Policies](/docs/policies/) defines COM-001 score-softmax activation
+  combination.
+- [Evaluation](/docs/evaluation/) explains why these deterministic checks are
+  framework evidence rather than specialization-quality measurements.
