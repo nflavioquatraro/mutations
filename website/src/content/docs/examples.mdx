@@ -1,6 +1,6 @@
 ---
 title: End-to-end examples
-description: Compare complete Anchored Plug-in MoE workflows, from exact anchor conversion through routed deltas, local training, and hierarchical package routing.
+description: Compare complete Anchored Plug-in MoE workflows, from exact anchor conversion through routed deltas, local training, hierarchical routing, and prompt-level shortlisting.
 order: 13
 group: Learn by example
 source:
@@ -17,10 +17,12 @@ source:
   - examples/verify_local_mini_moe.py
   - examples/verify_mixture_aware_refinement.py
   - examples/verify_hierarchical_routing.py
+  - examples/verify_prompt_shortlisting.py
   - tests/integration/test_anchor_delta_routed_mlp.py
   - tests/integration/test_hierarchical_top2_dispatch.py
   - tests/integration/test_local_mini_moe_trainer.py
   - tests/integration/test_mixture_aware_refinement_pipeline.py
+  - tests/integration/test_prompt_shortlisted_routing.py
   - tests/integration/test_qwen3_equivalence.py
   - tests/integration/test_affine_router_adaptive.py
   - tests/integration/test_affine_router_top2.py
@@ -33,6 +35,7 @@ source:
   - tests/unit/test_local_mini_moe_training.py
   - tests/unit/test_mixture_aware_refinement.py
   - tests/unit/test_package_export.py
+  - tests/unit/test_prompt_shortlisting.py
   - tests/unit/test_calibrated_package_export.py
   - tests/unit/test_composition_checkpoint.py
   - tests/unit/test_efficiency.py
@@ -59,6 +62,7 @@ feature_ids:
   - RTR-002
   - RTR-003
   - RTR-005
+  - RTR-006
   - POL-001
   - POL-002
   - POL-003
@@ -145,6 +149,14 @@ export const exampleWorkflows = [
     bestFor: "Larger package collections",
     guide: "Published below",
   },
+  {
+    approach: "Prompt shortlist + top-1",
+    active: "Top-M candidates, then anchor or 1 expert",
+    expert: "Shortlisted complete experts",
+    lifecycle: { status: "Research primitive" },
+    bestFor: "Bounding flat-router work",
+    guide: "Published below",
+  },
 ];
 
 ## What this page does
@@ -154,11 +166,13 @@ workflows. They begin with the conservative dense-equivalence baseline, add the
 complete packaged anchored top-1 lifecycle, and then introduce explicitly
 composed weighted top-2 execution, adaptive route selection, always-on-anchor
 deltas, package-local two-expert training, and hierarchical package routing.
+Prompt-level shortlisting then shows how an external retrieval stage can bound
+the columns evaluated by token-level routing.
 
-The comparison table includes the planned workflow set so that integration
-boundaries are visible from the start. Exact conversion, packaged top-1, and
-weighted top-2 are published below, alongside adaptive selection, routed LoRA
-deltas, local mini-MoE training, and package-first hierarchical routing.
+The comparison table keeps integration boundaries visible from the start.
+Exact conversion, packaged top-1, weighted top-2, adaptive selection, routed
+LoRA deltas, local mini-MoE training, package-first hierarchy, and
+prompt-shortlisted top-1 are published below.
 
 ## Compare the workflows
 
@@ -1730,3 +1744,250 @@ paper-derived routing algorithm.
   routing does not yet automatically join.
 - [Evaluation](/docs/evaluation/) separates deterministic framework evidence
   from quality and production-efficiency claims.
+
+## Prompt-shortlisted token routing
+
+<IntegrationBadge status="Research primitive" />
+
+### The problem it solves
+
+A flat logical router evaluates every installed expert column for every token.
+That remains reasonable for a small registry, but its scoring and expert-memory
+overhead grows with the complete candidate set. This workflow uses external
+prompt-level evidence to retain at most \(M\) candidates before ordinary
+token-level routing.
+
+Shortlisting bounds which affine columns are evaluated without weakening the
+anchor. A shortlisted specialist still needs positive token-level evidence;
+otherwise anchored top-1 returns the token to the dense MLP.
+
+### Workflow contract
+
+- **Expert representation:** any complete experts that already satisfy the
+  selected token-routing and dispatch contracts. The deterministic fixture
+  uses code, mathematics, and science stand-ins.
+- **Routing and selection:** `PromptTopMShortlister` consumes one finite
+  retrieval score per prompt and candidate. `PromptShortlistedLogicalRouter`
+  evaluates only the selected logical-router columns, reconstructs the stable
+  global candidate order, and passes the resulting scores to `POL-001`
+  anchored top-1.
+- **Combination and capacity:** top-1 execution uses the selected complete
+  expert directly. Anchor fallback and capacity remain the responsibility of
+  the existing selection and dispatch path.
+- **Training and calibration:** external retrieval scores and the frozen
+  logical-router heads are inputs. This primitive does not train a prompt
+  encoder, fit retrieval scores, recalibrate token heads, or mutate experts.
+- **Active work:** prompt retrieval considers the caller-provided candidate
+  table once. Token routing evaluates at most \(M\) affine expert columns per
+  prompt row, then sparse dispatch runs either the anchor or one specialist per
+  token.
+- **Packaging and serialization:** the shortlist and copied logical-router
+  wrapper are assembled explicitly in memory. They are not stored in an expert
+  package, registry router version, or composition checkpoint.
+- **Expected result:** prompt ties preserve candidate order, unselected columns
+  are never evaluated, global expert identity remains stable, and shortlisted
+  negative evidence still falls back exactly to the anchor.
+
+### How the two routing scales compose
+
+```text
+External prompt retrieval scores
+  → select at most M candidates for each prompt
+  → evaluate only those token-router columns
+  → restore the stable global expert score order
+  → apply fixed-zero anchored top-1 per token
+  → sparsely execute the winner or the anchor
+```
+
+The prompt stage limits eligibility; it does not choose the executing expert.
+The token stage can abstain, but it cannot recover an expert omitted by the
+prompt shortlist.
+
+### Candidate-shortlisting rule
+
+<EquationBlock
+  intuition="Use prompt-level evidence to keep a small candidate set, then let the ordinary anchored token router decide whether any retained specialist should run."
+  equation="C(x) = TopM_k pi_k(x);  r(h_t) = argmax({0} union {g_k(h_t) : k in C(x)})"
+  spokenLabel="The candidate set C of prompt x contains the M highest prompt retrieval scores. For token t, the route is the anchor-first maximum over zero and only the shortlisted specialist scores."
+  symbols={[
+    { symbol: "x", meaning: "One prompt or sequence row." },
+    { symbol: "pi_k(x)", meaning: "The caller-provided prompt retrieval score for candidate k." },
+    { symbol: "C(x)", meaning: "The stable prompt-level shortlist, bounded by M." },
+    { symbol: "h_t", meaning: "The token representation presented to the routed MLP." },
+    { symbol: "g_k(h_t)", meaning: "The calibrated token-level logical-router score for shortlisted expert k." },
+    { symbol: "0", meaning: "The immutable anchor candidate and abstention threshold." },
+  ]}
+  consequence="Router work is bounded by the shortlist width, while non-positive retained evidence still produces exact dense fallback. A retrieval miss remains unrecoverable at the token stage."
+/>
+
+### Three-prompt walkthrough
+
+The offline fixture keeps exactly one candidate per prompt. Stable global
+candidate indices are `1` for code, `2` for mathematics, and `3` for science;
+candidate index `0` remains the anchor.
+
+<StrategyTable
+  caption="Deterministic prompt-shortlisted routing example"
+  description="Each prompt retains one expert column. Token-level anchored top-1 can still reject that retained candidate."
+  columns={[
+    { key: "prompt", label: "Prompt evidence" },
+    { key: "shortlist", label: "Retained candidate" },
+    { key: "routes", label: "Token routes" },
+    { key: "meaning", label: "Execution" },
+  ]}
+  rows={[
+    {
+      prompt: "[3, 2, 1]",
+      shortlist: "code (1)",
+      routes: "[1, 1]",
+      meaning: "Both tokens run the code expert",
+    },
+    {
+      prompt: "[1, 3, 2]",
+      shortlist: "mathematics (2)",
+      routes: "[2, 2]",
+      meaning: "Both tokens run the mathematics expert",
+    },
+    {
+      prompt: "[1, 2, 3]",
+      shortlist: "science (3)",
+      routes: "[0, 0]",
+      meaning: "Negative science evidence returns both tokens to the anchor",
+    },
+  ]}
+/>
+
+The science prompt demonstrates the two independent gates. Retrieval makes the
+science expert eligible, but its token scores remain negative, so the
+fixed-zero anchor wins both decisions.
+
+### Minimal explicit composition
+
+```python
+shortlist = PromptTopMShortlister(max_candidates=1)(
+    retrieval_scores, candidate_ids=expert_ids,
+)
+scores = PromptShortlistedLogicalRouter(logical_router)(
+    hidden_states, shortlist=shortlist, layer_index=0,
+)
+result = AnchoredTop1Dispatcher().dispatch(
+    hidden_states, expert_scores=scores.scores,
+    expert_ids=scores.expert_ids, anchor_mlp=anchor, experts=experts,
+)
+```
+
+The caller owns retrieval-score construction and explicitly connects the
+shortlist, logical router, and existing sparse top-1 dispatcher.
+
+### Verify bounded logical scoring
+
+From the repository root, run:
+
+```bash
+python examples/verify_prompt_shortlisting.py
+```
+
+The example is deterministic and offline. It reports shortlists
+`[[0], [1], [2]]`, global token routes `[[1, 1], [2, 2], [0, 0]]`, and a
+copied shortlist wrapper with no trainable parameters.
+
+<CodeDisclosure
+  summary="Show prompt top-M feeding anchored token top-1"
+  source="examples/verify_prompt_shortlisting.py"
+  verified
+>
+
+```python
+shortlist = PromptTopMShortlister(max_candidates=1)(
+    retrieval_scores,
+    candidate_ids=("code:0", "math:0", "science:0"),
+)
+scores = PromptShortlistedLogicalRouter(
+    compile_logical_router(heads)
+)(features, shortlist=shortlist, layer_index=0)
+routes = AnchoredTop1Selection()(
+    scores.scores,
+    expert_ids=scores.expert_ids,
+)
+assert shortlist.selected_indices.tolist() == [[0], [1], [2]]
+assert routes.selected_indices.tolist() == [[1, 1], [2, 2], [0, 0]]
+```
+
+Expected invariants: shortlist width is bounded, expert identity remains in
+global append order, and a retained candidate with non-positive evidence does
+not override the anchor.
+</CodeDisclosure>
+
+### Verify sparse expert execution
+
+The focused integration test carries the reconstructed scores through the
+existing top-1 dispatcher. It proves that code and mathematics each execute
+once, science never executes, and the anchor receives exactly the rejected
+science prompt.
+
+<CodeDisclosure
+  summary="Show shortlisted scores driving sparse top-1 dispatch"
+  source="tests/integration/test_prompt_shortlisted_routing.py"
+  verified
+>
+
+```python
+result = AnchoredTop1Dispatcher().dispatch(
+    hidden_states,
+    expert_scores=scores.scores,
+    expert_ids=scores.expert_ids,
+    anchor_mlp=anchor,
+    experts=experts,
+)
+
+assert result.selected_routes.selected_indices.tolist() == [
+    [1, 1],
+    [2, 2],
+    [0, 0],
+]
+assert anchor.calls == 1
+assert tuple(expert.calls for expert in experts) == (1, 1, 0)
+```
+
+Expected invariants: only shortlisted affine columns are scored, only selected
+modules execute, token order is reconstructed exactly, and anchor fallback
+remains available for every prompt.
+</CodeDisclosure>
+
+### Current limitations
+
+- `RTR-006` requires caller-provided finite retrieval scores. It does not
+  include a prompt encoder, retriever training objective, or calibration
+  workflow.
+- A retrieval miss removes a candidate before token routing. The token router
+  cannot expand the shortlist or recover an omitted specialist.
+- Version 1 applies one fixed-width shortlist per prompt row. It does not reuse
+  shortlist state across autoregressive generation, page expert weights into
+  memory, or support ragged candidate counts.
+- The validated end-to-end composition uses anchored top-1 and complete expert
+  modules. Top-2, adaptive, compatibility-constrained, and micro-expert
+  retrieval combinations remain separate explicit experiments.
+- Prompt shortlisting has no package manifest, registry binding,
+  configuration-driven `RoutedMLP` attachment, or composition-checkpoint
+  representation.
+- The fixtures validate stable retrieval, bounded scoring, exact fallback, and
+  sparse execution—not retrieval quality, specialization gains, production
+  latency, accelerator memory savings, or distributed behavior.
+
+### References and related pages
+
+Prompt-level shortlisting is project-specific framework infrastructure from
+the architecture blueprint. It reuses stable sorting, copied logical router
+columns, anchored top-1, and sparse dispatch rather than claiming a
+paper-derived retrieval algorithm.
+
+- [Routers](/docs/routers/) defines `RTR-003`, `RTR-006`, compact candidate
+  scoring, stable ties, finite masking, and the external-retrieval boundary.
+- [Policies](/docs/policies/) specifies `POL-001` anchor-first token selection
+  and explains which advanced policies are not part of this workflow.
+- [Inference](/docs/inference/) documents `INF-001` sparse top-1 execution and
+  exact anchor reconstruction.
+- [Registry](/docs/registry/) describes the package and composition lifecycle
+  that prompt shortlisting does not yet automatically join.
+- [Evaluation](/docs/evaluation/) separates deterministic routing evidence
+  from retrieval quality and production-efficiency claims.
