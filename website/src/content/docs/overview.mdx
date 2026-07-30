@@ -17,6 +17,8 @@ feature_ids:
 last_reviewed: 2026-07-30
 ---
 
+import CodeDisclosure from "../../components/docs/CodeDisclosure.astro";
+
 ## What this part does
 
 Anchored Plug-in MoE extends a capable dense language model without silently
@@ -114,49 +116,51 @@ state and output logit before any specialist is explicitly attached.
 
 ## Verified implementation details
 
-<details>
-  <summary>Show the source-backed dense-equivalence invariant</summary>
+<CodeDisclosure
+  summary="Show the source-backed dense-equivalence invariant"
+  source="examples/verify_dense_equivalence.py"
+  verified
+>
 
-  ```python
-  with torch.no_grad():
-      dense = model(input_ids=input_ids, output_hidden_states=True)
+```python
+with torch.no_grad():
+    dense = model(input_ids=input_ids, output_hidden_states=True)
 
-  Qwen3Backend().convert(
-      model,
-      AnchoredMoEConfig(converted_layers="upper_half"),
-  )
+Qwen3Backend().convert(
+    model,
+    AnchoredMoEConfig(converted_layers="upper_half"),
+)
 
-  with torch.no_grad():
-      converted = model(input_ids=input_ids, output_hidden_states=True)
+with torch.no_grad():
+    converted = model(input_ids=input_ids, output_hidden_states=True)
 
-  assert_tensors_equivalent(converted.logits, dense.logits, name="logits")
-  ```
+assert_tensors_equivalent(converted.logits, dense.logits, name="logits")
+```
 
-  This excerpt is exercised by
-  [`examples/verify_dense_equivalence.py`](https://github.com/nflavioquatraro/mutations/blob/main/examples/verify_dense_equivalence.py).
-  Its invariant is exact logit equality; the complete source also checks every
-  hidden state and prints the converted layer indices.
-</details>
+Its invariant is exact logit equality; the complete source also checks every
+hidden state and prints the converted layer indices.
+</CodeDisclosure>
 
-<details>
-  <summary>Show the explicit package lifecycle boundary</summary>
+<CodeDisclosure
+  summary="Show the explicit package lifecycle boundary"
+  source="examples/verify_package_runtime.py"
+  verified
+>
 
-  ```python
-  model.install(package)
-  model.synchronize_registry()
+```python
+model.install(package)
+model.synchronize_registry()
 
-  routed = model(input_ids=input_ids).logits
+routed = model(input_ids=input_ids).logits
 
-  model.unload(package.identity)
-  model.synchronize_registry()
-  anchor = model(input_ids=input_ids).logits
-  ```
+model.unload(package.identity)
+model.synchronize_registry()
+anchor = model(input_ids=input_ids).logits
+```
 
-  The complete offline lifecycle is exercised by
-  [`examples/verify_package_runtime.py`](https://github.com/nflavioquatraro/mutations/blob/main/examples/verify_package_runtime.py).
-  It verifies installation, routed execution, exact anchor restoration,
-  composition export, and reload.
-</details>
+The complete source verifies installation, routed execution, exact anchor
+restoration, composition export, and reload.
+</CodeDisclosure>
 
 ## Current limitations
 

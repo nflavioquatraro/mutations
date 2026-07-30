@@ -1,0 +1,317 @@
+---
+import { repositorySourceUrl } from "../../lib/docs";
+
+interface Props {
+  summary: string;
+  source?: string;
+  sourceLabel?: string;
+  verified?: boolean;
+}
+
+const {
+  summary,
+  source,
+  sourceLabel = source?.split("/").at(-1),
+  verified = false,
+} = Astro.props;
+const sourceHref = source ? repositorySourceUrl(source) : undefined;
+---
+
+<details class="code-disclosure" data-code-disclosure>
+  <summary>
+    <span>{summary}</span>
+    <span class="disclosure-marker" aria-hidden="true">
+      <span class="when-closed">+</span>
+      <span class="when-open">−</span>
+    </span>
+  </summary>
+
+  <div class="code-disclosure-body">
+    {
+      (verified || sourceHref) && (
+        <div class="code-disclosure-meta">
+          <div class="code-provenance">
+            {verified && <span class="verification-badge">Verified</span>}
+            {sourceHref && (
+              <a href={sourceHref} rel="noreferrer">
+                Source: {sourceLabel}
+              </a>
+            )}
+          </div>
+
+          <div class="copy-control" hidden data-copy-control>
+            <span class="copy-status" aria-live="polite" data-copy-status></span>
+            <button type="button" data-copy-button aria-label="Copy code example">
+              <span data-copy-label>Copy code</span>
+            </button>
+          </div>
+        </div>
+      )
+    }
+
+    <div class="code-disclosure-content" data-code-content>
+      <slot />
+    </div>
+  </div>
+</details>
+
+<script>
+  document
+    .querySelectorAll<HTMLElement>("[data-code-disclosure]")
+    .forEach((disclosure) => {
+      if (disclosure.dataset.copyReady === "true") return;
+
+      const code = disclosure.querySelector<HTMLElement>(
+        "[data-code-content] pre code",
+      );
+      const control = disclosure.querySelector<HTMLElement>(
+        "[data-copy-control]",
+      );
+      const button = disclosure.querySelector<HTMLButtonElement>(
+        "[data-copy-button]",
+      );
+      const label = disclosure.querySelector<HTMLElement>("[data-copy-label]");
+      const status =
+        disclosure.querySelector<HTMLElement>("[data-copy-status]");
+
+      if (
+        !navigator.clipboard ||
+        !window.isSecureContext ||
+        !code ||
+        !control ||
+        !button ||
+        !label ||
+        !status
+      ) {
+        return;
+      }
+
+      disclosure.dataset.copyReady = "true";
+      control.hidden = false;
+      let resetTimer: number | undefined;
+
+      button.addEventListener("click", async () => {
+        window.clearTimeout(resetTimer);
+        button.disabled = true;
+
+        try {
+          await navigator.clipboard.writeText(code.textContent ?? "");
+          label.textContent = "Copied";
+          status.textContent = "Code copied to clipboard.";
+        } catch {
+          label.textContent = "Try again";
+          status.textContent = "Copy failed. Select the code and copy it manually.";
+        } finally {
+          button.disabled = false;
+          resetTimer = window.setTimeout(() => {
+            label.textContent = "Copy code";
+            status.textContent = "";
+          }, 2400);
+        }
+      });
+    });
+</script>
+
+<style>
+  .code-disclosure {
+    max-width: 100%;
+    margin: 1.75rem 0;
+    border: 1px solid var(--hairline);
+    background: rgba(248, 249, 251, 0.72);
+  }
+
+  summary {
+    display: flex;
+    min-height: 3.5rem;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1.5rem;
+    padding: 0.9rem 1.15rem;
+    color: var(--ink);
+    cursor: pointer;
+    font: 700 0.68rem/1.5 var(--font-mono);
+    letter-spacing: 0.055em;
+    list-style: none;
+    text-transform: uppercase;
+  }
+
+  summary::-webkit-details-marker {
+    display: none;
+  }
+
+  summary:hover {
+    background: rgba(224, 234, 245, 0.5);
+  }
+
+  summary:focus-visible {
+    outline: 2px solid var(--ink);
+    outline-offset: 3px;
+  }
+
+  .code-disclosure[open] summary {
+    border-bottom: 1px solid var(--hairline);
+  }
+
+  .disclosure-marker {
+    display: inline-grid;
+    width: 1.5rem;
+    height: 1.5rem;
+    flex: 0 0 auto;
+    place-items: center;
+    border: 1px solid rgba(22, 70, 125, 0.24);
+    border-radius: 50%;
+    font-size: 0.95rem;
+    line-height: 1;
+  }
+
+  .when-open,
+  .code-disclosure[open] .when-closed {
+    display: none;
+  }
+
+  .code-disclosure[open] .when-open {
+    display: inline;
+  }
+
+  .code-disclosure-body {
+    min-width: 0;
+  }
+
+  .code-disclosure-meta {
+    display: flex;
+    min-height: 3.2rem;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.7rem 1.15rem;
+    border-bottom: 1px solid rgba(22, 70, 125, 0.12);
+    background: rgba(237, 243, 249, 0.58);
+  }
+
+  .code-provenance,
+  .copy-control {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .verification-badge {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 0.38rem;
+    color: #1d6747;
+    font: 700 0.62rem/1.4 var(--font-mono);
+    letter-spacing: 0.055em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  .verification-badge::before {
+    width: 0.42rem;
+    height: 0.42rem;
+    border-radius: 50%;
+    background: #2b8a63;
+    content: "";
+  }
+
+  .code-provenance a {
+    min-width: 0;
+    overflow: hidden;
+    color: #4f7093;
+    font: 600 0.65rem/1.4 var(--font-mono);
+    text-overflow: ellipsis;
+    text-transform: none;
+    white-space: nowrap;
+  }
+
+  .copy-control[hidden] {
+    display: none;
+  }
+
+  .copy-status {
+    color: #557391;
+    font: 0.62rem/1.35 var(--font-mono);
+    text-align: right;
+  }
+
+  button {
+    min-width: 5.9rem;
+    min-height: 2.75rem;
+    padding: 0.5rem 0.72rem;
+    border: 1px solid rgba(22, 70, 125, 0.28);
+    border-radius: 0.2rem;
+    background: rgba(255, 255, 255, 0.8);
+    color: var(--ink);
+    cursor: pointer;
+    font: 700 0.62rem/1.2 var(--font-mono);
+    letter-spacing: 0.035em;
+    text-transform: uppercase;
+  }
+
+  button:hover {
+    background: #fff;
+    border-color: rgba(22, 70, 125, 0.52);
+  }
+
+  button:focus-visible {
+    outline: 2px solid var(--ink);
+    outline-offset: 2px;
+  }
+
+  button:disabled {
+    cursor: wait;
+    opacity: 0.72;
+  }
+
+  .code-disclosure-content {
+    padding: 0 1.15rem 1.15rem;
+  }
+
+  .code-disclosure-content :global(pre) {
+    width: auto;
+    margin: 1.15rem 0;
+  }
+
+  .code-disclosure-content :global(p) {
+    margin-right: 0;
+    margin-left: 0;
+  }
+
+  .code-disclosure-content :global(:last-child) {
+    margin-bottom: 0;
+  }
+
+  @media (max-width: 600px) {
+    summary {
+      gap: 0.8rem;
+      padding: 0.85rem 0.9rem;
+    }
+
+    .code-disclosure-meta {
+      align-items: flex-start;
+      flex-direction: column;
+      padding: 0.8rem 0.9rem;
+    }
+
+    .code-provenance,
+    .copy-control {
+      width: 100%;
+      justify-content: space-between;
+    }
+
+    .copy-control {
+      min-height: 2.75rem;
+    }
+
+    .copy-status {
+      max-width: 12rem;
+      text-align: left;
+    }
+
+    .code-disclosure-content {
+      padding: 0 0.9rem 0.9rem;
+    }
+  }
+</style>
