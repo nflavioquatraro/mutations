@@ -1,6 +1,6 @@
 ---
 title: End-to-end examples
-description: Compare complete Anchored Plug-in MoE workflows, from exact anchor conversion through packaged top-1 and explicitly composed weighted top-2 execution.
+description: Compare complete Anchored Plug-in MoE workflows, from exact anchor conversion through packaged top-1, weighted top-2, and adaptive route selection.
 order: 13
 group: Learn by example
 source:
@@ -12,15 +12,21 @@ source:
   - examples/verify_package_runtime.py
   - examples/verify_anchor_veto_top2.py
   - examples/verify_top2_dispatch.py
+  - examples/verify_adaptive_selection.py
   - tests/integration/test_qwen3_equivalence.py
+  - tests/integration/test_affine_router_adaptive.py
   - tests/integration/test_affine_router_top2.py
   - tests/integration/test_package_runtime_composition.py
   - tests/integration/test_top2_dispatch_full_mlp.py
+  - tests/unit/test_adaptive_selection.py
   - tests/unit/test_package_export.py
   - tests/unit/test_calibrated_package_export.py
   - tests/unit/test_composition_checkpoint.py
+  - tests/unit/test_efficiency.py
   - tests/unit/test_top2_selection.py
   - tests/unit/test_top2_dispatch.py
+  - src/anchored_moe/routers/README.md
+  - src/anchored_moe/policies/README.md
   - src/anchored_moe/training/README.md
   - src/anchored_moe/calibration/README.md
   - src/anchored_moe/registry/README.md
@@ -35,6 +41,7 @@ feature_ids:
   - RTR-002
   - POL-001
   - POL-002
+  - POL-003
   - COM-001
   - BAL-002
   - INF-001
@@ -44,6 +51,7 @@ feature_ids:
   - PKG-002
   - PKG-007
   - EVAL-001
+  - EVAL-005
   - NB-002
   - NB-003
   - NB-004
@@ -88,7 +96,7 @@ export const exampleWorkflows = [
     expert: "Compatible complete experts",
     lifecycle: { status: "Composable" },
     bestFor: "Variable computation",
-    guide: "Upcoming",
+    guide: "Published below",
   },
   {
     approach: "Anchor plus deltas",
@@ -121,13 +129,13 @@ export const exampleWorkflows = [
 These guides connect the framework's individual strategies into inspectable
 workflows. They begin with the conservative dense-equivalence baseline, add the
 complete packaged anchored top-1 lifecycle, and then introduce explicitly
-composed weighted top-2 execution. Later guides will progress toward adaptive
-computation, delta experts, local training, and hierarchical routing.
+composed weighted top-2 execution and adaptive route selection. Later guides
+will progress toward delta experts, local training, and hierarchical routing.
 
 The comparison table includes the planned workflow set so that integration
 boundaries are visible from the start. Exact conversion, packaged top-1, and
-weighted top-2 are published below; later rows remain clearly marked as
-upcoming guides.
+weighted top-2 are published below, alongside adaptive selection; later rows
+remain clearly marked as upcoming guides.
 
 ## Compare the workflows
 
@@ -800,3 +808,178 @@ activations.
   always-on-anchor deltas.
 - [Evaluation](/docs/evaluation/) covers counterfactual quality comparison and
   compute measurement without claiming that every mixture is beneficial.
+
+## Adaptive anchor/top-1/top-2
+
+<IntegrationBadge status="Composable" />
+
+### The problem it solves
+
+Fixed top-1 always spends one MLP execution, while anchor-veto top-2 requires
+two positive specialists before either one can run. Adaptive selection keeps
+the anchor when specialist evidence is absent, runs one specialist when only
+the strongest score is convincing, and approves a pair when the second score
+clears a separate mixture threshold.
+
+This makes the intended computation visible per token without forcing every
+specialist-routed token to pay for a second expert. The selection policy and
+its affine-router integration are validated through public APIs. Replacement
+expert execution still requires an explicit dispatcher that does not yet
+accept adaptive decisions.
+
+### Workflow contract
+
+- **Expert representation:** zero, one, or two compatible complete experts may
+  be selected. The verified fixture exercises route metadata rather than
+  expert activations.
+- **Router:** append-only affine heads score frozen identity features in stable
+  expert order.
+- **Selection:** the best specialist must be strictly positive to beat the
+  fixed-zero anchor. A second specialist joins only when its score is strictly
+  greater than `mix_threshold`; an exact threshold tie remains top-1.
+- **Combination and capacity:** the decision records ranked candidates and
+  route arity, but the fixture does not execute or combine replacement
+  experts. No serving-capacity degradation is applied.
+- **Training and calibration:** the example consumes deterministic affine
+  heads. It does not train experts, fit router weights, or calibrate the
+  mixture threshold.
+- **Active work:** route arity zero means one anchor MLP execution; arity one
+  means one specialist MLP execution; arity two means two specialist MLP
+  executions. The evaluation utilities validate this accounting separately.
+- **Packaging and serialization:** standalone objects are assembled directly.
+  Adaptive package attachment, model-level configuration, and composition
+  reload are not implemented.
+- **Expected result:** the four tokens deterministically choose top-2, top-1,
+  anchor, and top-1, including the exact-threshold boundary case.
+
+### How it decides
+
+```text
+Calibrated specialist scores
+  → no positive winner: anchor
+  → one positive winner, second score at or below threshold: top-1
+  → second score strictly above threshold: top-2
+  → retain ranked candidates, masks, and route arity for auditing
+```
+
+The activation threshold and mixture threshold answer different questions.
+Zero asks whether any specialist should replace the anchor. `mix_threshold`
+asks whether the runner-up provides enough evidence to justify a second
+specialist execution.
+
+### Variable-compute rule
+
+<EquationBlock
+  intuition="The strongest score first decides whether to leave the anchor; the runner-up then decides whether one or two specialists are selected."
+  equation="a(h) = 0 if g_(1) ≤ 0;  1 if g_(1) > 0 and g_(2) ≤ τ_mix;  2 if g_(2) > τ_mix"
+  spokenLabel="Route arity a of h is zero when the best specialist score is non-positive, one when the best score is positive and the second score is at or below the mixture threshold, and two when the second score is above that threshold."
+  symbols={[
+    { symbol: "h", meaning: "The token representation entering a converted MLP." },
+    { symbol: "g_(1), g_(2)", meaning: "The highest and second-highest calibrated specialist scores in stable ranked order." },
+    { symbol: "τ_mix", meaning: "The finite non-negative mixture threshold; the verified fixture uses 0.5." },
+    { symbol: "a", meaning: "Selected specialist count: zero for anchor, one for top-1, or two for top-2." },
+  ]}
+  consequence="A runner-up score exactly equal to the mixture threshold stays top-1. Stable append order resolves equal specialist scores, and the fixed-zero anchor wins non-positive evidence."
+/>
+
+### Four-token example
+
+With `mix_threshold = 0.5`, the deterministic affine heads produce:
+
+| Specialist scores `(code, math)` | Best evidence | Route | Active paths |
+|---|---|---|---:|
+| `(1.0, 2.0)` | Both scores clear `0.5` | Top-2: math, then code | 2 |
+| `(1.0, -1.0)` | Only code is positive | Top-1: code | 1 |
+| `(-1.0, -2.0)` | Neither specialist beats zero | Anchor | 1 |
+| `(1.0, 0.5)` | Runner-up ties `0.5` exactly | Top-1: code | 1 |
+
+“Active paths” counts executed MLPs, while route arity counts selected
+specialists. The anchor row therefore has arity zero but still performs one
+anchor MLP execution.
+
+### Minimal explicit selection
+
+```python
+features = IdentityRouterFeatureExtractor(2)(hidden_states)
+scores = router(features, layer_index=1)
+decision = AdaptiveTop1Top2Selection(mix_threshold=0.5)(
+    scores,
+    expert_ids=router.expert_ids_for_layer(1),
+)
+assert decision.route_arity.tolist() == [[2, 1, 0, 1]]
+```
+
+### Run the verified example
+
+From the repository root, run:
+
+```bash
+python examples/verify_adaptive_selection.py
+```
+
+The example is offline and uses deterministic tensors. It reports the stable
+ranked candidates and route arity `[[2, 1, 0, 1]]`.
+
+<CodeDisclosure
+  summary="Show adaptive affine-router selection"
+  source="examples/verify_adaptive_selection.py"
+  verified
+>
+
+```python
+decision = AdaptiveTop1Top2Selection(mix_threshold=0.5)(
+    router(features, layer_index=1),
+    expert_ids=router.expert_ids_for_layer(1),
+)
+
+assert torch.equal(
+    decision.route_arity,
+    torch.tensor([[2, 1, 0, 1]]),
+)
+assert int(decision.anchor_mask.sum()) == 1
+assert int(decision.top1_mask.sum()) == 2
+assert int(decision.top2_mask.sum()) == 1
+```
+
+Expected invariant: exactly one token selects the anchor, two select one
+specialist, and one selects two specialists. The
+[`test_adaptive_selection.py`](https://github.com/nflavioquatraro/mutations/blob/main/tests/unit/test_adaptive_selection.py)
+unit suite additionally covers threshold ties, empty and one-expert
+registries, stable ties, invalid inputs, and decision validation. The
+[`test_affine_router_adaptive.py`](https://github.com/nflavioquatraro/mutations/blob/main/tests/integration/test_affine_router_adaptive.py)
+integration test binds the same decision rule to append-only affine heads.
+</CodeDisclosure>
+
+### Current limitations
+
+- The validated workflow stops at route selection. It does not execute
+  adaptive replacement experts or produce combined activations.
+- `AnchoredTop2Dispatcher` consumes top-2 selection policies, not
+  `AdaptiveRouteDecision`. Adaptive sparse execution is currently available
+  only for always-on-anchor delta experts, which belongs to the next guide.
+- There is no package-driven adaptive attachment, `RoutedMLP` replacement
+  mode, model-level configuration, composition checkpoint, or route-decision
+  serialization.
+- The fixture validates routing semantics and active-work accounting, not
+  language quality, calibration quality, latency, or beneficial expert
+  mixtures.
+- The mixture threshold is supplied directly. Production threshold fitting and
+  compatibility constraints remain separate concerns.
+
+### References and related pages
+
+Adaptive anchor/top-1/top-2 selection is a project-specific framework
+mechanism derived from the architecture blueprint rather than a paper
+implementation. It uses stable PyTorch sorting, while its fixed-zero abstention
+and strict mixture threshold are Mutations design choices.
+
+- [Policies](/docs/policies/) defines adaptive decision shapes, masks,
+  threshold semantics, and safe padding for small registries.
+- [Routers](/docs/routers/) explains the frozen feature and append-only affine
+  score path used by the fixture.
+- [Inference](/docs/inference/) distinguishes validated adaptive delta
+  execution from the missing replacement-expert adaptive dispatcher.
+- [Evaluation](/docs/evaluation/) defines active-MLP accounting for adaptive
+  decisions.
+- [Weighted top-2](#weighted-top-2-specialists) shows the existing standalone
+  replacement-expert dispatcher and score-softmax combination boundary.
