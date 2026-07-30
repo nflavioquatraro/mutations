@@ -1,49 +1,30 @@
 ---
 import Brand from "../../components/Brand.astro";
 import BaseLayout from "../../layouts/BaseLayout.astro";
+import {
+  documentationGroupOrder,
+  getOrderedDocs,
+} from "../../lib/docs";
 
-const docs = [
-  {
-    index: "01",
-    href: "/docs/routed-code-moe/",
-    title: "Routed Code-MoE Adapter",
-    description: "The complete preservation-first specialization design for Qwen3-4B.",
-    meta: "Architecture / 1,817 lines",
-  },
-  {
-    index: "02",
-    href: "/docs/partial-moe/",
-    title: "Partial Token-Routed LoRA-MoE",
-    description: "The focused experiment for emergent, label-free expert specialization.",
-    meta: "Experiment design / 422 lines",
-  },
-  {
-    index: "03",
-    href: "/docs/dataset-and-evaluation/",
-    title: "Master Dataset and Evaluation",
-    description: "Corpus construction, preservation tests, routing diagnostics, and acceptance gates.",
-    meta: "Data + evaluation / 1,055 lines",
-  },
-  {
-    index: "04",
-    href: "/docs/math-experiment/",
-    title: "Math Partial-MoE Experiment",
-    description: "The first controlled validation plan and its benchmark harness.",
-    meta: "Pilot / 607 lines",
-  },
-];
+const docs = await getOrderedDocs();
+const groupedDocs = documentationGroupOrder
+  .map((group) => ({
+    group,
+    entries: docs.filter((entry) => entry.data.group === group),
+  }))
+  .filter(({ entries }) => entries.length > 0);
 ---
 
 <BaseLayout
   title="Documentation — Mutations"
-  description="Architecture, dataset, training, and evaluation documentation for the Mutations framework."
+  description="Package-aligned documentation for the Mutations anchored plug-in Mixture-of-Experts framework."
   pageClass="docs-page"
   showChrome={false}
 >
   <header class="docs-header">
     <a href="/" aria-label="Mutations home"><Brand compact /></a>
     <nav aria-label="Documentation navigation">
-      <a class="current" href="/docs/">Docs</a>
+      <a class="current" href="/docs/" aria-current="page">Docs</a>
       <a href="/paper.pdf">Paper</a>
       <a href="https://github.com/nflavioquatraro/mutations" rel="noreferrer">GitHub</a>
     </nav>
@@ -51,26 +32,52 @@ const docs = [
 
   <main id="main-content" class="docs-index">
     <div class="docs-intro">
-      <p class="section-kicker">Research documentation</p>
-      <h1>The system,<br /><span>in working detail.</span></h1>
-      <p>
-        These notes move from the general framework to the current controlled experiment.
-        They describe proposals and evaluation criteria—not claims of benchmark superiority.
-      </p>
+      <p class="section-kicker">Framework documentation</p>
+      <h1>From stable anchor<br /><span>to routed capability.</span></h1>
+      <div class="docs-intro-copy">
+        <p>
+          Learn the system from its exact fallback invariant through package
+          composition, calibration, routing, and evaluation.
+        </p>
+        <p class="docs-rollout-note">
+          Documentation is being published in validated slices. Only complete
+          pages appear in this index.
+        </p>
+      </div>
     </div>
 
-    <div class="docs-list">
-      {docs.map((doc) => (
-        <a class="doc-row" href={doc.href}>
-          <span class="doc-index">{doc.index}</span>
-          <span class="doc-title">
-            <strong>{doc.title}</strong>
-            <small>{doc.description}</small>
-          </span>
-          <span class="doc-meta">{doc.meta}</span>
-          <span class="doc-arrow" aria-hidden="true">↗</span>
-        </a>
-      ))}
+    <div class="docs-groups">
+      {groupedDocs.map(({ group, entries }) => {
+        const groupId = `group-${group.toLowerCase().replaceAll(" ", "-")}`;
+
+        return (
+          <section class="docs-group" aria-labelledby={groupId}>
+            <header>
+              <p>{String(entries[0].data.order).padStart(2, "0")}</p>
+              <h2 id={groupId}>{group}</h2>
+            </header>
+            <div class="docs-list">
+              {entries.map((entry) => (
+                <a class="doc-row" href={`/docs/${entry.id}/`}>
+                  <span class="doc-index">
+                    {String(entry.data.order).padStart(2, "0")}
+                  </span>
+                  <span class="doc-title">
+                    <strong>{entry.data.title}</strong>
+                    <small>{entry.data.description}</small>
+                  </span>
+                  <span class="doc-meta">
+                    {entry.data.feature_ids.length > 0
+                      ? `${entry.data.feature_ids.length} tracked features`
+                      : "Project guide"}
+                  </span>
+                  <span class="doc-arrow" aria-hidden="true">→</span>
+                </a>
+              ))}
+            </div>
+          </section>
+        );
+      })}
     </div>
   </main>
 </BaseLayout>

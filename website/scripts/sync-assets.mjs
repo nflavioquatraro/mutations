@@ -1,4 +1,4 @@
-import { copyFile, mkdir } from "node:fs/promises";
+import { access, copyFile, mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -9,12 +9,30 @@ const publicDirectory = path.join(websiteDirectory, "public");
 
 await mkdir(publicDirectory, { recursive: true });
 
+async function syncOptionalSource(source, destination) {
+  try {
+    await access(source);
+    await copyFile(source, destination);
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+
+    try {
+      await access(destination);
+    } catch {
+      throw new Error(
+        `Required website asset is missing from both source and public paths: ${source}`,
+        { cause: error },
+      );
+    }
+  }
+}
+
 await Promise.all([
-  copyFile(
+  syncOptionalSource(
     path.join(repositoryDirectory, "model_architecture_image.png"),
     path.join(publicDirectory, "architecture.png"),
   ),
-  copyFile(
+  syncOptionalSource(
     path.join(
       repositoryDirectory,
       "preprints",

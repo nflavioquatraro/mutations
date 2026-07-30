@@ -1,0 +1,204 @@
+---
+title: Overview
+description: The immutable-anchor idea, the package lifecycle, and the boundary between integrated workflows and research primitives.
+order: 1
+group: Introduction
+source:
+  - README.md
+  - anchored-plugin-moe-architecture.md
+  - feature-implementation-plan.md
+feature_ids:
+  - CORE-001
+  - CORE-004
+  - CORE-005
+  - CORE-006
+  - POL-001
+  - INF-001
+last_reviewed: 2026-07-30
+---
+
+## What this part does
+
+Anchored Plug-in MoE extends a capable dense language model without silently
+changing it. The original model remains an immutable **anchor**, while
+specialist MLPs, routers, calibration data, and lifecycle metadata are carried
+in independently managed packages.
+
+The framework is a research system for comparing modular composition
+strategies. It is not one fixed Mixture-of-Experts recipe, and a validated
+standalone primitive is not automatically available through the complete model
+lifecycle.
+
+## Where it fits
+
+The system sits around a Hugging Face causal language model:
+
+1. a backend locates selected MLP layers;
+2. each selected MLP is wrapped while preserving its original module as the
+   anchor;
+3. installed package metadata and expert payloads are validated;
+4. an explicit synchronization step attaches the supported runtime;
+5. routing chooses the anchor or compatible specialists for each token;
+6. export records a reproducible composition without duplicating the anchor in
+   every package.
+
+Attention, embeddings, normalization, and the language-model head remain part
+of the frozen shared backbone.
+
+## Implemented approaches
+
+| Approach | Integration label | What the label means here |
+| --- | --- | --- |
+| Exact anchor conversion | **Integrated** | Conversion, forward, generation, and equivalence checks work through the model façade. |
+| Packaged anchored top-1 | **Integrated** | Package installation, explicit synchronization, sparse execution, export, and reload form a complete lifecycle. |
+| Weighted top-2 and adaptive routing | **Composable** | Selection, combination, capacity, and dispatch primitives are tested, but automatic package-driven model attachment is not available. |
+| Always-on anchor with routed deltas | **Composable** | Explicit routed execution supports compatible anchor-relative experts; package-driven delta materialization remains separate work. |
+| Hierarchical, dynamic-\(k\), retrieval, and expert-choice strategies | **Research primitive** | The strategies are validated in isolation for controlled experiments. |
+| Automatic model-level top-2 attachment and capacity estimation | **Planned** | The behavior is documented but not implemented as an end-to-end runtime. |
+
+These labels describe lifecycle integration, not research value or test
+quality. The Python feature tracker separately records whether each underlying
+implementation has passed its own acceptance criteria.
+
+## How it works
+
+For every converted layer, the dense MLP becomes candidate zero. Specialist
+scores are calibrated against that fixed baseline rather than against an
+implicitly learned “default” expert.
+
+In the conservative top-1 path:
+
+1. the anchor begins with score zero;
+2. each installed specialist produces a calibrated score;
+3. stable anchor-first tie-breaking chooses the largest score;
+4. a specialist runs only when it has strictly positive winning evidence;
+5. unavailable or overflowing work falls back to the anchor;
+6. the selected output is reconstructed in the original token order.
+
+Installing, unloading, upgrading, or rolling back a package changes registry
+state. Model execution changes only after the caller explicitly synchronizes
+that state, which keeps lifecycle operations auditable.
+
+## Mathematical intuition
+
+The zero anchor score turns routing into a test of positive specialist utility:
+
+> `g₀(h) = 0` and `r(h) = arg maxₖ gₖ(h)`, with candidate `0` winning exact
+> ties.
+
+Here, `h` is one token's pre-MLP hidden representation, `gₖ(h)` is the
+calibrated score for specialist `k`, and `r(h)` is the selected candidate.
+When every specialist score is negative—or exactly tied at zero—the original
+dense MLP runs unchanged.
+
+For a specialist winner `k`, the routed layer returns `Eₖ(h)`. For an anchor
+winner, it returns `A(h)` with coefficient one. This is why exact fallback is a
+runtime invariant rather than an approximate regularization goal.
+
+## Minimal usage
+
+The smallest offline conversion uses an already loaded Qwen3 model:
+
+```python
+from anchored_moe import AnchoredMoEConfig
+from anchored_moe.backends import Qwen3Backend
+
+report = Qwen3Backend().convert(
+    model,
+    AnchoredMoEConfig(converted_layers="upper_half"),
+)
+```
+
+The conversion starts in forced-anchor mode. It should preserve every hidden
+state and output logit before any specialist is explicitly attached.
+
+## Verified implementation details
+
+<details>
+  <summary>Show the source-backed dense-equivalence invariant</summary>
+
+  ```python
+  with torch.no_grad():
+      dense = model(input_ids=input_ids, output_hidden_states=True)
+
+  Qwen3Backend().convert(
+      model,
+      AnchoredMoEConfig(converted_layers="upper_half"),
+  )
+
+  with torch.no_grad():
+      converted = model(input_ids=input_ids, output_hidden_states=True)
+
+  assert_tensors_equivalent(converted.logits, dense.logits, name="logits")
+  ```
+
+  This excerpt is exercised by
+  [`examples/verify_dense_equivalence.py`](https://github.com/nflavioquatraro/mutations/blob/main/examples/verify_dense_equivalence.py).
+  Its invariant is exact logit equality; the complete source also checks every
+  hidden state and prints the converted layer indices.
+</details>
+
+<details>
+  <summary>Show the explicit package lifecycle boundary</summary>
+
+  ```python
+  model.install(package)
+  model.synchronize_registry()
+
+  routed = model(input_ids=input_ids).logits
+
+  model.unload(package.identity)
+  model.synchronize_registry()
+  anchor = model(input_ids=input_ids).logits
+  ```
+
+  The complete offline lifecycle is exercised by
+  [`examples/verify_package_runtime.py`](https://github.com/nflavioquatraro/mutations/blob/main/examples/verify_package_runtime.py).
+  It verifies installation, routed execution, exact anchor restoration,
+  composition export, and reload.
+</details>
+
+## Current limitations
+
+- Qwen3 is the first implemented backend; the backend contract is broader than
+  the currently validated model-family set.
+- Package-driven top-2, adaptive, hierarchical, shortlisted, and delta-expert
+  attachment are not model-level configuration paths.
+- Composition checkpoints reference a pinned anchor and do not yet support
+  remote transfer, optional anchor bundling, or inactive rollback history.
+- Capacity estimation, fallback beyond an already selected pair, and
+  distributed production validation remain future work.
+- Several advanced strategies target experiments, training, or prompt prefill
+  and should not be described as autoregressive serving paths.
+
+## References
+
+- **LoRA: Low-Rank Adaptation of Large Language Models** — Edward Hu and
+  collaborators. [arXiv:2106.09685](https://arxiv.org/abs/2106.09685).
+  Motivates compact anchor-relative expert parameterizations. Mutations keeps
+  those experts behind its own immutable-anchor and explicit lifecycle
+  contracts.
+- **Switch Transformers: Scaling to Trillion Parameter Models with Simple and
+  Efficient Sparsity** — William Fedus, Barret Zoph, and Noam Shazeer.
+  [arXiv:2101.03961](https://arxiv.org/abs/2101.03961). Motivates sparse routing
+  and load-balancing comparisons. Mutations adds permanent dense fallback and
+  does not treat its anchor policy as a Switch Transformer mechanism.
+- **On Calibration of Modern Neural Networks** — Chuan Guo and collaborators.
+  [arXiv:1706.04599](https://arxiv.org/abs/1706.04599). Motivates temperature
+  calibration. The repository applies per-head binary utility calibration and
+  explicit activation thresholds rather than reproducing the paper's
+  multiclass setup.
+
+The project-specific system design and its departures from prior work are
+defined in the
+[architecture blueprint](https://github.com/nflavioquatraro/mutations/blob/main/anchored-plugin-moe-architecture.md).
+
+## Related pages
+
+- Return to the [documentation index](/docs/).
+- Inspect the
+  [feature implementation tracker](https://github.com/nflavioquatraro/mutations/blob/main/feature-implementation-plan.md)
+  for the acceptance status of individual Python features.
+- Read the
+  [repository overview](https://github.com/nflavioquatraro/mutations/blob/main/README.md)
+  for development setup and the full executable example inventory.
