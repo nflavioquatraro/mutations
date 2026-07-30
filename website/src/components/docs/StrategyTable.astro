@@ -1,0 +1,170 @@
+---
+import IntegrationBadge from "./IntegrationBadge.astro";
+import type { IntegrationStatus } from "./IntegrationBadge.astro";
+
+interface Column {
+  key: string;
+  label: string;
+}
+
+interface StatusCell {
+  status: IntegrationStatus;
+}
+
+type Cell = string | StatusCell;
+
+interface Props {
+  caption: string;
+  description?: string;
+  columns: Column[];
+  rows: Record<string, Cell>[];
+}
+
+const { caption, description, columns, rows } = Astro.props;
+const isStatusCell = (cell: Cell | undefined): cell is StatusCell =>
+  typeof cell === "object" && cell !== null && "status" in cell;
+---
+
+<div class="strategy-table">
+  {
+    description && (
+      <p class="strategy-table-description">{description}</p>
+    )
+  }
+  <div class="strategy-table-scroll" tabindex="0" role="region" aria-label={caption}>
+    <table>
+      <caption>{caption}</caption>
+      <thead>
+        <tr>
+          {columns.map((column) => <th scope="col">{column.label}</th>)}
+        </tr>
+      </thead>
+      <tbody>
+        {
+          rows.map((row) => (
+            <tr>
+              {columns.map((column, columnIndex) => {
+                const cell = row[column.key];
+                const Tag = columnIndex === 0 ? "th" : "td";
+                return (
+                  <Tag scope={columnIndex === 0 ? "row" : undefined}>
+                    {isStatusCell(cell) ? (
+                      <IntegrationBadge status={cell.status} />
+                    ) : (
+                      cell
+                    )}
+                  </Tag>
+                );
+              })}
+            </tr>
+          ))
+        }
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<style>
+  .strategy-table {
+    max-width: 100%;
+    margin: 2rem 0;
+  }
+
+  .strategy-table-description {
+    max-width: 48rem;
+    margin: 0 0 0.8rem;
+    color: #4e6e8f;
+    font-size: 0.88rem;
+    line-height: 1.55;
+  }
+
+  .strategy-table-scroll {
+    max-width: 100%;
+    overflow-x: auto;
+    border: 1px solid var(--hairline);
+    background: rgba(248, 249, 251, 0.8);
+  }
+
+  .strategy-table-scroll:focus-visible {
+    outline: 2px solid var(--ink);
+    outline-offset: 3px;
+  }
+
+  table {
+    width: 100%;
+    min-width: 43rem;
+    margin: 0;
+    border-collapse: collapse;
+    font-size: 0.84rem;
+  }
+
+  caption {
+    padding: 0.9rem 1rem;
+    border-bottom: 1px solid var(--hairline);
+    color: var(--ink-dark);
+    font: 700 0.64rem/1.4 var(--font-mono);
+    letter-spacing: 0.055em;
+    text-align: left;
+    text-transform: uppercase;
+  }
+
+  th,
+  td {
+    padding: 0.9rem 1rem;
+    border-right: 1px solid rgba(32, 85, 141, 0.09);
+    border-bottom: 1px solid var(--hairline);
+    text-align: left;
+    vertical-align: top;
+  }
+
+  tr > :last-child {
+    border-right: 0;
+  }
+
+  tbody tr:last-child > * {
+    border-bottom: 0;
+  }
+
+  thead th {
+    background: rgba(228, 237, 247, 0.5);
+    color: var(--ink);
+    font: 700 0.61rem/1.4 var(--font-mono);
+    letter-spacing: 0.045em;
+    text-transform: uppercase;
+  }
+
+  tbody th {
+    color: var(--ink-dark);
+    font-weight: 600;
+  }
+
+  tbody td {
+    color: #466784;
+    line-height: 1.55;
+  }
+
+  tbody tr:hover {
+    background: rgba(231, 239, 247, 0.48);
+  }
+
+  @media (max-width: 720px) {
+    .strategy-table-scroll {
+      background:
+        linear-gradient(90deg, rgba(248, 249, 251, 0.96) 30%, transparent),
+        linear-gradient(270deg, rgba(248, 249, 251, 0.96) 30%, transparent)
+          100% 0;
+      background-attachment: local, local;
+      background-repeat: no-repeat;
+      background-size: 2rem 100%;
+    }
+
+    table {
+      font-size: 0.78rem;
+    }
+
+    th,
+    td {
+      padding: 0.8rem;
+    }
+  }
+</style>

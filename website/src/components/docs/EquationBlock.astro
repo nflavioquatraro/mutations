@@ -1,0 +1,155 @@
+---
+interface SymbolDefinition {
+  symbol: string;
+  meaning: string;
+}
+
+interface Props {
+  intuition: string;
+  equation: string;
+  spokenLabel: string;
+  symbols: SymbolDefinition[];
+  consequence?: string;
+}
+
+const {
+  intuition,
+  equation,
+  spokenLabel,
+  symbols,
+  consequence,
+} = Astro.props;
+---
+
+<figure class="equation-block">
+  <figcaption>{intuition}</figcaption>
+
+  <div class="equation-expression">
+    <code aria-label={spokenLabel}>{equation}</code>
+  </div>
+
+  <dl class="equation-symbols" aria-label="Equation symbols">
+    {
+      symbols.map(({ symbol, meaning }) => (
+        <div>
+          <dt><code>{symbol}</code></dt>
+          <dd>{meaning}</dd>
+        </div>
+      ))
+    }
+  </dl>
+
+  {
+    consequence && (
+      <p class="equation-consequence">
+        <span>Practical consequence</span>
+        {consequence}
+      </p>
+    )
+  }
+</figure>
+
+<style>
+  .equation-block {
+    max-width: 48rem;
+    margin: 2rem 0;
+    border: 1px solid var(--hairline);
+    background: rgba(248, 249, 251, 0.76);
+  }
+
+  figcaption {
+    padding: 1rem 1.15rem;
+    border-bottom: 1px solid var(--hairline);
+    color: #4e6e8f;
+    font-size: 0.95rem;
+    line-height: 1.6;
+  }
+
+  .equation-expression {
+    padding: clamp(1.6rem, 4vw, 2.4rem) 1.15rem;
+    overflow-x: auto;
+    border-bottom: 1px solid var(--hairline);
+    background: rgba(228, 237, 247, 0.5);
+    text-align: center;
+  }
+
+  .equation-expression code {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--ink-dark);
+    font: 500 clamp(0.98rem, 2.2vw, 1.3rem)/1.6 var(--font-mono);
+    white-space: nowrap;
+  }
+
+  .equation-symbols {
+    display: grid;
+    margin: 0;
+  }
+
+  .equation-symbols > div {
+    display: grid;
+    grid-template-columns: minmax(4rem, 0.2fr) minmax(0, 1fr);
+    gap: 1rem;
+    padding: 0.8rem 1.15rem;
+    border-bottom: 1px solid rgba(32, 85, 141, 0.1);
+  }
+
+  .equation-symbols > div:last-child {
+    border-bottom: 0;
+  }
+
+  dt,
+  dd {
+    margin: 0;
+  }
+
+  dt code {
+    white-space: nowrap;
+  }
+
+  dd {
+    color: #4e6e8f;
+    font-size: 0.88rem;
+    line-height: 1.55;
+  }
+
+  .equation-consequence {
+    max-width: none;
+    margin: 0;
+    padding: 1rem 1.15rem;
+    border-top: 1px solid var(--hairline);
+    color: #365a7d;
+    font-size: 0.9rem;
+    line-height: 1.6;
+  }
+
+  .equation-consequence span {
+    display: block;
+    margin-bottom: 0.3rem;
+    color: var(--ink);
+    font: 700 0.58rem/1.4 var(--font-mono);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  @media (max-width: 600px) {
+    .equation-symbols > div {
+      grid-template-columns: 3.4rem minmax(0, 1fr);
+      padding-right: 0.9rem;
+      padding-left: 0.9rem;
+    }
+
+    figcaption,
+    .equation-consequence {
+      padding-right: 0.9rem;
+      padding-left: 0.9rem;
+    }
+
+    .equation-expression {
+      padding-right: 0.9rem;
+      padding-left: 0.9rem;
+      text-align: left;
+    }
+  }
+</style>

@@ -1,0 +1,79 @@
+---
+export const integrationStatuses = [
+  "Integrated",
+  "Composable",
+  "Research primitive",
+  "Planned",
+] as const;
+
+export type IntegrationStatus = (typeof integrationStatuses)[number];
+
+interface Props {
+  status: IntegrationStatus;
+}
+
+const { status } = Astro.props;
+const statusClass = status.toLowerCase().replaceAll(" ", "-");
+---
+
+<span
+  class:list={["integration-badge", `integration-badge-${statusClass}`]}
+  aria-label={`Integration status: ${status}`}
+>
+  <span class="integration-badge-marker" aria-hidden="true"></span>
+  {status}
+</span>
+
+<style>
+  .integration-badge {
+    display: inline-flex;
+    min-height: 1.75rem;
+    align-items: center;
+    gap: 0.48rem;
+    padding: 0.25rem 0.58rem;
+    border: 1px solid currentColor;
+    border-radius: 999px;
+    font: 700 0.6rem/1.2 var(--font-mono);
+    letter-spacing: 0.045em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  .integration-badge-marker {
+    width: 0.42rem;
+    height: 0.42rem;
+    flex: 0 0 auto;
+    border: 1px solid currentColor;
+    border-radius: 50%;
+    background: currentColor;
+  }
+
+  .integration-badge-integrated {
+    background: rgba(221, 240, 231, 0.72);
+    color: #1d6747;
+  }
+
+  .integration-badge-composable {
+    background: rgba(223, 234, 247, 0.72);
+    color: #245d96;
+  }
+
+  .integration-badge-research-primitive {
+    background: rgba(239, 229, 242, 0.72);
+    color: #70447e;
+  }
+
+  .integration-badge-planned {
+    background: rgba(238, 240, 243, 0.78);
+    color: #5b6878;
+  }
+
+  .integration-badge-research-primitive .integration-badge-marker {
+    background: transparent;
+  }
+
+  .integration-badge-planned .integration-badge-marker {
+    border-style: dashed;
+    background: transparent;
+  }
+</style>

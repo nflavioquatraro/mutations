@@ -574,9 +574,8 @@ future session an unambiguous resume point.
 
 ### 11.2 Current resume point
 
-**Next item:** `WEB-DOC-005` — implement the reusable equation,
-integration-status, paper-reference, and strategy-table components with
-accessible labels and source-aware presentation.
+**Next item:** `WEB-DOC-006` — extend the existing visual system with
+documentation typography and responsive long-form content styling.
 
 The existing four-article documentation interface is a legacy baseline, not
 an implementation of the new package-aligned documentation system.
@@ -589,7 +588,7 @@ an implementation of the new package-aligned documentation system.
 | WEB-DOC-002 | Desktop sidebar, right table of contents, and previous/next navigation | WEB-DOC-001 | Validated | 2026-07-30 | Metadata-driven grouped sidebar, active-page semantics, heading-derived H2/H3 table of contents, and deterministic adjacent-page navigation implemented; `npm run build` passed with 0 diagnostics; navigation, focus targets, sticky rails, console output, and overflow validated at 1440 px, 1024 px, and 390 px |
 | WEB-DOC-003 | Responsive and accessible mobile documentation navigation | WEB-DOC-002 | Validated | 2026-07-30 | Metadata-driven hierarchy and H2/H3 table-of-contents disclosures implemented with native-details fallback and keyboard normalization; `npm run build` passed with 0 diagnostics; Enter/Space activation, visible 2 px focus outlines, 60 px touch targets, active-page semantics, heading links, zero horizontal overflow, and empty console output validated at 390 px, 768 px, 1024 px, and 1440 px; desktop sticky rails remain unchanged |
 | WEB-DOC-004 | Expandable verified code component | WEB-DOC-001 | Validated | 2026-07-30 | Reusable MDX component provides native-details fallback, Astro/Shiki highlighting, progressively enhanced clipboard copy with visible and announced feedback, optional verified labeling, and repository source links; both overview disclosures migrated; `verify_dense_equivalence.py` and `verify_package_runtime.py` passed; `npm run build` passed with 0 errors, warnings, or hints; server-rendered fallback retains summaries, code, and source links with copy controls hidden; Enter/Space activation, visible focus, exact clipboard contents, 44 px copy targets, zero horizontal overflow, and empty browser error output validated at 1440 px, 768 px, and 390 px |
-| WEB-DOC-005 | Equation, integration-status, paper-reference, and strategy-table components | WEB-DOC-001 | Not started | 2026-07-30 | Build reusable MDX components with accessible status labels |
+| WEB-DOC-005 | Equation, integration-status, paper-reference, and strategy-table components | WEB-DOC-001 | Validated | 2026-07-30 | Reusable dependency-free MDX components implemented and exercised on the overview page; equations pair intuition, spoken notation, symbol definitions, and practical consequences; integration labels use visible text, color, and distinct marker treatments; paper cards validate direct arXiv identifiers and distinguish motivation from project differences; semantic strategy tables provide captions, row/column headers, a focusable narrow-screen scroll region, and badge cells; all three arXiv targets returned HTTP 200; `npm run build` passed with 0 errors, warnings, or hints; desktop, tablet, and mobile checks at 1440 px, 768 px, and 390 px confirmed zero page overflow, contained component widths, mobile table scrolling, 44 px paper-link targets, accessible badge labels, empty browser error output, and source-accurate notation and attribution |
 | WEB-DOC-006 | Documentation typography and responsive content styling | WEB-DOC-001 | Not started | 2026-07-30 | Extend the existing visual system for long-form technical content |
 | WEB-DOC-007 | Static documentation search | All content pages | Not started | 2026-07-30 | Index titles, headings, feature IDs, and strategy names |
 | WEB-DOC-008 | Content synchronization and build validation | WEB-DOC-001 | Not started | 2026-07-30 | Validate sources, feature IDs, arXiv links, and verified snippets |

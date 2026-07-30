@@ -1,0 +1,148 @@
+---
+interface Props {
+  title: string;
+  authors: string;
+  arxivId: string;
+  purpose: string;
+  difference: string;
+}
+
+const { title, authors, arxivId, purpose, difference } = Astro.props;
+const modernArxivId = /^\d{4}\.\d{4,5}(v\d+)?$/;
+const legacyArxivId = /^[a-z-]+(?:\.[A-Z]{2})?\/\d{7}(v\d+)?$/i;
+
+if (!modernArxivId.test(arxivId) && !legacyArxivId.test(arxivId)) {
+  throw new Error(`Invalid arXiv identifier for "${title}": ${arxivId}`);
+}
+
+const arxivHref = `https://arxiv.org/abs/${arxivId}`;
+---
+
+<article class="paper-reference" aria-label={`Paper reference: ${title}`}>
+  <header>
+    <p>{authors}</p>
+    <h3>{title}</h3>
+    <a href={arxivHref} rel="noreferrer">
+      arXiv:{arxivId}
+      <span aria-hidden="true">↗</span>
+    </a>
+  </header>
+
+  <dl>
+    <div>
+      <dt>Why it matters here</dt>
+      <dd>{purpose}</dd>
+    </div>
+    <div>
+      <dt>How Mutations differs</dt>
+      <dd>{difference}</dd>
+    </div>
+  </dl>
+</article>
+
+<style>
+  .paper-reference {
+    max-width: 48rem;
+    margin: 1rem 0;
+    border: 1px solid var(--hairline);
+    background: rgba(248, 249, 251, 0.76);
+  }
+
+  header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.45rem 1.5rem;
+    padding: 1.15rem;
+    border-bottom: 1px solid var(--hairline);
+  }
+
+  header p {
+    grid-column: 1 / -1;
+    margin: 0;
+    color: var(--ink-soft);
+    font: 650 0.59rem/1.4 var(--font-mono);
+    letter-spacing: 0.055em;
+    text-transform: uppercase;
+  }
+
+  h3 {
+    align-self: center;
+    margin: 0;
+    color: var(--ink-dark);
+    font-size: 1.05rem;
+    font-weight: 550;
+    letter-spacing: -0.02em;
+    line-height: 1.35;
+  }
+
+  header a {
+    align-self: center;
+    color: var(--ink);
+    font: 700 0.63rem/1.4 var(--font-mono);
+    letter-spacing: 0.035em;
+    white-space: nowrap;
+  }
+
+  header a span {
+    margin-left: 0.25rem;
+  }
+
+  dl {
+    display: grid;
+    margin: 0;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  dl > div {
+    padding: 1rem 1.15rem;
+  }
+
+  dl > div + div {
+    border-left: 1px solid var(--hairline);
+  }
+
+  dt {
+    margin-bottom: 0.45rem;
+    color: var(--ink);
+    font: 700 0.57rem/1.4 var(--font-mono);
+    letter-spacing: 0.055em;
+    text-transform: uppercase;
+  }
+
+  dd {
+    margin: 0;
+    color: #4e6e8f;
+    font-size: 0.83rem;
+    line-height: 1.55;
+  }
+
+  @media (max-width: 600px) {
+    header {
+      grid-template-columns: 1fr;
+      padding: 0.95rem;
+    }
+
+    header p {
+      grid-column: auto;
+    }
+
+    header a {
+      justify-self: start;
+      min-height: 2.75rem;
+      align-content: center;
+    }
+
+    dl {
+      grid-template-columns: 1fr;
+    }
+
+    dl > div {
+      padding: 0.95rem;
+    }
+
+    dl > div + div {
+      border-top: 1px solid var(--hairline);
+      border-left: 0;
+    }
+  }
+</style>

@@ -18,6 +18,48 @@ last_reviewed: 2026-07-30
 ---
 
 import CodeDisclosure from "../../components/docs/CodeDisclosure.astro";
+import EquationBlock from "../../components/docs/EquationBlock.astro";
+import PaperReference from "../../components/docs/PaperReference.astro";
+import StrategyTable from "../../components/docs/StrategyTable.astro";
+
+export const overviewStrategies = [
+  {
+    approach: "Exact anchor conversion",
+    status: { status: "Integrated" },
+    meaning:
+      "Conversion, forward, generation, and equivalence checks work through the model façade.",
+  },
+  {
+    approach: "Packaged anchored top-1",
+    status: { status: "Integrated" },
+    meaning:
+      "Package installation, explicit synchronization, sparse execution, export, and reload form a complete lifecycle.",
+  },
+  {
+    approach: "Weighted top-2 and adaptive routing",
+    status: { status: "Composable" },
+    meaning:
+      "Selection, combination, capacity, and dispatch primitives are tested, but automatic package-driven model attachment is not available.",
+  },
+  {
+    approach: "Always-on anchor with routed deltas",
+    status: { status: "Composable" },
+    meaning:
+      "Explicit routed execution supports compatible anchor-relative experts; package-driven delta materialization remains separate work.",
+  },
+  {
+    approach: "Hierarchical, dynamic-k, retrieval, and expert-choice strategies",
+    status: { status: "Research primitive" },
+    meaning:
+      "The strategies are validated in isolation for controlled experiments.",
+  },
+  {
+    approach: "Automatic model-level top-2 attachment and capacity estimation",
+    status: { status: "Planned" },
+    meaning:
+      "The behavior is documented but not implemented as an end-to-end runtime.",
+  },
+];
 
 ## What this part does
 
@@ -49,14 +91,16 @@ of the frozen shared backbone.
 
 ## Implemented approaches
 
-| Approach | Integration label | What the label means here |
-| --- | --- | --- |
-| Exact anchor conversion | **Integrated** | Conversion, forward, generation, and equivalence checks work through the model façade. |
-| Packaged anchored top-1 | **Integrated** | Package installation, explicit synchronization, sparse execution, export, and reload form a complete lifecycle. |
-| Weighted top-2 and adaptive routing | **Composable** | Selection, combination, capacity, and dispatch primitives are tested, but automatic package-driven model attachment is not available. |
-| Always-on anchor with routed deltas | **Composable** | Explicit routed execution supports compatible anchor-relative experts; package-driven delta materialization remains separate work. |
-| Hierarchical, dynamic-\(k\), retrieval, and expert-choice strategies | **Research primitive** | The strategies are validated in isolation for controlled experiments. |
-| Automatic model-level top-2 attachment and capacity estimation | **Planned** | The behavior is documented but not implemented as an end-to-end runtime. |
+<StrategyTable
+  caption="Lifecycle integration by approach"
+  description="The status describes how far each strategy travels through the package-to-model lifecycle."
+  columns={[
+    { key: "approach", label: "Approach" },
+    { key: "status", label: "Integration label" },
+    { key: "meaning", label: "What the label means here" },
+  ]}
+  rows={overviewStrategies}
+/>
 
 These labels describe lifecycle integration, not research value or test
 quality. The Python feature tracker separately records whether each underlying
@@ -83,15 +127,18 @@ that state, which keeps lifecycle operations auditable.
 
 ## Mathematical intuition
 
-The zero anchor score turns routing into a test of positive specialist utility:
-
-> `g₀(h) = 0` and `r(h) = arg maxₖ gₖ(h)`, with candidate `0` winning exact
-> ties.
-
-Here, `h` is one token's pre-MLP hidden representation, `gₖ(h)` is the
-calibrated score for specialist `k`, and `r(h)` is the selected candidate.
-When every specialist score is negative—or exactly tied at zero—the original
-dense MLP runs unchanged.
+<EquationBlock
+  intuition="The zero anchor score turns routing into a test of positive specialist utility."
+  equation="g₀(h) = 0;  r(h) = arg maxₖ∈{0,…,K} gₖ(h)"
+  spokenLabel="The anchor score g zero of h equals zero. The route r of h is the index k from zero through K with the greatest calibrated score g k of h."
+  symbols={[
+    { symbol: "h", meaning: "One token's hidden representation before the routed MLP." },
+    { symbol: "gₖ(h)", meaning: "The calibrated utility score for candidate k." },
+    { symbol: "k = 0", meaning: "The immutable dense anchor, whose score is fixed at zero." },
+    { symbol: "r(h)", meaning: "The candidate selected for this token, with the anchor winning exact ties." },
+  ]}
+  consequence="When every specialist score is negative—or exactly tied at zero—the original dense MLP runs unchanged."
+/>
 
 For a specialist winner `k`, the routed layer returns `Eₖ(h)`. For an anchor
 winner, it returns `A(h)` with coefficient one. This is why exact fallback is a
@@ -177,21 +224,29 @@ restoration, composition export, and reload.
 
 ## References
 
-- **LoRA: Low-Rank Adaptation of Large Language Models** — Edward Hu and
-  collaborators. [arXiv:2106.09685](https://arxiv.org/abs/2106.09685).
-  Motivates compact anchor-relative expert parameterizations. Mutations keeps
-  those experts behind its own immutable-anchor and explicit lifecycle
-  contracts.
-- **Switch Transformers: Scaling to Trillion Parameter Models with Simple and
-  Efficient Sparsity** — William Fedus, Barret Zoph, and Noam Shazeer.
-  [arXiv:2101.03961](https://arxiv.org/abs/2101.03961). Motivates sparse routing
-  and load-balancing comparisons. Mutations adds permanent dense fallback and
-  does not treat its anchor policy as a Switch Transformer mechanism.
-- **On Calibration of Modern Neural Networks** — Chuan Guo and collaborators.
-  [arXiv:1706.04599](https://arxiv.org/abs/1706.04599). Motivates temperature
-  calibration. The repository applies per-head binary utility calibration and
-  explicit activation thresholds rather than reproducing the paper's
-  multiclass setup.
+<PaperReference
+  title="LoRA: Low-Rank Adaptation of Large Language Models"
+  authors="Edward Hu and collaborators"
+  arxivId="2106.09685"
+  purpose="Motivates compact anchor-relative expert parameterizations."
+  difference="Mutations keeps those experts behind its own immutable-anchor and explicit lifecycle contracts."
+/>
+
+<PaperReference
+  title="Switch Transformers: Scaling to Trillion Parameter Models with Simple and Efficient Sparsity"
+  authors="William Fedus, Barret Zoph, and Noam Shazeer"
+  arxivId="2101.03961"
+  purpose="Motivates sparse routing and load-balancing comparisons."
+  difference="Mutations adds permanent dense fallback and does not treat its anchor policy as a Switch Transformer mechanism."
+/>
+
+<PaperReference
+  title="On Calibration of Modern Neural Networks"
+  authors="Chuan Guo and collaborators"
+  arxivId="1706.04599"
+  purpose="Motivates temperature calibration."
+  difference="The repository applies per-head binary utility calibration and explicit activation thresholds rather than reproducing the paper's multiclass setup."
+/>
 
 The project-specific system design and its departures from prior work are
 defined in the
