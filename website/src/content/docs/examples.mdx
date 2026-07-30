@@ -1,6 +1,6 @@
 ---
 title: End-to-end examples
-description: Compare complete Anchored Plug-in MoE workflows, from exact anchor conversion through packaged top-1, weighted top-2, and adaptive route selection.
+description: Compare complete Anchored Plug-in MoE workflows, from exact anchor conversion through adaptive routing and always-on-anchor LoRA deltas.
 order: 13
 group: Learn by example
 source:
@@ -13,11 +13,15 @@ source:
   - examples/verify_anchor_veto_top2.py
   - examples/verify_top2_dispatch.py
   - examples/verify_adaptive_selection.py
+  - examples/verify_always_on_anchor_deltas.py
+  - tests/integration/test_anchor_delta_routed_mlp.py
   - tests/integration/test_qwen3_equivalence.py
   - tests/integration/test_affine_router_adaptive.py
   - tests/integration/test_affine_router_top2.py
   - tests/integration/test_package_runtime_composition.py
   - tests/integration/test_top2_dispatch_full_mlp.py
+  - tests/unit/test_anchor_delta_combination.py
+  - tests/unit/test_anchor_delta_dispatch.py
   - tests/unit/test_adaptive_selection.py
   - tests/unit/test_package_export.py
   - tests/unit/test_calibrated_package_export.py
@@ -25,6 +29,7 @@ source:
   - tests/unit/test_efficiency.py
   - tests/unit/test_top2_selection.py
   - tests/unit/test_top2_dispatch.py
+  - src/anchored_moe/experts/README.md
   - src/anchored_moe/routers/README.md
   - src/anchored_moe/policies/README.md
   - src/anchored_moe/training/README.md
@@ -37,12 +42,14 @@ feature_ids:
   - CORE-004
   - CORE-006
   - EXP-001
+  - EXP-002
   - TRN-001
   - RTR-002
   - POL-001
   - POL-002
   - POL-003
   - COM-001
+  - COM-004
   - BAL-002
   - INF-001
   - INF-002
@@ -104,7 +111,7 @@ export const exampleWorkflows = [
     expert: "LoRA or sparse delta",
     lifecycle: { status: "Composable" },
     bestFor: "Preservation-first adaptation",
-    guide: "Upcoming",
+    guide: "Published below",
   },
   {
     approach: "Local mini-MoE",
@@ -129,13 +136,14 @@ export const exampleWorkflows = [
 These guides connect the framework's individual strategies into inspectable
 workflows. They begin with the conservative dense-equivalence baseline, add the
 complete packaged anchored top-1 lifecycle, and then introduce explicitly
-composed weighted top-2 execution and adaptive route selection. Later guides
-will progress toward delta experts, local training, and hierarchical routing.
+composed weighted top-2 execution, adaptive route selection, and always-on
+anchor deltas. Later guides will progress toward local training and
+hierarchical routing.
 
 The comparison table includes the planned workflow set so that integration
 boundaries are visible from the start. Exact conversion, packaged top-1, and
-weighted top-2 are published below, alongside adaptive selection; later rows
-remain clearly marked as upcoming guides.
+weighted top-2 are published below, alongside adaptive selection and routed
+LoRA deltas; later rows remain clearly marked as upcoming guides.
 
 ## Compare the workflows
 
@@ -983,3 +991,219 @@ and strict mixture threshold are Mutations design choices.
   decisions.
 - [Weighted top-2](#weighted-top-2-specialists) shows the existing standalone
   replacement-expert dispatcher and score-softmax combination boundary.
+
+## Always-on anchor with routed LoRA deltas
+
+<IntegrationBadge status="Composable" />
+
+### The problem it solves
+
+Replacement routing chooses the anchor or a specialist. This workflow instead
+keeps the immutable anchor active for every token and adds zero, one, or two
+selected anchor-relative LoRA updates. Tokens with no useful specialist
+evidence therefore preserve the dense output exactly, while positive routes
+can adapt it without replacing the anchor path.
+
+The delta expert, adaptive selection, availability fallback, sparse dispatch,
+combination, and explicit `RoutedMLP` mode are validated through public APIs.
+They still require direct assembly: installed packages do not automatically
+materialize LoRA experts or activate this execution mode.
+
+### Workflow contract
+
+- **Expert representation:** each `PEFTLoRAExpert` owns adapter tensors over a
+  frozen private copy of the compatible anchor MLP. Its `forward_delta()` path
+  returns the complete private-expert output minus the already-computed live
+  anchor activation.
+- **Router:** the verified fixture supplies deterministic scores for `code`
+  and `math` in stable expert order. A separate tiny-Qwen3 integration test
+  binds the same delta runtime to an identity feature extractor and frozen
+  affine head.
+- **Selection:** adaptive selection chooses zero, one, or two specialists.
+  The fixed-zero anchor wins when the best score is non-positive; the runner-up
+  joins only when it is strictly above `mix_threshold`.
+- **Combination and capacity:** unavailable selected experts are removed
+  without searching outside the selected set. Zero survivors return the exact
+  anchor, one survivor receives unit weight, and two survivors receive
+  score-softmax weights.
+- **Training and calibration:** the guide starts from deterministic standalone
+  adapters and scores. It does not train LoRA factors, fit router heads,
+  calibrate thresholds, or prove that a selected mixture improves quality.
+- **Active work:** the anchor executes once for every token, followed by zero,
+  one, or two sparse delta-expert calls. The current LoRA delta path computes a
+  complete private expert before subtraction, so this is a correctness
+  reference rather than a native delta-only performance kernel.
+- **Packaging and serialization:** explicit `RoutedMLP` configuration is
+  available, and standalone LoRA adapter payloads are validated. Package-driven
+  LoRA materialization and composition-checkpoint reload are not implemented.
+- **Expected result:** three tokens take exact anchor, top-1 delta, and top-2
+  delta routes; the anchor row is bitwise equal, active weights follow route
+  arity, and the live anchor remains frozen.
+
+### How it runs
+
+```text
+Live immutable anchor → execute every token once
+Deterministic specialist scores → adaptive zero/top-1/top-2 selection
+Explicit availability → keep selected survivors or return to anchor
+Sparse LoRA delta calls → zero, unit, or score-softmax weights
+Anchor activation + weighted deltas → final output and auditable route data
+```
+
+The anchor and delta branches have different responsibilities. The anchor is
+the stable base computation, while each selected specialist contributes only
+its change relative to that base.
+
+### Anchor-plus-delta rule
+
+<EquationBlock
+  intuition="Every token keeps the anchor output, and routing controls only how many anchor-relative updates are added."
+  equation="y(h) = A(h) + Σ_(k ∈ S(h)) αₖ(h) Δₖ(h)"
+  spokenLabel="Output y of h equals anchor A of h plus the sum, over selected specialists k, of weight alpha k times anchor-relative delta k of h."
+  symbols={[
+    { symbol: "A(h)", meaning: "The immutable live anchor MLP output, computed once for every token." },
+    { symbol: "S(h)", meaning: "The capacity-approved set containing zero, one, or two selected specialists." },
+    { symbol: "Δₖ(h)", meaning: "Expert k's complete private output minus the matching live-anchor activation." },
+    { symbol: "αₖ(h)", meaning: "No weight for anchor fallback, unit weight for top-1, or score-softmax weight for a surviving pair." },
+  ]}
+  consequence="When the selected set is empty, the implementation returns the original anchor values without delta arithmetic. A zero-initialized LoRA expert also contributes an exact zero delta on the validated Qwen3 path."
+/>
+
+### Three-token example
+
+With `mix_threshold = 0.25`, the deterministic scores produce:
+
+| Specialist scores `(code, math)` | Effective route | Delta weights | Result |
+|---|---|---|---|
+| `(-1.0, -2.0)` | Anchor | `(0, 0)` | Exact `A(h)` |
+| `(2.0, -1.0)` | Top-1: code | `(1, 0)` | `A(h) + Δ_code(h)` |
+| `(2.0, 1.0)` | Top-2: code, math | `softmax(2, 1)` | `A(h) + α_codeΔ_code(h) + α_mathΔ_math(h)` |
+
+The pair weights are approximately `(0.7311, 0.2689)` and sum to one. These
+weights mix delta activations after selection; they do not interpolate LoRA
+factor matrices.
+
+### Minimal explicit composition
+
+```python
+result = AlwaysOnAnchorDeltaDispatcher(
+    selection_policy=AdaptiveTop1Top2Selection(mix_threshold=0.25),
+).dispatch(
+    hidden_states,
+    expert_scores=scores,
+    expert_ids=("code", "math"),
+    anchor_mlp=anchor,
+    experts=(code, math),
+)
+```
+
+### Run the verified example
+
+From the repository root, run:
+
+```bash
+python examples/verify_always_on_anchor_deltas.py
+```
+
+The example is offline and deterministic. It reports route arity `[0, 1, 2]`,
+one exact anchor row, the `peft_lora` parameterization, and the delta weights
+used for every token.
+
+<CodeDisclosure
+  summary="Show exact fallback and routed LoRA delta weights"
+  source="examples/verify_always_on_anchor_deltas.py"
+  verified
+>
+
+```python
+anchor_output = anchor(hidden_states)
+assert torch.equal(result.output[0], anchor_output[0])
+assert torch.equal(result.capacity.route_arity, torch.tensor([0, 1, 2]))
+assert torch.equal(result.delta_weights[0], torch.tensor([0.0, 0.0]))
+assert torch.equal(result.delta_weights[1], torch.tensor([1.0, 0.0]))
+assert torch.allclose(result.delta_weights[2].sum(), torch.tensor(1.0))
+assert all(not parameter.requires_grad for parameter in anchor.parameters())
+```
+
+Expected invariant: the anchor runs for every token, the no-specialist row is
+bitwise unchanged, and each active delta route has normalized weights. The
+[`test_anchor_delta_dispatch.py`](https://github.com/nflavioquatraro/mutations/blob/main/tests/unit/test_anchor_delta_dispatch.py)
+suite additionally verifies sparse calls, availability degradation, exact
+fallback, and gradients through hidden states, scores, and selected deltas.
+</CodeDisclosure>
+
+<CodeDisclosure
+  summary="Show exact zero-update LoRA behavior inside RoutedMLP"
+  source="tests/integration/test_anchor_delta_routed_mlp.py"
+  verified
+>
+
+```python
+wrapper.configure_always_on_anchor_deltas(
+    layer_index=2,
+    router_feature_extractor=IdentityRouterFeatureExtractor(hidden_size),
+    router_heads=heads,
+    experts={"code": expert},
+)
+actual = wrapper(hidden_states)
+assert wrapper.routing_mode == "always_on_anchor_deltas"
+assert torch.equal(actual, expected)
+```
+
+Expected invariant: a positively routed, zero-initialized LoRA adapter changes
+neither the tiny Qwen3 layer output nor the frozen anchor. Resetting the wrapper
+to `forced_anchor` also restores the same exact output.
+</CodeDisclosure>
+
+### Current limitations
+
+- Package-driven LoRA materialization, delta-mode registry synchronization,
+  and delta composition-checkpoint reload are not implemented.
+- `PEFTLoRAExpert.forward_delta()` currently evaluates a frozen private-base
+  expert and subtracts the live anchor output. It is storage-efficient adapter
+  state, but not a native delta-only execution kernel or a latency claim.
+- The dispatcher supports anchored top-1 or adaptive zero/top-1/top-2
+  selection. Arbitrary-\(k\) delta routing and compatibility-constrained delta
+  mixtures remain separate work.
+- Delta routes expose selection, capacity, and weights, but they do not feed
+  the existing route-telemetry history.
+- The examples use tiny deterministic CPU fixtures. Production Qwen3-4B,
+  reduced precision, multi-device, distributed, and fused-kernel behavior
+  require separate validation.
+- Synthetic scores and manually perturbed adapter factors prove framework
+  semantics, not calibration quality, language quality, specialist
+  compatibility, or beneficial mixtures.
+
+### References and related pages
+
+LoRA supplies the compact low-rank update, while shared-plus-routed MoE work
+motivates preserving a common computation beside specialized contributions.
+Mutations applies those ideas to independently trained plug-ins around an
+immutable pretrained anchor.
+
+<PaperReference
+  title="LoRA: Low-Rank Adaptation of Large Language Models"
+  authors="Edward J. Hu et al."
+  arxivId="2106.09685"
+  purpose="Defines the frozen-weight low-rank update used for compact anchor-relative expert state."
+  difference="Mutations injects LoRA into a frozen private MLP copy, retains the immutable live anchor as an always-on path, and routes explicit output deltas rather than replacing the base model."
+/>
+
+<PaperReference
+  title="DeepSeekMoE: Towards Ultimate Expert Specialization in Mixture-of-Experts Language Models"
+  authors="Damai Dai et al."
+  arxivId="2401.06066"
+  purpose="Motivates separating shared computation from routed specialized contributions."
+  difference="Mutations starts from a pretrained immutable anchor and independently trained plug-ins; it does not reproduce DeepSeekMoE's training recipe, expert segmentation, or shared-expert architecture."
+/>
+
+- [Experts](/docs/experts/) explains LoRA ownership, exact initialization,
+  adapter-only payloads, and the current private-base execution tradeoff.
+- [Policies](/docs/policies/) defines adaptive selection, availability
+  degradation, score-softmax weights, and always-on-anchor combination.
+- [Inference](/docs/inference/) documents sparse delta dispatch, output
+  reconstruction, and explicit `RoutedMLP` configuration.
+- [Training](/docs/training/) covers LoRA forced-path training and immutable
+  anchor guarantees.
+- [Evaluation](/docs/evaluation/) defines active-MLP accounting without
+  converting reference semantics into unsupported performance claims.
