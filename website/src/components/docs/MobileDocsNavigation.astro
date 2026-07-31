@@ -34,6 +34,10 @@ const visibleHeadings = headings.filter(
 
     <div class="mobile-docs-panel">
       <a class="mobile-docs-home" href="/docs/">← Documentation index</a>
+      <a class="mobile-docs-search" href="/docs/#documentation-search">
+        <span aria-hidden="true">⌕</span>
+        Search documentation
+      </a>
       <nav aria-label="Documentation pages">
         {groupedDocs.map(({ group, entries: groupEntries }) => {
           const groupId = `mobile-sidebar-${group

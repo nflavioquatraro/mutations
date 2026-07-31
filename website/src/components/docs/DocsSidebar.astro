@@ -20,6 +20,11 @@ const groupedDocs = groupDocumentationEntries(entries);
     Documentation
   </a>
 
+  <a class="docs-sidebar-search" href="/docs/#documentation-search">
+    <span aria-hidden="true">⌕</span>
+    Search documentation
+  </a>
+
   <nav aria-label="Documentation pages">
     {groupedDocs.map(({ group, entries: groupEntries }) => {
       const groupId = `sidebar-${group.toLowerCase().replaceAll(" ", "-")}`;

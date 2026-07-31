@@ -1,0 +1,452 @@
+---
+import type { DocumentationSearchRecord } from "../../lib/docs-search";
+
+interface Props {
+  records: DocumentationSearchRecord[];
+}
+
+const { records } = Astro.props;
+const serializedRecords = JSON.stringify(records).replaceAll("<", "\\u003c");
+---
+
+<section
+  id="documentation-search"
+  class="docs-search"
+  data-docs-search
+  data-enhanced="false"
+  aria-labelledby="documentation-search-title"
+>
+  <header class="docs-search-heading">
+    <div>
+      <p class="section-kicker">Search the framework</p>
+      <h2 id="documentation-search-title">Find the exact concept.</h2>
+    </div>
+    <p>
+      Search page titles, section headings, strategy names, or tracked feature
+      IDs such as <code>POL-002</code>.
+    </p>
+  </header>
+
+  <form class="docs-search-form" role="search">
+    <label for="documentation-search-input">Documentation search</label>
+    <div class="docs-search-control">
+      <input
+        id="documentation-search-input"
+        name="query"
+        type="search"
+        autocomplete="off"
+        enterkeyhint="search"
+        placeholder="Try “anchor-veto top-2”"
+        aria-describedby="documentation-search-hint documentation-search-status"
+      />
+      <button type="submit">Search</button>
+    </div>
+    <p id="documentation-search-hint" class="docs-search-hint">
+      Results stay on this device. No query is sent to a server.
+    </p>
+  </form>
+
+  <p
+    id="documentation-search-status"
+    class="docs-search-status"
+    role="status"
+    aria-live="polite"
+  >
+    Search {records.length} documentation pages.
+  </p>
+
+  <ol class="docs-search-results" data-docs-search-results hidden></ol>
+
+  <noscript>
+    <p class="docs-search-noscript">
+      Search requires JavaScript. The complete documentation directory remains
+      available below.
+    </p>
+  </noscript>
+
+  <script
+    id="documentation-search-index"
+    type="application/json"
+    is:inline
+    set:html={serializedRecords}
+  ></script>
+</section>
+
+<script>
+  import {
+    searchDocumentation,
+    type DocumentationSearchRecord,
+    type DocumentationSearchResult,
+  } from "../../lib/docs-search";
+
+  const root = document.querySelector<HTMLElement>("[data-docs-search]");
+  const form = root?.querySelector<HTMLFormElement>(".docs-search-form");
+  const input = root?.querySelector<HTMLInputElement>(
+    "#documentation-search-input",
+  );
+  const button = root?.querySelector<HTMLButtonElement>(
+    ".docs-search-control button",
+  );
+  const status = root?.querySelector<HTMLElement>(
+    "#documentation-search-status",
+  );
+  const results = root?.querySelector<HTMLOListElement>(
+    "[data-docs-search-results]",
+  );
+  const indexElement = root?.querySelector<HTMLScriptElement>(
+    "#documentation-search-index",
+  );
+
+  if (root && form && input && button && status && results && indexElement) {
+    const records = JSON.parse(
+      indexElement.textContent ?? "[]",
+    ) as DocumentationSearchRecord[];
+
+    root.dataset.enhanced = "true";
+
+    const renderResult = (result: DocumentationSearchResult): HTMLLIElement => {
+      const item = document.createElement("li");
+      const link = document.createElement("a");
+      const index = document.createElement("span");
+      const copy = document.createElement("span");
+      const title = document.createElement("strong");
+      const description = document.createElement("small");
+      const match = document.createElement("span");
+      const arrow = document.createElement("span");
+
+      link.href = result.href;
+      link.className = "docs-search-result";
+
+      index.className = "docs-search-result-index";
+      index.textContent = String(result.order).padStart(2, "0");
+      index.setAttribute("aria-hidden", "true");
+
+      copy.className = "docs-search-result-copy";
+      title.textContent = result.title;
+      description.textContent = result.description;
+      copy.append(title, description);
+
+      match.className = "docs-search-result-match";
+      match.textContent = `${result.matchKind}: ${result.matchValue}`;
+
+      arrow.className = "docs-search-result-arrow";
+      arrow.textContent = "→";
+      arrow.setAttribute("aria-hidden", "true");
+
+      link.append(index, copy, match, arrow);
+      item.append(link);
+      return item;
+    };
+
+    const updateResults = (): void => {
+      const query = input.value.trim();
+      results.replaceChildren();
+
+      if (!query) {
+        results.hidden = true;
+        status.textContent = `Search ${records.length} documentation pages.`;
+        return;
+      }
+
+      const matches = searchDocumentation(records, query);
+      results.hidden = false;
+      results.append(...matches.map(renderResult));
+
+      status.textContent =
+        matches.length === 0
+          ? `No documentation results for “${query}”.`
+          : `${matches.length} documentation ${
+              matches.length === 1 ? "result" : "results"
+            } for “${query}”.`;
+    };
+
+    const submitSearch = (): void => {
+      updateResults();
+      results.querySelector<HTMLAnchorElement>("a")?.focus();
+    };
+
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      submitSearch();
+    });
+    input.addEventListener("input", updateResults);
+    input.addEventListener("search", updateResults);
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && input.value) {
+        input.value = "";
+        updateResults();
+      } else if (event.key === "Enter") {
+        event.preventDefault();
+        submitSearch();
+      }
+    });
+    button.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        submitSearch();
+      }
+    });
+
+    if (window.location.hash === "#documentation-search") {
+      requestAnimationFrame(() => input.focus({ preventScroll: true }));
+    }
+  }
+</script>
+
+<style>
+  .docs-search {
+    margin-bottom: clamp(5rem, 9vw, 8rem);
+    padding: clamp(2rem, 4vw, 3.5rem);
+    border: 1px solid var(--hairline);
+    background: rgba(248, 249, 251, 0.9);
+    scroll-margin-top: 2rem;
+  }
+
+  .docs-search[data-enhanced="false"] .docs-search-form,
+  .docs-search[data-enhanced="false"] .docs-search-status {
+    display: none;
+  }
+
+  .docs-search-heading {
+    display: grid;
+    align-items: end;
+    padding-bottom: 2rem;
+    border-bottom: 1px solid var(--hairline);
+    grid-template-columns: minmax(0, 1fr) minmax(18rem, 0.68fr);
+    gap: clamp(2rem, 5vw, 5rem);
+  }
+
+  .docs-search-heading .section-kicker {
+    margin: 0 0 1rem;
+  }
+
+  .docs-search-heading h2 {
+    max-width: 12ch;
+    margin: 0;
+    color: var(--ink-dark);
+    font-size: clamp(2.3rem, 5vw, 4.3rem);
+    font-weight: 420;
+    letter-spacing: -0.055em;
+    line-height: 0.98;
+    text-wrap: balance;
+  }
+
+  .docs-search-heading > p {
+    max-width: 36rem;
+    margin: 0;
+    color: #4d6d8d;
+    line-height: 1.65;
+  }
+
+  .docs-search-heading code {
+    color: var(--ink);
+    font: 650 0.82em/1 var(--font-mono);
+  }
+
+  .docs-search-form {
+    padding-top: 2rem;
+  }
+
+  .docs-search-form > label {
+    display: block;
+    margin-bottom: 0.65rem;
+    color: var(--ink-dark);
+    font: 700 0.62rem/1.4 var(--font-mono);
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+  }
+
+  .docs-search-control {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .docs-search-control input {
+    min-width: 0;
+    min-height: 3.75rem;
+    padding: 0.9rem 1rem;
+    border: 1px solid var(--ink);
+    border-radius: 0;
+    background: white;
+    color: var(--ink-dark);
+    font: 500 1rem/1.4 var(--font-sans);
+    appearance: none;
+  }
+
+  .docs-search-control input::placeholder {
+    color: #7088a0;
+  }
+
+  .docs-search-control input:focus-visible {
+    position: relative;
+    z-index: 1;
+    outline: 3px solid var(--paper);
+    outline-offset: -5px;
+    box-shadow: 0 0 0 2px var(--ink);
+  }
+
+  .docs-search-control button {
+    min-width: 7.5rem;
+    min-height: 3.75rem;
+    padding: 0.9rem 1.35rem;
+    border: 1px solid var(--ink);
+    border-left: 0;
+    border-radius: 0;
+    background: var(--ink);
+    color: white;
+    cursor: pointer;
+    font: 700 0.65rem/1 var(--font-mono);
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+  }
+
+  .docs-search-control button:hover {
+    background: var(--ink-dark);
+  }
+
+  .docs-search-control button:focus-visible {
+    outline: 2px solid var(--ink-dark);
+    outline-offset: 3px;
+  }
+
+  .docs-search-hint,
+  .docs-search-status,
+  .docs-search-noscript {
+    margin: 0.75rem 0 0;
+    color: var(--ink-soft);
+    font: 600 0.61rem/1.5 var(--font-mono);
+    letter-spacing: 0.035em;
+  }
+
+  .docs-search-status {
+    min-height: 1.5rem;
+    margin-top: 1.25rem;
+    color: var(--ink);
+  }
+
+  .docs-search-noscript {
+    padding-top: 1.5rem;
+  }
+
+  .docs-search-results {
+    margin: 0.75rem 0 0;
+    padding: 0;
+    border-top: 1px solid var(--hairline);
+    list-style: none;
+  }
+
+  .docs-search-results li {
+    margin: 0;
+    padding: 0;
+  }
+
+  :global(.docs-search-result) {
+    display: grid;
+    min-height: 7.5rem;
+    align-items: center;
+    padding: 1rem;
+    border-bottom: 1px solid var(--hairline);
+    grid-template-columns: 3rem minmax(14rem, 1fr) minmax(12rem, 0.6fr) 1.5rem;
+    gap: 1rem;
+    color: inherit;
+    transition: background 160ms ease, padding 160ms ease;
+  }
+
+  :global(.docs-search-result:hover) {
+    padding-right: 1.25rem;
+    padding-left: 1.25rem;
+    background: rgba(224, 234, 245, 0.62);
+  }
+
+  :global(.docs-search-result:focus-visible) {
+    outline: 2px solid var(--ink);
+    outline-offset: -2px;
+  }
+
+  :global(.docs-search-result-index),
+  :global(.docs-search-result-match) {
+    color: var(--ink-soft);
+    font: 650 0.6rem/1.5 var(--font-mono);
+    letter-spacing: 0.045em;
+  }
+
+  :global(.docs-search-result-copy) {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  :global(.docs-search-result-copy strong) {
+    color: var(--ink-dark);
+    font-size: 1.25rem;
+    font-weight: 480;
+    letter-spacing: -0.025em;
+  }
+
+  :global(.docs-search-result-copy small) {
+    color: #5e7892;
+    font-size: 0.8rem;
+    line-height: 1.45;
+  }
+
+  :global(.docs-search-result-match) {
+    overflow-wrap: anywhere;
+  }
+
+  :global(.docs-search-result-arrow) {
+    color: var(--ink);
+    font-size: 1.1rem;
+  }
+
+  @media (max-width: 800px) {
+    .docs-search-heading {
+      grid-template-columns: 1fr;
+      gap: 1.25rem;
+    }
+
+    :global(.docs-search-result) {
+      grid-template-columns: 2rem minmax(0, 1fr) 1.25rem;
+    }
+
+    :global(.docs-search-result-match) {
+      grid-column: 2;
+    }
+  }
+
+  @media (max-width: 520px) {
+    .docs-search {
+      margin-right: calc(var(--page-x) * -1);
+      margin-left: calc(var(--page-x) * -1);
+      padding: 2rem var(--page-x);
+      border-right: 0;
+      border-left: 0;
+    }
+
+    .docs-search-control {
+      grid-template-columns: 1fr;
+      gap: 0.65rem;
+    }
+
+    .docs-search-control button {
+      min-height: 3.25rem;
+      border-left: 1px solid var(--ink);
+    }
+
+    :global(.docs-search-result) {
+      min-height: 8.5rem;
+      padding: 1rem 0.5rem;
+    }
+
+    :global(.docs-search-result:hover) {
+      padding-right: 0.7rem;
+      padding-left: 0.7rem;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    :global(.docs-search-result) {
+      transition: none;
+    }
+  }
+</style>

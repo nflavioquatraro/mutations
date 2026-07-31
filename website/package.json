@@ -9,6 +9,7 @@
     "dev": "astro dev",
     "prebuild": "npm run prepare:assets",
     "build": "astro check && astro build",
+    "test:search": "node --experimental-strip-types scripts/verify-search.mjs",
     "preview": "astro preview"
   },
   "dependencies": {

@@ -1,13 +1,16 @@
 ---
 import Brand from "../../components/Brand.astro";
+import DocsSearch from "../../components/docs/DocsSearch.astro";
 import BaseLayout from "../../layouts/BaseLayout.astro";
 import {
+  buildDocumentationSearchIndex,
   getOrderedDocs,
   groupDocumentationEntries,
 } from "../../lib/docs";
 
 const docs = await getOrderedDocs();
 const groupedDocs = groupDocumentationEntries(docs);
+const searchRecords = await buildDocumentationSearchIndex(docs);
 ---
 
 <BaseLayout
@@ -40,6 +43,8 @@ const groupedDocs = groupDocumentationEntries(docs);
         </p>
       </div>
     </div>
+
+    <DocsSearch records={searchRecords} />
 
     <div class="docs-groups">
       {groupedDocs.map(({ group, entries }) => {

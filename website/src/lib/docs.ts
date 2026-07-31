@@ -1,6 +1,14 @@
 import { existsSync } from "node:fs";
 import { resolve, sep } from "node:path";
-import { getCollection, type CollectionEntry } from "astro:content";
+import {
+  getCollection,
+  render,
+  type CollectionEntry,
+} from "astro:content";
+import {
+  extractDocumentationStrategyNames,
+  type DocumentationSearchRecord,
+} from "./docs-search";
 
 export type DocsEntry = CollectionEntry<"docs">;
 
@@ -65,6 +73,43 @@ export async function getOrderedDocs(): Promise<DocsEntry[]> {
   }
 
   return entries.toSorted((left, right) => left.data.order - right.data.order);
+}
+
+/**
+ * Builds the small, serializable index consumed by the static documentation
+ * search. Rendering happens at build time so heading fragments always match
+ * Astro's generated page IDs.
+ */
+export async function buildDocumentationSearchIndex(
+  entries?: DocsEntry[],
+): Promise<DocumentationSearchRecord[]> {
+  const orderedEntries = entries ?? (await getOrderedDocs());
+
+  return Promise.all(
+    orderedEntries.map(async (entry) => {
+      const { headings } = await render(entry);
+
+      return {
+        id: entry.id,
+        title: entry.data.title,
+        description: entry.data.description,
+        group: entry.data.group,
+        order: entry.data.order,
+        href: `/docs/${entry.id}/`,
+        featureIds: entry.data.feature_ids,
+        headings: headings
+          .filter(
+            (
+              heading,
+            ): heading is typeof heading & {
+              depth: 2 | 3;
+            } => heading.depth === 2 || heading.depth === 3,
+          )
+          .map(({ depth, text, slug }) => ({ depth, text, slug })),
+        strategyNames: extractDocumentationStrategyNames(entry.body ?? ""),
+      };
+    }),
+  );
 }
 
 /**

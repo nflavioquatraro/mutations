@@ -936,6 +936,23 @@ a {
   text-transform: uppercase;
 }
 
+.mobile-docs-search {
+  display: flex;
+  min-height: 2.75rem;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.7rem 0.6rem;
+  border-bottom: 1px solid var(--hairline);
+  color: var(--ink);
+  font: 700 0.62rem/1.4 var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.mobile-docs-search:hover {
+  background: rgba(224, 234, 245, 0.46);
+}
+
 .mobile-docs-panel nav {
   display: grid;
   gap: 1.5rem;
@@ -1058,6 +1075,24 @@ a {
 
 .docs-sidebar-home:hover span {
   transform: translateX(-0.2rem);
+}
+
+.docs-sidebar-search {
+  display: flex;
+  min-height: 2.75rem;
+  align-items: center;
+  gap: 0.55rem;
+  margin-top: -1rem;
+  padding: 0.65rem 0.55rem;
+  border-left: 1px solid var(--ink);
+  background: rgba(224, 234, 245, 0.46);
+  color: var(--ink);
+  text-transform: uppercase;
+  transition: background 160ms ease;
+}
+
+.docs-sidebar-search:hover {
+  background: rgba(224, 234, 245, 0.78);
 }
 
 .docs-sidebar nav {
