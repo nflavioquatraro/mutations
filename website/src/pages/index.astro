@@ -15,10 +15,9 @@ const documentationGuideCount = (await getOrderedDocs()).length;
 
   <main id="main-content" class="story" data-story>
     <section class="panel panel-orbital is-active" id="orbital" data-panel data-index="1">
-      <MutationOrbital />
-    </section>
-
-    <section class="panel panel-hero" id="framework" data-panel data-index="2">
+      <div class="hero-orbital-visual">
+        <MutationOrbital />
+      </div>
       <div class="panel-inner hero-inner">
         <p class="section-kicker">A framework for local intelligence</p>
         <h1>
@@ -37,7 +36,7 @@ const documentationGuideCount = (await getOrderedDocs()).length;
       </div>
     </section>
 
-    <section class="panel panel-architecture" id="architecture" data-panel data-index="3">
+    <section class="panel panel-architecture" id="architecture" data-panel data-index="2">
       <div class="panel-inner architecture-inner">
         <div class="section-heading reveal">
           <p class="section-kicker">02 / Architecture</p>
@@ -81,7 +80,7 @@ const documentationGuideCount = (await getOrderedDocs()).length;
       </div>
     </section>
 
-    <section class="panel panel-experiment" id="experiment" data-panel data-index="4">
+    <section class="panel panel-experiment" id="experiment" data-panel data-index="3">
       <div class="panel-inner experiment-inner">
         <div class="section-heading reveal">
           <p class="section-kicker">03 / Validated baseline</p>
@@ -107,7 +106,7 @@ const documentationGuideCount = (await getOrderedDocs()).length;
       </div>
     </section>
 
-    <section class="panel panel-read" id="read" data-panel data-index="5">
+    <section class="panel panel-read" id="read" data-panel data-index="4">
       <div class="panel-inner read-inner">
         <div class="section-heading reveal">
           <p class="section-kicker">04 / Read and inspect</p>
@@ -154,14 +153,13 @@ const documentationGuideCount = (await getOrderedDocs()).length;
 
   <nav class="section-rail" aria-label="Homepage sections">
     <a href="#orbital" aria-label="Go to section 1" data-dot="1" class="active"></a>
-    <a href="#framework" aria-label="Go to section 2" data-dot="2"></a>
-    <a href="#architecture" aria-label="Go to section 3" data-dot="3"></a>
-    <a href="#experiment" aria-label="Go to section 4" data-dot="4"></a>
-    <a href="#read" aria-label="Go to section 5" data-dot="5"></a>
+    <a href="#architecture" aria-label="Go to section 2" data-dot="2"></a>
+    <a href="#experiment" aria-label="Go to section 3" data-dot="3"></a>
+    <a href="#read" aria-label="Go to section 4" data-dot="4"></a>
   </nav>
 
   <div class="section-counter" aria-live="polite">
-    <span data-current>01</span><span class="counter-line">—</span><span>05</span>
+    <span data-current>01</span><span class="counter-line">—</span><span>04</span>
   </div>
 
   <script>

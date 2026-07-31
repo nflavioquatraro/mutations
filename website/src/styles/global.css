@@ -221,6 +221,16 @@ a {
   isolation: isolate;
 }
 
+.hero-orbital-visual {
+  position: absolute;
+  z-index: 0;
+  inset: clamp(6.75rem, 12vh, 9.25rem) 1rem 3.75rem 41%;
+}
+
+.hero-orbital-visual .mutation-orbital {
+  inset: 0;
+}
+
 .panel-inner {
   width: min(100%, 100rem);
   min-height: 100svh;
@@ -239,13 +249,31 @@ a {
 }
 
 .hero-inner {
+  position: relative;
+  z-index: 2;
   display: flex;
-  max-width: 90rem;
+  max-width: 100rem;
   flex-direction: column;
   justify-content: center;
-  padding-right: clamp(2rem, 15vw, 14rem);
-  padding-bottom: 8rem;
-  padding-left: clamp(3rem, 10vw, 11rem);
+  padding-right: 49%;
+  padding-bottom: 7.5rem;
+  padding-left: clamp(3rem, 4.8vw, 5rem);
+  pointer-events: none;
+}
+
+.panel-orbital::after {
+  position: absolute;
+  z-index: 1;
+  inset: 0 auto 0 0;
+  width: 52%;
+  background: linear-gradient(
+    90deg,
+    rgba(248, 249, 251, 0.82) 0%,
+    rgba(248, 249, 251, 0.64) 72%,
+    rgba(248, 249, 251, 0) 100%
+  );
+  content: "";
+  pointer-events: none;
 }
 
 .hero-inner h1,
@@ -266,11 +294,16 @@ a {
   font-weight: 300;
 }
 
+.panel-orbital .hero-inner h1 {
+  font-size: clamp(3.35rem, 4.85vw, 5.3rem);
+  line-height: 0.94;
+}
+
 .hero-summary {
-  width: min(100%, 41rem);
-  margin: 2rem 0 0;
+  width: min(100%, 37rem);
+  margin: 1.9rem 0 0;
   color: #426589;
-  font-size: clamp(1rem, 1.45vw, 1.25rem);
+  font-size: clamp(0.95rem, 1.28vw, 1.16rem);
   letter-spacing: -0.015em;
   line-height: 1.55;
 }
@@ -283,6 +316,7 @@ a {
 
 .hero-actions .text-link {
   min-height: 2.75rem;
+  pointer-events: auto;
 }
 
 .text-link {
@@ -1528,6 +1562,24 @@ a {
     --header-h: 6rem;
   }
 
+  .hero-orbital-visual {
+    inset: 7rem 0.5rem 4rem 44%;
+  }
+
+  .hero-inner {
+    padding-right: 48%;
+    padding-left: clamp(2.5rem, 5vw, 4rem);
+  }
+
+  .panel-orbital .hero-inner h1 {
+    font-size: clamp(3.1rem, 5.2vw, 4rem);
+  }
+
+  .hero-actions {
+    flex-wrap: wrap;
+    gap: 0.35rem 1.5rem;
+  }
+
   .architecture-inner,
   .experiment-inner,
   .read-inner {
@@ -1612,6 +1664,43 @@ a {
   }
 }
 
+@media (max-width: 920px) {
+  .hero-orbital-visual {
+    inset: 5.75rem 0 43% 18%;
+  }
+
+  .hero-orbital-visual .mutation-orbital {
+    inset: 0 !important;
+  }
+
+  .panel-orbital::after {
+    inset: auto 0 0;
+    width: 100%;
+    height: 62%;
+    background: linear-gradient(
+      180deg,
+      rgba(248, 249, 251, 0) 0%,
+      rgba(248, 249, 251, 0.86) 26%,
+      rgba(248, 249, 251, 0.98) 51%,
+      var(--paper) 100%
+    );
+  }
+
+  .hero-inner {
+    justify-content: flex-end;
+    padding: 42svh clamp(2.5rem, 7vw, 4rem) 7rem;
+  }
+
+  .panel-orbital .hero-inner h1 {
+    max-width: 42rem;
+    font-size: clamp(3.3rem, 8.5vw, 5rem);
+  }
+
+  .hero-summary {
+    max-width: 38rem;
+  }
+}
+
 @media (max-width: 720px) {
   :root {
     --page-x: 1.25rem;
@@ -1642,19 +1731,41 @@ a {
     width: 135vw;
   }
 
+  .hero-orbital-visual {
+    inset: 5.2rem 0 48% 14%;
+  }
+
   .hero-inner {
-    justify-content: flex-end;
-    padding: 7rem 1.25rem 10rem;
+    padding: 39svh 1.25rem 5.4rem;
   }
 
-  .hero-inner h1 {
-    font-size: clamp(3.2rem, 15vw, 5rem);
+  .panel-orbital .hero-inner h1 {
+    font-size: clamp(2.75rem, 12.5vw, 3.75rem);
   }
 
-  .hero-actions {
+  .panel-orbital .section-kicker {
+    margin-bottom: 0.75rem;
+    font-size: 0.58rem;
+  }
+
+  .hero-summary {
+    width: min(100%, 33rem);
+    margin-top: 1rem;
+    font-size: 0.86rem;
+    line-height: 1.45;
+  }
+
+  .panel-orbital .hero-actions {
     align-items: flex-start;
-    flex-direction: column;
-    gap: 0.75rem;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 0.1rem 1.2rem;
+    margin-top: 1rem;
+  }
+
+  .panel-orbital .hero-actions .text-link {
+    min-height: 2.75rem;
+    font-size: 0.6rem;
   }
 
   .fixed-caption {
