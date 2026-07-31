@@ -16,9 +16,6 @@ const documentationGuideCount = (await getOrderedDocs()).length;
 
   <main id="main-content" class="story" data-story>
     <section class="panel panel-orbital is-active" id="orbital" data-panel data-index="1">
-      <div class="hero-orbital-visual">
-        <MutationOrbital />
-      </div>
       <div class="panel-inner hero-inner">
         <p class="section-kicker">A framework for local intelligence</p>
         <h1>
@@ -34,6 +31,9 @@ const documentationGuideCount = (await getOrderedDocs()).length;
           <a class="text-link text-link-muted" href={sitePath("docs/examples/")}>Compare workflows <span>→</span></a>
           <a class="text-link text-link-muted" href={sitePath("paper.pdf")}>Read the paper <span>↗</span></a>
         </div>
+      </div>
+      <div class="hero-orbital-visual">
+        <MutationOrbital />
       </div>
     </section>
 
