@@ -9,6 +9,7 @@ import {
   extractDocumentationStrategyNames,
   type DocumentationSearchRecord,
 } from "./docs-search";
+import { sitePath } from "./site-path";
 
 export type DocsEntry = CollectionEntry<"docs">;
 
@@ -95,7 +96,7 @@ export async function buildDocumentationSearchIndex(
         description: entry.data.description,
         group: entry.data.group,
         order: entry.data.order,
-        href: `/docs/${entry.id}/`,
+        href: sitePath(`docs/${entry.id}/`),
         featureIds: entry.data.feature_ids,
         headings: headings
           .filter(

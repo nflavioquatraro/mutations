@@ -1,5 +1,6 @@
 ---
 import type { DocumentNeighbors } from "../../lib/docs";
+import { sitePath } from "../../lib/site-path";
 
 interface Props {
   neighbors: DocumentNeighbors;
@@ -11,12 +12,12 @@ const { neighbors } = Astro.props;
 <nav class="document-pagination" aria-label="Documentation pages">
   {
     neighbors.previous ? (
-      <a class="document-pagination-link previous" href={`/docs/${neighbors.previous.id}/`}>
+      <a class="document-pagination-link previous" href={sitePath(`docs/${neighbors.previous.id}/`)}>
         <span>Previous</span>
         <strong>{neighbors.previous.data.title}</strong>
       </a>
     ) : (
-      <a class="document-pagination-link previous" href="/docs/">
+      <a class="document-pagination-link previous" href={sitePath("docs/")}>
         <span>Documentation</span>
         <strong>All guides</strong>
       </a>
@@ -25,7 +26,7 @@ const { neighbors } = Astro.props;
 
   {
     neighbors.next ? (
-      <a class="document-pagination-link next" href={`/docs/${neighbors.next.id}/`}>
+      <a class="document-pagination-link next" href={sitePath(`docs/${neighbors.next.id}/`)}>
         <span>Next</span>
         <strong>{neighbors.next.data.title}</strong>
       </a>

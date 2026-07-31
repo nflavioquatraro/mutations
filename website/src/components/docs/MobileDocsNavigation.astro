@@ -4,6 +4,7 @@ import {
   groupDocumentationEntries,
   type DocsEntry,
 } from "../../lib/docs";
+import { sitePath } from "../../lib/site-path";
 
 interface Props {
   currentEntry: DocsEntry;
@@ -33,8 +34,8 @@ const visibleHeadings = headings.filter(
     </summary>
 
     <div class="mobile-docs-panel">
-      <a class="mobile-docs-home" href="/docs/">← Documentation index</a>
-      <a class="mobile-docs-search" href="/docs/#documentation-search">
+      <a class="mobile-docs-home" href={sitePath("docs/")}>← Documentation index</a>
+      <a class="mobile-docs-search" href={sitePath("docs/#documentation-search")}>
         <span aria-hidden="true">⌕</span>
         Search documentation
       </a>
@@ -51,7 +52,7 @@ const visibleHeadings = headings.filter(
                 {groupEntries.map((entry) => (
                   <li>
                     <a
-                      href={`/docs/${entry.id}/`}
+                      href={sitePath(`docs/${entry.id}/`)}
                       aria-current={
                         entry.id === currentEntry.id ? "page" : undefined
                       }

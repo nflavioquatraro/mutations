@@ -4,6 +4,8 @@ import {
   searchDocumentation,
 } from "../src/lib/docs-search.ts";
 
+const siteBase = "/mutations";
+
 const indexHtml = await readFile(
   new URL("../dist/docs/index.html", import.meta.url),
   "utf8",
@@ -44,8 +46,13 @@ assert(
 );
 
 for (const record of records) {
+  assert.ok(
+    record.href.startsWith(`${siteBase}/docs/`),
+    `${record.href} must include the GitHub Pages project base`,
+  );
+  const outputRoute = record.href.slice(siteBase.length);
   const pageHtml = await readFile(
-    new URL(`../dist${record.href}index.html`, import.meta.url),
+    new URL(`../dist${outputRoute}index.html`, import.meta.url),
     "utf8",
   );
 
@@ -62,25 +69,25 @@ const cases = [
     query: "Registry",
     title: "Registry",
     matchKind: "Title",
-    href: "/docs/registry/",
+    href: `${siteBase}/docs/registry/`,
   },
   {
     query: "POL-002",
     title: "Policies",
     matchKind: "Feature ID",
-    href: "/docs/policies/",
+    href: `${siteBase}/docs/policies/`,
   },
   {
     query: "anchor-veto top-2",
     title: "Policies",
     matchKind: "Strategy",
-    href: "/docs/policies/",
+    href: `${siteBase}/docs/policies/`,
   },
   {
     query: "Product-key micro-expert retrieval",
     title: "End-to-end examples",
     matchKind: "Heading",
-    hrefPrefix: "/docs/examples/#",
+    hrefPrefix: `${siteBase}/docs/examples/#`,
   },
 ];
 

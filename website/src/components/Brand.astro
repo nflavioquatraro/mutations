@@ -1,4 +1,6 @@
 ---
+import { sitePath } from "../lib/site-path";
+
 interface Props {
   compact?: boolean;
 }
@@ -11,7 +13,7 @@ const { compact = false } = Astro.props;
     <>
       <img
         class="brand-mark"
-        src="/logo/mutations-mark.png"
+        src={sitePath("logo/mutations-mark.png")}
         width="454"
         height="470"
         alt=""
@@ -19,7 +21,7 @@ const { compact = false } = Astro.props;
       />
       <img
         class="brand-wordmark"
-        src="/logo/mutations-wordmark.png"
+        src={sitePath("logo/mutations-wordmark.png")}
         width="366"
         height="63"
         alt=""
@@ -29,7 +31,7 @@ const { compact = false } = Astro.props;
   ) : (
     <img
       class="brand-lockup"
-      src="/logo/mutations-logo.png"
+      src={sitePath("logo/mutations-logo.png")}
       width="454"
       height="558"
       alt=""

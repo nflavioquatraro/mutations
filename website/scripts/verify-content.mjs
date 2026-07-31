@@ -14,6 +14,11 @@ const documentationIndexPath = resolve(
   repositoryRoot,
   "website/src/pages/docs/index.astro",
 );
+const astroConfigPath = resolve(repositoryRoot, "website/astro.config.mjs");
+const pagesWorkflowPath = resolve(
+  repositoryRoot,
+  ".github/workflows/deploy-pages.yml",
+);
 const featureIdPattern = /^[A-Z]+-\d{3}$/;
 const arxivIdentifierPattern = /^\d{4}\.\d{4,5}(v\d+)?$/;
 const stalePublishedPagePattern =
@@ -196,18 +201,46 @@ function validatePublicSiteCopy(homepageSource, documentationIndexSource) {
   );
   assert.match(
     homepageSource,
-    /href="\/docs\/getting-started\/"/,
+    /sitePath\("docs\/getting-started\/"\)/,
     "Homepage must provide a direct Getting started pathway.",
   );
   assert.match(
     homepageSource,
-    /href="\/docs\/examples\/"/,
+    /sitePath\("docs\/examples\/"\)/,
     "Homepage must provide a direct Examples pathway.",
   );
   assert.doesNotMatch(
     documentationIndexSource,
     /documentation is being published|upcoming sections/i,
     "Documentation index must not describe the complete collection as upcoming.",
+  );
+}
+
+function validateGitHubPagesDeployment(astroConfigSource, workflowSource) {
+  assert.match(
+    astroConfigSource,
+    /site:\s*"https:\/\/nflavioquatraro\.github\.io"/,
+    "Astro must declare the canonical GitHub Pages origin.",
+  );
+  assert.match(
+    astroConfigSource,
+    /const siteBase = "\/mutations";/,
+    "Astro must build beneath the repository project path.",
+  );
+  assert.match(
+    workflowSource,
+    /uses:\s*withastro\/action@v6/,
+    "GitHub Pages must use the official Astro build action.",
+  );
+  assert.match(
+    workflowSource,
+    /path:\s*\.\/website/,
+    "The Pages workflow must build the website subdirectory.",
+  );
+  assert.match(
+    workflowSource,
+    /uses:\s*actions\/deploy-pages@v5/,
+    "GitHub Pages must deploy the uploaded Pages artifact.",
   );
 }
 
@@ -259,6 +292,8 @@ print("untraceable")
 const trackerSource = readFileSync(trackerPath, "utf8");
 const homepageSource = readFileSync(homepagePath, "utf8");
 const documentationIndexSource = readFileSync(documentationIndexPath, "utf8");
+const astroConfigSource = readFileSync(astroConfigPath, "utf8");
+const pagesWorkflowSource = readFileSync(pagesWorkflowPath, "utf8");
 const trackedFeatureIds = collectTrackedFeatureIds(trackerSource);
 const documentationFiles = readdirSync(documentationRoot)
   .filter((fileName) => fileName.endsWith(".mdx"))
@@ -305,6 +340,7 @@ for (const fileName of documentationFiles) {
 
 const arxivCount = validateArxivReferences(referenceCatalog);
 validatePublicSiteCopy(homepageSource, documentationIndexSource);
+validateGitHubPagesDeployment(astroConfigSource, pagesWorkflowSource);
 runNegativeContractChecks(trackedFeatureIds);
 
 process.stdout.write(
@@ -316,6 +352,7 @@ process.stdout.write(
     `${verifiedCount}/${disclosureCount} verified disclosures`,
     `${arxivCount} canonical arXiv references`,
     "public-site copy synchronized",
+    "GitHub Pages deployment configured",
     "4 negative contract checks",
   ].join(" ") + "\n",
 );

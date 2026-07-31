@@ -7,6 +7,7 @@ import {
   getOrderedDocs,
   groupDocumentationEntries,
 } from "../../lib/docs";
+import { sitePath } from "../../lib/site-path";
 
 const docs = await getOrderedDocs();
 const groupedDocs = groupDocumentationEntries(docs);
@@ -20,10 +21,10 @@ const searchRecords = await buildDocumentationSearchIndex(docs);
   showChrome={false}
 >
   <header class="docs-header">
-    <a href="/" aria-label="Mutations home"><Brand compact /></a>
+    <a href={sitePath()} aria-label="Mutations home"><Brand compact /></a>
     <nav aria-label="Documentation navigation">
-      <a class="current" href="/docs/" aria-current="page">Docs</a>
-      <a href="/paper.pdf">Paper</a>
+      <a class="current" href={sitePath("docs/")} aria-current="page">Docs</a>
+      <a href={sitePath("paper.pdf")}>Paper</a>
       <a href="https://github.com/nflavioquatraro/mutations" rel="noreferrer">GitHub</a>
     </nav>
   </header>
@@ -58,7 +59,7 @@ const searchRecords = await buildDocumentationSearchIndex(docs);
             </header>
             <div class="docs-list">
               {entries.map((entry) => (
-                <a class="doc-row" href={`/docs/${entry.id}/`}>
+                <a class="doc-row" href={sitePath(`docs/${entry.id}/`)}>
                   <span class="doc-index">
                     {String(entry.data.order).padStart(2, "0")}
                   </span>

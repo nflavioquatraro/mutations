@@ -12,6 +12,7 @@ import {
   type DocsEntry,
 } from "../lib/docs";
 import type { MarkdownHeading } from "astro";
+import { sitePath } from "../lib/site-path";
 
 interface Props {
   entry: DocsEntry;
@@ -36,10 +37,10 @@ const reviewed = new Intl.DateTimeFormat("en", {
   showChrome={false}
 >
   <header class="docs-header article-header">
-    <a href="/" aria-label="Mutations home"><Brand compact /></a>
+    <a href={sitePath()} aria-label="Mutations home"><Brand compact /></a>
     <nav aria-label="Documentation navigation">
-      <a class="current" href="/docs/" aria-current="page">Docs</a>
-      <a href="/paper.pdf">Paper</a>
+      <a class="current" href={sitePath("docs/")} aria-current="page">Docs</a>
+      <a href={sitePath("paper.pdf")}>Paper</a>
       <a href="https://github.com/nflavioquatraro/mutations" rel="noreferrer">GitHub</a>
     </nav>
   </header>

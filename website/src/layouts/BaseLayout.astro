@@ -1,5 +1,6 @@
 ---
 import Brand from "../components/Brand.astro";
+import { sitePath } from "../lib/site-path";
 import "../styles/global.css";
 
 interface Props {
@@ -17,7 +18,7 @@ const {
 } = Astro.props;
 
 const canonical = Astro.site ? new URL(Astro.url.pathname, Astro.site) : undefined;
-const ogImage = Astro.site ? new URL("/og.png", Astro.site) : undefined;
+const ogImage = Astro.site ? new URL(sitePath("og.png"), Astro.site) : undefined;
 ---
 
 <!doctype html>
@@ -28,7 +29,7 @@ const ogImage = Astro.site ? new URL("/og.png", Astro.site) : undefined;
     <meta name="theme-color" content="#f8f9fb" />
     <meta name="description" content={description} />
     <meta name="generator" content={Astro.generator} />
-    <link rel="icon" type="image/png" href="/logo/mutations-mark.png" />
+    <link rel="icon" type="image/png" href={sitePath("logo/mutations-mark.png")} />
     {canonical && <link rel="canonical" href={canonical} />}
     <meta property="og:type" content="website" />
     <meta property="og:title" content={title} />
@@ -45,13 +46,13 @@ const ogImage = Astro.site ? new URL("/og.png", Astro.site) : undefined;
 
     {showChrome && (
       <header class="site-header">
-        <a class="brand-link" href="/" aria-label="Mutations home">
+        <a class="brand-link" href={sitePath()} aria-label="Mutations home">
           <Brand />
         </a>
 
         <nav class="primary-nav" aria-label="Primary navigation">
-          <a href="/docs/">Docs</a>
-          <a href="/paper.pdf">Paper</a>
+          <a href={sitePath("docs/")}>Docs</a>
+          <a href={sitePath("paper.pdf")}>Paper</a>
           <a href="https://github.com/nflavioquatraro/mutations" rel="noreferrer">GitHub</a>
         </nav>
       </header>

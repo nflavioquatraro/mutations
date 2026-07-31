@@ -3,6 +3,7 @@ import {
   getReference,
   type ReferenceId,
 } from "../../data/references";
+import { sitePath } from "../../lib/site-path";
 
 interface Props {
   referenceId: ReferenceId;
@@ -53,7 +54,7 @@ const difference = differenceOverride ?? reference.difference;
             {reference.relatedDocs.map((document, index) => (
               <>
                 {index > 0 && <span aria-hidden="true"> · </span>}
-                <a href={document.href}>{document.label}</a>
+                <a href={sitePath(document.href)}>{document.label}</a>
               </>
             ))}
           </dd>
