@@ -574,8 +574,9 @@ future session an unambiguous resume point.
 
 ### 11.2 Current resume point
 
-**Next item:** `WEB-DOC-008` — add content synchronization and build
-validation for source paths, feature IDs, arXiv links, and verified snippets.
+**Next item:** No incomplete tracked item. `WEB-DOC-008` completes the planned
+website documentation phases; add a new tracker row before beginning further
+website work.
 
 The earlier four-article documentation interface was the legacy baseline. The
 package-aligned content system now publishes every foundation and subpackage
@@ -587,7 +588,10 @@ with mixture-aware refinement, hierarchical package routing, prompt-level
 candidate shortlisting with anchored token top-1, and
 compatibility-constrained global top-2, and confidence-gated dynamic-\(k\)
 selection, and exact product-key micro-expert retrieval through
-`/docs/examples/`, completing Phase 4.
+`/docs/examples/`, completing Phase 4. Phase 5 now includes static search, a
+structured reference catalog, and deterministic build-time synchronization for
+source paths, tracked feature IDs, canonical arXiv records, and verified code
+provenance.
 
 ### 11.3 Documentation infrastructure
 
@@ -600,7 +604,7 @@ selection, and exact product-key micro-expert retrieval through
 | WEB-DOC-005 | Equation, integration-status, paper-reference, and strategy-table components | WEB-DOC-001 | Validated | 2026-07-30 | Reusable dependency-free MDX components implemented and exercised on the overview page; equations pair intuition, spoken notation, symbol definitions, and practical consequences; integration labels use visible text, color, and distinct marker treatments; paper cards validate direct arXiv identifiers and distinguish motivation from project differences; semantic strategy tables provide captions, row/column headers, a focusable narrow-screen scroll region, and badge cells; all three arXiv targets returned HTTP 200; `npm run build` passed with 0 errors, warnings, or hints; desktop, tablet, and mobile checks at 1440 px, 768 px, and 390 px confirmed zero page overflow, contained component widths, mobile table scrolling, 44 px paper-link targets, accessible badge labels, empty browser error output, and source-accurate notation and attribution |
 | WEB-DOC-006 | Documentation typography and responsive content styling | WEB-DOC-001 | Validated | 2026-07-30 | Added a shared 74-character reading measure, balanced heading and paragraph wrapping, consistent paragraph/list rhythm, clearer emphasis and link treatments, contained code/table scrolling, and responsive 44 px source targets; equation, paper-reference, and strategy-description widths now share the article measure; `npm run build` passed with 0 errors, warnings, or hints; `.venv/bin/python examples/verify_dense_equivalence.py` and `.venv/bin/python examples/verify_package_runtime.py` passed; browser checks at 1440 px, 1024 px, 768 px, and 390 px confirmed zero page overflow, correct desktop/mobile navigation transitions, contained long-form components, local table/code scrolling, visible 2 px keyboard focus, 60–63 px disclosure targets, 44 px copy/source targets, and empty browser warnings/errors; `/`, `/docs/`, `/docs/overview/`, and `/paper.pdf` returned HTTP 200 |
 | WEB-DOC-007 | Static documentation search | All content pages | Validated | 2026-07-30 | Added a dependency-free build-time index for all 15 content pages using collection titles, Astro-generated H2/H3 headings, tracked feature IDs, and the user-facing names already defined by MDX strategy tables; deterministic one-result-per-page ranking, punctuation normalization, direct heading fragments, accessible live result counts, local-only instant filtering, explicit keyboard submission and clearing, and a no-JavaScript directory fallback are included; desktop and mobile article navigation expose 44 px search entry points; `npm run build` passed with 0 errors, warnings, or hints and generated all 17 static pages; `npm run test:search` validated every indexed heading fragment, unique routes, the static fallback, stable repeated rankings, and representative title, feature-ID, strategy, heading, and no-result queries across 15 records; browser checks at 1440 px, 1024 px, 768 px, and 390 px confirmed correct result order and labels for `Registry`, `POL-002`, `anchor-veto top-2`, and product-key retrieval, direct section links, live announcements, Enter submission with 2 px visible result focus, Escape clearing, 52–60 px controls, zero horizontal overflow, focused arrival from article search links, and empty browser warning/error output |
-| WEB-DOC-008 | Content synchronization and build validation | WEB-DOC-001 | Not started | 2026-07-30 | Validate sources, feature IDs, arXiv links, and verified snippets |
+| WEB-DOC-008 | Content synchronization and build validation | WEB-DOC-001 | Validated | 2026-07-31 | Added a dependency-free content contract that runs before every production build and validates all 15 pages, 200 repository-relative metadata sources, 131 tracked feature references, 54 source-backed Python disclosures, and 15 canonical arXiv records; duplicate or unknown feature IDs, missing or escaping files, malformed arXiv metadata, untraceable Verified labels, non-example/test provenance, and missing Python blocks fail with contextual errors; four in-memory negative contract cases passed; all 15 direct arXiv destinations returned HTTP 200; `npm run test:content`, `npm run test:search`, all 7 documentation-contract tests, and `npm run build` passed with 0 errors, warnings, or hints and generated all 17 static pages; browser checks at 1440 × 900 and 390 × 844 confirmed the correct desktop/mobile navigation transition, zero page overflow, 44 px mobile source targets, 60 px mobile navigation targets, Space-key disclosure and navigation operation, retained focus, visible verified code, and empty browser warning/error output |
 
 ### 11.4 Documentation subpages
 
