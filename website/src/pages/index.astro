@@ -1,6 +1,9 @@
 ---
 import BaseLayout from "../layouts/BaseLayout.astro";
 import MutationOrbital from "../components/MutationOrbital.astro";
+import { getOrderedDocs } from "../lib/docs";
+
+const documentationGuideCount = (await getOrderedDocs()).length;
 ---
 
 <BaseLayout pageClass="home-page">
@@ -27,7 +30,8 @@ import MutationOrbital from "../components/MutationOrbital.astro";
           measurable, reversible, and practical on local hardware.
         </p>
         <div class="hero-actions">
-          <a class="text-link" href="#architecture">Explore the framework <span>↓</span></a>
+          <a class="text-link" href="/docs/getting-started/">Get started <span>→</span></a>
+          <a class="text-link text-link-muted" href="/docs/examples/">Compare workflows <span>→</span></a>
           <a class="text-link text-link-muted" href="/paper.pdf">Read the paper <span>↗</span></a>
         </div>
       </div>
@@ -80,11 +84,12 @@ import MutationOrbital from "../components/MutationOrbital.astro";
     <section class="panel panel-experiment" id="experiment" data-panel data-index="4">
       <div class="panel-inner experiment-inner">
         <div class="section-heading reveal">
-          <p class="section-kicker">03 / Current experiment</p>
-          <h2>Testing conditional<br /><span>specialization.</span></h2>
+          <p class="section-kicker">03 / Validated baseline</p>
+          <h2>From exact fallback<br /><span>to routed specialization.</span></h2>
           <p>
-            The current implementation studies whether label-free token routing adds useful
-            mathematical capacity beyond a matched shared adapter.
+            The framework validates dense-equivalent conversion and a complete packaged
+            anchored top-1 lifecycle. Advanced routes remain explicit composable or research
+            paths until their model-level lifecycle is complete.
           </p>
         </div>
 
@@ -94,10 +99,10 @@ import MutationOrbital from "../components/MutationOrbital.astro";
         </a>
 
         <dl class="experiment-spec reveal">
-          <div><dt>Backbone</dt><dd>Qwen3-4B</dd></div>
-          <div><dt>Modified layers</dt><dd>28—35</dd></div>
-          <div><dt>MLP experts</dt><dd>4 per layer</dd></div>
-          <div><dt>Routing</dt><dd>Token-level top-2</dd></div>
+          <div><dt>Base invariant</dt><dd>Exact anchor fallback</dd></div>
+          <div><dt>Lifecycle</dt><dd>Install / remove / reload</dd></div>
+          <div><dt>Integrated route</dt><dd>Anchored top-1</dd></div>
+          <div><dt>Advanced routes</dt><dd>Composable primitives</dd></div>
         </dl>
       </div>
     </section>
@@ -108,8 +113,8 @@ import MutationOrbital from "../components/MutationOrbital.astro";
           <p class="section-kicker">04 / Read and inspect</p>
           <h2>An open research<br /><span>scaffold.</span></h2>
           <p>
-            The repository contains the framework paper, detailed architecture proposals,
-            dataset plans, and runnable training and evaluation notebooks.
+            The repository contains the framework paper, package-aligned guides,
+            verified examples, and runnable training and evaluation notebooks.
           </p>
         </div>
 
@@ -121,15 +126,15 @@ import MutationOrbital from "../components/MutationOrbital.astro";
             <span class="resource-arrow">Open PDF ↗</span>
           </a>
           <a class="resource-card" href="/docs/">
-            <span class="resource-number">D / 04 notes</span>
-            <strong>Technical docs</strong>
-            <p>Architecture, dataset construction, math experiment, and evaluation design.</p>
+            <span class="resource-number">D / {documentationGuideCount} guides</span>
+            <strong>Framework docs</strong>
+            <p>Package-aligned concepts, verified workflows, implementation boundaries, and references.</p>
             <span class="resource-arrow">Browse docs →</span>
           </a>
           <a class="resource-card" href="https://github.com/nflavioquatraro/mutations" rel="noreferrer">
             <span class="resource-number">G / Source</span>
             <strong>GitHub repository</strong>
-            <p>Inspect the notebooks, experiment scaffold, diagrams, and project history.</p>
+            <p>Inspect the Python package, tests, examples, notebooks, and project history.</p>
             <span class="resource-arrow">View GitHub ↗</span>
           </a>
         </div>

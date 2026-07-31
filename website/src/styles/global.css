@@ -281,6 +281,10 @@ a {
   margin-top: 2.3rem;
 }
 
+.hero-actions .text-link {
+  min-height: 2.75rem;
+}
+
 .text-link {
   display: inline-flex;
   align-items: center;

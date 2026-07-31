@@ -9,8 +9,15 @@ const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(scriptDirectory, "../..");
 const documentationRoot = resolve(repositoryRoot, "website/src/content/docs");
 const trackerPath = resolve(repositoryRoot, "feature-implementation-plan.md");
+const homepagePath = resolve(repositoryRoot, "website/src/pages/index.astro");
+const documentationIndexPath = resolve(
+  repositoryRoot,
+  "website/src/pages/docs/index.astro",
+);
 const featureIdPattern = /^[A-Z]+-\d{3}$/;
 const arxivIdentifierPattern = /^\d{4}\.\d{4,5}(v\d+)?$/;
+const stalePublishedPagePattern =
+  /\bplanned \*\*[^*]+\*\* page\b|\bwhen that page is published\b/i;
 
 function parseFrontmatter(source, documentName) {
   const match = source.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
@@ -176,6 +183,34 @@ function validateArxivReferences(catalog) {
   return arxivCount;
 }
 
+function validatePublicSiteCopy(homepageSource, documentationIndexSource) {
+  assert.match(
+    homepageSource,
+    /const documentationGuideCount = \(await getOrderedDocs\(\)\)\.length;/,
+    "Homepage guide count must derive from the documentation collection.",
+  );
+  assert.doesNotMatch(
+    homepageSource,
+    /D\s*\/\s*\d+\s+(?:notes|guides)/i,
+    "Homepage must not hard-code the published documentation count.",
+  );
+  assert.match(
+    homepageSource,
+    /href="\/docs\/getting-started\/"/,
+    "Homepage must provide a direct Getting started pathway.",
+  );
+  assert.match(
+    homepageSource,
+    /href="\/docs\/examples\/"/,
+    "Homepage must provide a direct Examples pathway.",
+  );
+  assert.doesNotMatch(
+    documentationIndexSource,
+    /documentation is being published|upcoming sections/i,
+    "Documentation index must not describe the complete collection as upcoming.",
+  );
+}
+
 function runNegativeContractChecks(trackedFeatureIds) {
   assert.throws(
     () =>
@@ -222,6 +257,8 @@ print("untraceable")
 }
 
 const trackerSource = readFileSync(trackerPath, "utf8");
+const homepageSource = readFileSync(homepagePath, "utf8");
+const documentationIndexSource = readFileSync(documentationIndexPath, "utf8");
 const trackedFeatureIds = collectTrackedFeatureIds(trackerSource);
 const documentationFiles = readdirSync(documentationRoot)
   .filter((fileName) => fileName.endsWith(".mdx"))
@@ -253,6 +290,11 @@ for (const fileName of documentationFiles) {
     resolveRepositoryFile(sourcePath, `${fileName} metadata source`),
   );
   validateFeatureIds(featureIds, trackedFeatureIds, fileName);
+  assert.doesNotMatch(
+    source,
+    stalePublishedPagePattern,
+    `${fileName} describes an already published documentation page as planned.`,
+  );
 
   const disclosureReport = validateCodeDisclosures(source, fileName);
   sourcePathCount += sourcePaths.length;
@@ -262,6 +304,7 @@ for (const fileName of documentationFiles) {
 }
 
 const arxivCount = validateArxivReferences(referenceCatalog);
+validatePublicSiteCopy(homepageSource, documentationIndexSource);
 runNegativeContractChecks(trackedFeatureIds);
 
 process.stdout.write(
@@ -272,6 +315,7 @@ process.stdout.write(
     `${featureIdCount} tracked feature references`,
     `${verifiedCount}/${disclosureCount} verified disclosures`,
     `${arxivCount} canonical arXiv references`,
+    "public-site copy synchronized",
     "4 negative contract checks",
   ].join(" ") + "\n",
 );
