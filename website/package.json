@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "generate:og": "swift scripts/generate-og.swift",
     "prepare:assets": "node scripts/sync-assets.mjs",
     "predev": "npm run prepare:assets",
     "dev": "astro dev",
