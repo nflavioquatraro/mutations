@@ -755,3 +755,14 @@ The documentation foundation is successful when a reader can:
 7. follow every paper-derived idea to its primary arXiv reference;
 8. move from overview to a complete anchored top-1 implementation without
    leaving the documentation.
+
+## 2026-09-15 — Model-level adapter documentation
+
+Added `/docs/adapters/` for ADP-001 through ADP-004, with exact target selection,
+the separate Trainer, external prompt-router contract, confidence/base fallback,
+fresh-cache boundaries, versioned deployment artifacts, trusted-local resume,
+and the executable offline example. Training, expert, and inference guides link
+to the additive path without implying changes to existing MLP packages.
+Static page-count verification now derives the expected total from the content
+collection so new guides remain covered. Website publication is not performed
+by this implementation task.

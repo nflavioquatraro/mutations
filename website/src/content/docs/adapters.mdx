@@ -1,0 +1,162 @@
+---
+title: Prompt-routed adapters
+description: Adapt attention and MLP projections, train specialists independently, and select one adapter or the frozen base for each response.
+order: 16
+group: Workflows
+source:
+  - src/anchored_moe/adapters/README.md
+  - src/anchored_moe/adapters/targets.py
+  - src/anchored_moe/adapters/model.py
+  - src/anchored_moe/adapters/training.py
+  - src/anchored_moe/adapters/routing.py
+  - examples/verify_prompt_adapter.py
+feature_ids:
+  - ADP-001
+  - ADP-002
+  - ADP-003
+  - ADP-004
+last_reviewed: 2026-09-15
+---
+
+import CodeDisclosure from "../../components/docs/CodeDisclosure.astro";
+import IntegrationBadge from "../../components/docs/IntegrationBadge.astro";
+
+## What this path does
+
+<IntegrationBadge status="Composable" />
+
+Model-level adapters specialize selected attention and MLP projections while
+keeping the original model weights frozen. An external prompt router chooses
+either a named adapter or the base before each response. That choice remains
+fixed throughout generation.
+
+This is an alternative to the existing MLP-expert path, not an extension of its
+token-level dispatch. It does not require `RoutedMLP` conversion, and its
+deployment artifacts do not use the existing `ExpertRegistry` package format.
+
+## Choose the adaptation scope
+
+`AdapterTargetConfig` selects the final N blocks, all blocks, the upper half,
+or explicit zero-based layer indices. Components can be attention, MLP, or both.
+For precise experiments, exact layer-relative module paths replace component
+groups. Set `last_n=None` when using a selector other than `last_n`.
+
+The default backend resolves Qwen3 attention to query, key, value, and output
+projections, and MLP to gate, up, and down projections. It rejects nonexistent
+targets instead of silently training fewer layers. Rank, alpha, and dropout are
+configurable, with exact-path rank and alpha overrides.
+
+“Attention-inclusive” does not mean every decoder parameter trains. Layer
+normalization, embeddings, output head, and original projection weights remain
+frozen. Only the selected low-rank matrices are optimized. Multiple adapters
+share this frozen base rather than copying entire blocks.
+
+The resolved target report lists exactly which modules were selected. Custom
+`AdapterTargetBackend` instances can describe other compatible model layouts;
+only the Qwen3 causal-LM backend has acceptance coverage.
+
+## Train a specialist separately
+
+`AdapterSpecializationTrainer` runs the named adapter for the entire training
+operation, without consulting the classifier. It retains the familiar Trainer
+dataset, collator, metrics, callback, scheduling, and accumulation interfaces.
+It checks that the optimizer contains exactly the selected adapter parameters.
+
+Conversation formatting is caller-owned. Supply correctly tokenized inputs and
+labels, masking padding and nonsupervised user/system tokens with `-100` where
+appropriate. This feature does not generate synthetic data or construct
+assistant-only labels automatically. Optional replay KL and initialization
+drift reuse the existing preservation objectives.
+
+For the Pentagon experiment, select the last eight blocks with attention and
+MLP targets, then train only on domain conversations. The same API supports
+other domains, layer selections, and separately trained adapters. Domain
+quality and preservation still require held-out evaluation.
+
+## Route one complete response
+
+An external classifier implements `PromptAdapterRouter.select(messages)` and
+returns `AdapterRoute(adapter_id, confidence)`. Returning `None` as the identifier
+selects the base. `FixedAdapterRouter` supports explicit specialist/base paths
+for oracle evaluation without a learned classifier.
+
+`PromptRoutingConfig` optionally limits the recent history shown to the router
+and sets a confidence threshold. Named routes below the threshold fall back to
+the base. Unknown adapter identifiers are errors, not implicit fallback. A
+positive threshold requires confidence for named routes.
+
+Each generation call represents one response. Call again with updated history
+for the next turn. The caller supplies both router messages and separately
+tokenized generation inputs and must keep them consistent. The target answer
+must never be included in classifier input.
+
+The execution layer rejects cross-response cache inputs and static/persistent
+cache configurations. It uses a fresh dynamic cache within each response,
+avoiding reuse of attention state computed under another adapter. Operations
+sharing a model owner cannot overlap; exceptions restore frozen parameters and
+release the owner. Streaming and concurrent serving are outside this version.
+
+## Export, reload, and resume
+
+A deployment directory contains `adapter.safetensors` and `manifest.json` only.
+The versioned manifest records model/tokenizer revisions, base/configuration
+hashes, resolved target paths, LoRA settings, caller-supplied training provenance,
+and a tensor digest. Export refuses overwrite. Reload validates the base,
+topology, tensor schema, finite values, and integrity before use.
+
+Use `AdapterSpecializationModel.from_adapter` with a fresh matching base to
+reload a package, or `load_adapter` to add it under a new identifier to an
+existing owner. The model and tokenizer weights are not bundled or downloaded
+by these operations. Hashes establish integrity, not publisher authenticity.
+
+Trainer checkpoints are separate: they also hold optimizer, scheduler, RNG,
+Trainer progress, and optional drift-reference state. Resume requires matching
+adapter/objective/provenance settings. Native training checkpoints may contain
+pickle-based state and must come from a trusted local run; they are not the
+portable deployment format.
+
+## Run the offline example
+
+<CodeDisclosure
+  summary="Train and reload attention-inclusive adapters on a tiny Qwen3"
+  source="examples/verify_prompt_adapter.py"
+  verified
+>
+
+```python
+import runpy
+
+runpy.run_path("examples/verify_prompt_adapter.py", run_name="__main__")
+```
+
+The example constructs a tiny random model without downloads, trains the last
+two blocks, writes adapter-only checkpoints, exports and reloads a deployment
+package, checks exact output equality, and generates through a fixed route.
+It validates plumbing, not Pentagon knowledge or Qwen3-4B quality.
+
+</CodeDisclosure>
+
+## Validation and boundaries
+
+Acceptance tests cover attention/MLP gradients, unchanged original weights,
+zero-update/base equivalence, per-module overrides, independent adapters,
+checkpoint-resume parity, artifact validation, history/confidence handling,
+and generation failure cleanup.
+
+CPU tiny-model behavior is validated. Production Qwen3-4B fine-tuning, GPU
+memory/throughput, mixed precision, quantization, distributed/sharded training,
+automatic classifier training, and integration into the MLP expert registry
+are not claimed. FSDP and DeepSpeed configurations are rejected by this Trainer.
+
+## References and related pages
+
+- [LoRA](https://arxiv.org/abs/2106.09685) defines the low-rank update. This
+  implementation adds explicit decoder targeting and external whole-response
+  selection; it does not implement jointly learned token-level MoE routing.
+- [PEFT model API](https://huggingface.co/docs/peft/en/package_reference/peft_model)
+  supplies adapter attachment, selection, and disabled-adapter execution.
+- [Transformers Trainer](https://huggingface.co/docs/transformers/main_classes/trainer)
+  supplies the optimization and trusted-local checkpoint lifecycle.
+- See [training](/docs/training/) for the original forced-MLP and mixture paths,
+  [experts](/docs/experts/) for private-copy MLP representations, and
+  [inference](/docs/inference/) for token-level dispatch.

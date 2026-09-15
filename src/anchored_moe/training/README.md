@@ -2,6 +2,13 @@
 
 ## Scope
 
+The separate [model-level adapter path](../adapters/README.md) adds
+`AdapterSpecializationTrainer` for attention and MLP LoRA with prompt-level
+selection. It reuses the optional objectives here but does not convert MLPs or
+change the TRN-001 checkpoint restriction. `ExpertWeightDrift.snapshot_state()`
+and `load_snapshot_state()` provide validated initialization-state persistence
+for its resumable checkpoints.
+
 The training subpackage owns expert-training execution topology, mechanical
 parameter freezing, trainable-parameter assertions, optional preservation and
 drift objectives, and Hugging Face Trainer integration.

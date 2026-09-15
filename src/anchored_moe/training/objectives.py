@@ -334,6 +334,34 @@ class ExpertWeightDrift:
 
         return tuple(name for name, _, _ in self._entries)
 
+    def snapshot_state(self) -> dict[str, Tensor]:
+        """Return independent CPU initialization tensors for safe checkpointing."""
+
+        return {name: initial.clone() for name, _, initial in self._entries}
+
+    def load_snapshot_state(self, state: dict[str, Tensor]) -> None:
+        """Restore validated initialization snapshots without changing live weights.
+
+        Keys, shapes, dtypes, and finite values must exactly match the original
+        schema. Validation finishes before any snapshot is replaced.
+        """
+
+        if set(state) != set(self.parameter_names):
+            raise ExpertObjectiveError("Drift snapshot keys do not match parameters.")
+        entries = []
+        for name, parameter, initial in self._entries:
+            tensor = state[name]
+            if (
+                not isinstance(tensor, Tensor)
+                or tensor.shape != initial.shape
+                or tensor.dtype != initial.dtype
+            ):
+                raise ExpertObjectiveError("Drift snapshot schema mismatch.")
+            if not torch.isfinite(tensor).all():
+                raise ExpertObjectiveError("Drift snapshots must be finite.")
+            entries.append((name, parameter, tensor.detach().cpu().clone()))
+        self._entries = tuple(entries)
+
     @property
     def parameter_count(self) -> int:
         """Return the scalar count used to normalize squared drift."""

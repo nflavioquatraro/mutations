@@ -238,7 +238,36 @@ from anchored_moe.training import (
     train_independent_expert_set,
 )
 
+from anchored_moe.adapters import (
+    AdapterBaseIdentity,
+    AdapterRoute,
+    AdapterSpecializationModel,
+    AdapterSpecializationTrainer,
+    AdapterTargetBackend,
+    AdapterTargetConfig,
+    AdapterTargetReport,
+    FixedAdapterRouter,
+    PromptAdapterRouter,
+    PromptGenerationResult,
+    PromptMessage,
+    PromptRoutedAdapterGenerator,
+    PromptRoutingConfig,
+)
+
 __all__ = [
+    "AdapterBaseIdentity",
+    "AdapterRoute",
+    "AdapterSpecializationModel",
+    "AdapterSpecializationTrainer",
+    "AdapterTargetBackend",
+    "AdapterTargetConfig",
+    "AdapterTargetReport",
+    "FixedAdapterRouter",
+    "PromptAdapterRouter",
+    "PromptGenerationResult",
+    "PromptMessage",
+    "PromptRoutedAdapterGenerator",
+    "PromptRoutingConfig",
     "AffineRouterHead",
     "ActivationCombinationResult",
     "ActiveMLPMetrics",

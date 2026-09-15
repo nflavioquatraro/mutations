@@ -59,7 +59,9 @@ for (const htmlFile of htmlFiles) {
   }
 }
 
-assert.equal(htmlFiles.length, 17, "The complete static site must be built.");
+const docsRoot = resolve(import.meta.dirname, "../src/content/docs");
+const docCount = readdirSync(docsRoot).filter((name) => /\.mdx?$/.test(name)).length;
+assert.equal(htmlFiles.length, docCount + 2, "All guides, docs index, and homepage must be built.");
 assert.ok(internalUrlCount > 0, "The build must contain internal URLs.");
 
 process.stdout.write(

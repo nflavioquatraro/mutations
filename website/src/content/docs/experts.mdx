@@ -27,7 +27,7 @@ feature_ids:
   - EXP-003
   - EXP-004
   - EXP-005
-last_reviewed: 2026-07-31
+last_reviewed: 2026-09-15
 ---
 
 import CodeDisclosure from "../../components/docs/CodeDisclosure.astro";
@@ -478,6 +478,9 @@ differences. The
 defines the shared immutable-anchor and expert-modularity invariants.
 
 ## Related pages
+
+- Read [prompt-routed adapters](/docs/adapters/) for attention-inclusive LoRA
+  sharing a frozen base, separate from these private-copy MLP experts.
 
 - Read [backends](/docs/backends/) to see how the live anchor MLP is discovered
   and moved into a routed wrapper.

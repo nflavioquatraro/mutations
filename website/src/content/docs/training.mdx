@@ -28,7 +28,7 @@ feature_ids:
   - BAL-003
   - BAL-004
   - BAL-005
-last_reviewed: 2026-07-30
+last_reviewed: 2026-09-15
 ---
 
 import CodeDisclosure from "../../components/docs/CodeDisclosure.astro";
@@ -105,6 +105,12 @@ export const trainingStrategies = [
 ];
 
 ## What this part does
+
+For attention **and** MLP LoRA with an external prompt classifier, use the
+separate [prompt-routed adapter workflow](/docs/adapters/). It trains one
+model-level adapter without MLP conversion and supports adapter-only deployment
+and resumable local Trainer checkpoints. The forced-MLP constraints below
+continue to apply to `ForcedPathExpertTrainer`, not that new Trainer.
 
 Training controls which new expert parameters may change and which execution
 path produces their gradients. Every supported workflow mechanically freezes

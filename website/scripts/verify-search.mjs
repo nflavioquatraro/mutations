@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import {
   searchDocumentation,
 } from "../src/lib/docs-search.ts";
@@ -25,7 +25,9 @@ assert(
 );
 
 const records = JSON.parse(indexMatch[1]);
-assert.equal(records.length, 15, "every content page must be indexed");
+const contentFiles = await readdir(new URL("../src/content/docs/", import.meta.url));
+assert.equal(records.length, contentFiles.filter((name) => /\.mdx?$/.test(name)).length,
+  "every content page must be indexed");
 assert.equal(
   new Set(records.map(({ href }) => href)).size,
   records.length,
@@ -65,6 +67,12 @@ for (const record of records) {
 }
 
 const cases = [
+  {
+    query: "ADP-001",
+    title: "Prompt-routed adapters",
+    matchKind: "Feature ID",
+    href: `${siteBase}/docs/adapters/`,
+  },
   {
     query: "Registry",
     title: "Registry",

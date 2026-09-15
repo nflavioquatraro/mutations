@@ -691,3 +691,12 @@ The framework is successful when a user can:
 8. reproduce the complete workflow from concise notebooks.
 
 The implementation tracker is the operational record of progress toward that outcome.
+
+## Model-level prompt-routed adapters (additive path)
+
+| ID | Priority | Area | Feature | Dependencies | Status | Last update | Notes |
+|---|---|---|---|---|---|---|---|
+| ADP-001 | P1 | Adapters | Configurable attention-inclusive decoder LoRA | CORE-003, EXP-002 | Validated | 2026-09-15 | 2026-09-15 — Exact semantic/explicit layer and projection resolution, per-module rank/alpha overrides, frozen shared base, independent adapters, and inspectable reports. Tests: adapter configuration and tiny-Qwen3 integration, including last-eight resolution. Theory: adapters/README.md. References: LoRA, PEFT, Qwen3. CPU validation only. |
+| ADP-002 | P1 | Training | Separate forced-adapter training | ADP-001, TRN-005 | Validated | 2026-09-15 | 2026-09-15 — Native Trainer path without RoutedMLP conversion or router execution; exact optimizer isolation, optional replay/drift, caller-owned labels/collators, and failure cleanup. Tests: adapter training integration, non-reentrant gradient checkpointing, incumbent preservation, and failure after an optimizer step. Theory: adapters/README.md. References: Transformers Trainer and existing training objectives. |
+| ADP-003 | P1 | Inference | Prompt-routed whole-response adapters | ADP-001 | Validated | 2026-09-15 | 2026-09-15 — External router protocol, fixed oracle router, configurable history/confidence, base fallback, guarded response-wide selection, and fresh-cache policy. Tests: routing, generation equivalence, cache rejection, and failure cleanup; offline verify_prompt_adapter.py. Theory: adapters/README.md and website adapters guide. References: native generation and PEFT selection; infrastructure, not token-level MoE. |
+| ADP-004 | P1 | Packaging | Adapter deployment and training resume | ADP-001, ADP-002 | Validated | 2026-09-15 | 2026-09-15 — Versioned adapter-only safetensors artifacts with pinned identities, base/tensor hashes, resolved topology, and caller training provenance; local Trainer checkpoint resume including drift reference. Tests: exact reload, tamper/base mismatch rejection, resume parity, incomplete checkpoint rejection, and best-checkpoint restoration. Theory: adapters/README.md. References: safetensors, PEFT, Trainer. Separate from ExpertRegistry wire format. Existing Windows Hub symlink tests require privileges unavailable on this host. |

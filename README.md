@@ -188,6 +188,19 @@ work.
 
 ## Development setup
 
+### Model-level prompt-routed adapters
+
+ADP-001 through ADP-004 provide an additive alternative to MLP-expert conversion:
+configurable attention/MLP LoRA targets, isolated adapter training, whole-response
+base/specialist routing, adapter-only deployment packages, and local checkpoint
+resume. See the [adapter guide](src/anchored_moe/adapters/README.md) and run
+`python examples/verify_prompt_adapter.py` for the offline smoke workflow.
+The last-eight-block Pentagon configuration is one use case, not a hard-coded
+domain. This path does not use `RoutedMLP` or the existing expert registry, and
+does not train a prompt classifier or generate conversation datasets.
+
+### Python environment
+
 Use Python 3.10 or newer:
 
 ```bash
