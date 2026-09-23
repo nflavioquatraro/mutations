@@ -20,6 +20,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+needle = [
+    "cactus-needle==3.0.4",
+    "jax>=0.4.38,<0.12",
+    "flax>=0.10.2,<0.13",
+    "optax>=0.2.4,<0.3",
+]
 dev = [
     "pytest>=8",
 ]

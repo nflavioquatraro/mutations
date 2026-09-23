@@ -188,6 +188,17 @@ work.
 
 ## Development setup
 
+### Shared-prefix Needle response branches
+
+BRN-001 through BRN-006 add an optional reference-runtime path with a frozen
+shared prefix, independent LoRA or copied suffixes, a frozen original fallback,
+linear or private-suffix request scoring, interchangeable selection policies,
+isolated specialist/router training, calibration binding and strict composition
+packages. See the [branching guide](src/anchored_moe/branching/README.md).
+Install `pip install -e ".[needle]"` and run
+`python examples/verify_needle_branches.py` for the offline tiny-Needle workflow.
+Native `.cact` export and optimized cached decoding remain separate work.
+
 ### Model-level prompt-routed adapters
 
 ADP-001 through ADP-004 provide an additive alternative to MLP-expert conversion:
