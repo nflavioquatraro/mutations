@@ -23,6 +23,7 @@ from anchored_moe.branching import (
     PrefixState,
     RequestScores,
     ThresholdSelection,
+    benchmark_branch_generation,
     benchmark_branch_request,
     calibrate_utility_selection,
     evaluate_branch_utilities,
@@ -378,3 +379,32 @@ def test_two_specialists_can_use_custom_request_scorer_and_policy():
     assert model.backend.prefills == 1
     assert model.backend.suffixes == 2
     assert isinstance(model.composition_key, str)
+
+
+def test_cache_capability_is_explicit_and_generation_benchmark_uses_full_path():
+    model = make_model(router=True)
+    with pytest.raises(NotImplementedError, match="cached"):
+        model.generate_tokens([[2]], max_new_tokens=2, use_cache=True)
+    for invalid in ("true", 1):
+        with pytest.raises(ValueError, match="use_cache"):
+            model.generate_tokens([[2]], max_new_tokens=2, use_cache=invalid)
+    result = model.generate_tokens([[2]], max_new_tokens=2)
+    assert not result.cached and result.prefix_evaluations == 2
+    start = model.backend.prefills
+    report = benchmark_branch_generation(
+        model, [[2]], max_new_tokens=2, warmup=1, repeats=2
+    )
+    assert model.backend.prefills == start + 6
+    assert len(report.samples_seconds) == 2
+    assert report.p95_seconds >= report.median_seconds > 0
+
+
+def test_external_request_routing_does_not_execute_response_suffix():
+    model = make_model(router=True)
+    route = model.route_request([[2, 3]])
+    assert route.branch_id == "specialist"
+    assert model.backend.prefills == 1 and model.backend.suffixes == 1
+    model.set_selection(FixedBranchSelection("base"))
+    route = model.route_request([[2, 3]])
+    assert route.branch_id == "base"
+    assert model.backend.suffixes == 1

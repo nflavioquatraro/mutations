@@ -9,9 +9,12 @@ before pooling. It is separate from MLP-level `RoutedMLP` conversion and from th
 whole-model PEFT adapter owner. Public imports are available from
 `anchored_moe.branching` and the package root.
 
-The first backend is the native JAX/Flax Needle 3 **reference model**. No model
-weights are downloaded implicitly. Native `.cact` deployment, optimized cached
-decoding, joint expert mixtures and automatic dataset generation are not supplied.
+The first backend is the native JAX/Flax Needle 3 **reference model**, with
+incremental KV-cached generation. Standard `.cact` export is available for each
+response branch. The stock native engine runs a complete model per branch;
+request routing and prefix sharing are not part of its published ABI. No model
+weights are downloaded implicitly. Joint expert mixtures and automatic dataset
+generation are not supplied.
 
 ## Implemented strategies
 
@@ -23,6 +26,8 @@ decoding, joint expert mixtures and automatic dataset generation are not supplie
 | BRN-004 | `RequestScorer`, `RequestSelectionPolicy`, `LinearRequestScorer`, `calibrate_utility_selection` | `routing.py` | Validated |
 | BRN-005 | `BranchTrainer`, `BranchTrainingStrategy`, `BranchObjective`, `JaxAdamStrategy` | `training.py` | Validated |
 | BRN-006 | `save_branch_package`, `load_branch_package`, `evaluate_branch_utilities`, `benchmark_branch_request` | `package.py`, `evaluation.py` | Validated |
+| BRN-007 | `generate_tokens(use_cache=...)`, `NeedleDecodeState`, `benchmark_branch_generation` | `backend.py`, `needle_cache.py`, `model.py`, `evaluation.py` | Validated |
+| BRN-008 | `CactExportConfig`, `export_needle_branch`, `export_needle_bundle` | `native_export.py` | Validated |
 
 ## Mathematical formulation
 
@@ -65,8 +70,9 @@ receives only the explicitly owned suffix/head parameter tree.
 3. Run the scorer over prefix features or a separate router suffix. Select one
    response branch; the router never overwrites the saved prefix state.
 4. Resume that response suffix, applying the original frozen output projection.
-5. Lock the route for the complete response. Reference greedy decoding recomputes
-   the full growing history for later tokens, but never reruns the router.
+5. Lock the route for the complete response. Prefill the selected suffix once,
+   then append one token per compiled KV update. The router is never rerun.
+   `use_cache=False` retains full-history recomputation as a parity oracle.
 6. Train specialists independently with forced branches; train the router on
    pre-response examples. Cache frozen prefix states for each training call.
 7. Fit held-out thresholds and bind them to the complete composition hash. Any
@@ -80,6 +86,24 @@ teacher-forced target answer into the request router's training inputs.
 `benchmark_branch_request()` synchronizes via a host logits read and measures
 warm prefill plus routing plus response-suffix time. It excludes checkpoint load,
 tokenization and generation, and is not an optimized-device throughput claim.
+`benchmark_branch_generation()` measures the entire generated response, including
+prefill, routing and cache setup. Warmup excludes compilation for the tested
+shape/capacity. It compares the JAX cached and uncached paths, not native CQ4 speed.
+
+The cache stores post-norm/rotary keys and values in native grouped-query head
+geometry. Global layers allocate the reserved token capacity. Local layers use
+`min(sliding_window, capacity)` ring slots with absolute-position validity masks.
+Raw Q/K/V convolution tails are retained separately. Frozen engrams use a bounded
+token history of `4 * max(engram_orders)`, which covers the n-gram lookup and all
+four dilated value-convolution taps. Native mHC and Hadamard modules still run;
+only attention is intercepted to substitute incremental execution.
+
+Native export materializes the selected suffix in a full original parameter tree,
+then calls the pinned upstream CQ4 writer with 128-element groups. It validates
+the tokenizer, rereads geometry/tensors and rejects nonfinite quantization output
+before atomic publication. Original embedding/confidence/router probe heads are
+omitted because their behavior has not been validated for the modified/quantized
+model. These probe heads are separate from this package's affine request scorer.
 
 ## Assumptions and invariants
 
@@ -95,6 +119,11 @@ tokenization and generation, and is not an optimized-device throughput claim.
 - Native JAX arrays and branch snapshots are immutable. Public parameter reads
   return defensive copies. An owner lock rejects nested/concurrent operations.
   Direct private-field mutation is unsupported.
+- Decode snapshots retain private effective suffix weights and immutable cache
+  pytrees. Forking a snapshot cannot alter another response. Overflow, padding
+  tokens and incompatible backend snapshots are rejected. All updates process one
+  new token; prompt residual and full engram arrays are released after prefill.
+  Different reserved capacities can require separate JIT compilations.
 - Training optimizes candidate trees and publishes only after complete validation.
   Exceptions leave the original owner usable and unchanged. Base tensors never
   enter the optimizer parameter tree. Shared-prefix training is unsupported.
@@ -108,7 +137,12 @@ tokenization and generation, and is not an optimized-device throughput claim.
   branches equal the split base exactly in the tested numerical configuration.
 - Native quantized execution is not reproduced: the backend uses `quant=False`.
   Runtime versions are part of package identity. Calibrating or benchmarking the
-  floating reference does not validate a future quantized deployment.
+  floating reference does not validate a quantized deployment.
+- Native `.cact` files use CQ4 weights and the checkpoint's declared deployment KV
+  settings. Their quantized numerics differ from this floating backend. Bundle
+  metadata marks source routing calibration as requiring native-outcome evaluation.
+  A bundle repeats the prefix in each native response model and records external
+  routing explicitly; it is not a new native branch-container format.
 - Custom scorers implement `score(features)`. For calibration fingerprints they
   also supply `identity()` containing all version-affecting state. Custom
   selectors implement `select(scores, fallback)`. Only builtin scorer/selector
@@ -129,8 +163,8 @@ tokenizer IDs are caller-supplied provenance, not automatic tokenizer validation
 
 Deployment packages contain `manifest.json` and `branches.safetensors`, including
 owned branch tensors, affine scorer, selection settings and data IDs. The pinned
-base must be supplied again on reload. No optimizer state or native-engine files
-are bundled. Packages refuse overwrite and reject mismatched topology, runtime,
+base must be supplied again on reload. These reference packages contain no
+optimizer state or native-engine files. Packages refuse overwrite and reject mismatched topology, runtime,
 base, tensor keys, shapes, dtypes, nonfinite values or stale calibration.
 Integrity hashes are not signatures or publisher authentication.
 
@@ -185,9 +219,49 @@ with `-100` labels on prompt positions. `train_router()` accepts
 `optimize(parameters, loss_fn)` and return a candidate tree plus a training
 report. Custom objectives supply validation and differentiable scalar losses.
 
+Cached decoding is the default when the backend supports it:
+
+```python
+result = model.generate_tokens(input_ids, max_new_tokens=64, use_cache=True)
+assert result.prefix_evaluations == 1
+# use_cache=False selects the original full-history parity/debugging path.
+```
+
+Export a native response or the complete response set using the original packaged
+tokenizer. Neither function fetches a checkpoint, tokenizer or engine:
+
+```python
+from anchored_moe.branching import export_needle_branch, export_needle_bundle
+
+artifact = export_needle_branch(
+    model,
+    "calendar",
+    "deployment/calendar.cact",
+    tokenizer="checkpoints/needle3.cact",
+)
+bundle = export_needle_bundle(
+    model,
+    "deployment/all-branches",
+    tokenizer="checkpoints/needle3.cact",
+)
+```
+
+Use `artifact.path` with the official engine's `--model` option or
+`needle.Needle(weights=str(artifact.path), tools=...)`. Native engines are installed
+separately. The bundle contains one `.cact` per response, `manifest.json`, and
+`routing.safetensors` with the affine head and optional router suffix. That router
+still requires the source JAX backend/base. The manifest records this distinction;
+the native engine cannot resume its prefix from a JAX router state.
+`model.route_request(input_ids)` exposes the external routing decision without
+executing a response suffix. An application can select the corresponding native
+agent from its branch-ID mapping and call `complete()` on that agent. Render the
+router's input consistently with its fitting data and the deployed request/tools.
+
 Run `python examples/verify_needle_branches.py` for an offline tiny-model workflow:
 native equivalence, independent specialist/router training, synthetic held-out
 calibration, exact save/reload behavior and synchronized latency samples.
+Run `python examples/verify_needle_deployment.py` for cached/reference generation
+parity, two native response exports and warm end-to-end decoding measurements.
 
 ## References
 
@@ -199,6 +273,12 @@ calibration, exact save/reload behavior and synchronized latency samples.
   trained independently. This is not a reproduction of token-level MoE training.
 - [Optax](https://optax.readthedocs.io/): functional optimizer transformations.
 - [safetensors](https://huggingface.co/docs/safetensors/): non-executable tensor payloads.
+- [Needle exporter](https://github.com/cactus-compute/needle/blob/main/needle/model/export.py):
+  standard native geometry, tensor order, tokenizer and CQ4 encoding.
+- [Native format](https://www.cactuscompute.com/blog/cact-format) and
+  [porting guide](https://www.cactuscompute.com/blog/porting-needle): native model
+  contract. This implementation exports full response paths, without extending
+  the engine ABI or claiming native sharing across branches.
 
 Split ownership, package contracts, counterfactual utilities and threshold binding
 are framework infrastructure, not claims to reproduce a separate paper algorithm.
@@ -216,17 +296,39 @@ head-only fitting with preserved temperature, bfloat16 attention without engrams
 asymmetric attention heads, padding suppression and generation context limits.
 Optional tests skip when dependencies are absent.
 
-All 28 branch tests pass with the pinned Needle package on CPU. The offline
+Additional tests compare cached logits after every appended token, including
+nonzero QKV/engram taps, short and long prompts, local-ring wraparound, bfloat16
+attention, unequal head dimensions, forked snapshots and specialized suffixes.
+Export tests check unchanged prefix records, LoRA/full-copy materialization,
+tokenizer validation, failure cleanup and overwrite rejection. The optional
+native smoke test uses `ANCHORED_MOE_NEEDLE_LIBRARY` pointing to a caller-installed
+library and exercises `needle_load`, `needle_init` and `needle_complete` in a
+separate process. It never downloads an engine during tests. Native kernel
+geometry limits still apply: the width-16 JAX toy fixture is rejected by the
+pinned engine; native acceptance uses width 128, 64-dimensional heads and four
+residual lanes. Format roundtrip alone is not a native execution guarantee.
+
+All 38 branch tests pass across full regression and final focused reruns with
+the pinned Needle package on CPU. The original offline
 example checks float32 native parity (maximum absolute logit error approximately
 `4.84e-8`), isolated fitting and exact package reload. Lint and wheel build pass.
-Full regression: 698 passed, two existing Hub transport symlink tests failed for
+Full regression: 707 passed, two existing Hub transport symlink tests failed for
 Windows privileges unavailable on this validation host. An extended-path pytest
 temporary directory avoids the host's separate legacy path-length limit. Those
 Hub tests are outside the branch implementation.
 
+The deployment example observed roughly 0.16 seconds cached versus 1.07 seconds
+uncached for six generated tokens after warmup (about 6.6x on this host). This
+compares the new compiled cache path with the existing uncached backend on a
+small random CPU model; it is not a production-model speed guarantee. The native
+smoke test passed with the official Windows x86_64 engine 3.0.1, downloaded from
+`Cactus-Compute/needle3` revision `b274efcb211a9eef48c9a88da4b43bd569696a39`.
+Native model loading, prompt prefill and short token decoding are covered;
+real-weight quality and device performance still require evaluation.
+
 These are CPU correctness tests on random small models, not real Needle 3 quality
-or performance evaluations. No native `.cact` branch export, grammar/confidence
-integration, quantization-aware branch training, incremental KV-cache execution,
+or performance evaluations. No native shared-prefix branch ABI, grammar/confidence
+integration in the JAX decoder, quantization-aware branch training, automatic
 cross-response cache reuse, padded batches, distributed training, optimizer resume,
 mixed response branches in one batch, joint branch training, runtime package
 installation/removal or learned engram updates are implemented. `generate_tokens`

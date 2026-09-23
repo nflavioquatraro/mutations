@@ -32,6 +32,23 @@ class BranchBackend(ABC):
     """
 
     @property
+    def supports_cached_decoding(self) -> bool:
+        """Whether this backend implements request-local incremental generation."""
+        return False
+
+    def prefill_cached(self, input_ids: Any, *, capacity: int) -> PrefixState:
+        """Prefill the prefix and retain immutable caches up to capacity tokens."""
+        raise NotImplementedError("This backend does not support cached decoding.")
+
+    def start_decode(self, state: PrefixState, suffix: Mapping) -> tuple[Any, Any]:
+        """Prefill the selected suffix; return logits and an owned decode snapshot."""
+        raise NotImplementedError("This backend does not support cached decoding.")
+
+    def decode_step(self, state: Any, token_id: int) -> tuple[Any, Any]:
+        """Append one token; return its logits and a new request-local snapshot."""
+        raise NotImplementedError("This backend does not support cached decoding.")
+
+    @property
     def forbidden_generation_ids(self) -> tuple[int, ...]:
         """Return token IDs that cannot be fed back into this backend's decoder."""
         return ()

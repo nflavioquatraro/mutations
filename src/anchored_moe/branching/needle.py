@@ -6,12 +6,12 @@ References:
 Differences:
     Calls the upstream scan body for explicit contiguous layer ranges, retaining
     original layer indices and hyper-connection offsets. Uses floating reference
-    numerics only; no native .cact export, quantization or incremental KV cache.
+    numerics; incremental execution is implemented by the companion cache module.
 """
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from importlib.metadata import version
 from pathlib import Path
 from types import MappingProxyType
@@ -32,6 +32,9 @@ class _NeedleState:
     local_mask: Any
     rope: Any
     engram_kv: Any
+    decode_prefix: Any = None
+    tokens: Any = None
+    capacity: int = 0
 
 
 class NeedleBranchBackend(BranchBackend):
@@ -196,6 +199,31 @@ class NeedleBranchBackend(BranchBackend):
             qkv_conv_taps=cfg.qkv_conv_taps,
             hada_split=bool(cfg.ladder_widths),
         )
+        self._decoder = None
+
+    @property
+    def supports_cached_decoding(self) -> bool:
+        """Support fixed-capacity global KV and bounded local-attention ring caches."""
+        return True
+
+    def _cached_decoder(self):
+        if self._decoder is None:
+            from .needle_cache import NeedleKVDecoder
+
+            self._decoder = NeedleKVDecoder(self)
+        return self._decoder
+
+    def prefill_cached(self, input_ids, *, capacity: int) -> PrefixState:
+        """Run the shared prefix once while retaining immutable per-layer KV state."""
+        return self._cached_decoder().prefill(input_ids, capacity=capacity)
+
+    def start_decode(self, state, suffix):
+        """Prefill one response suffix and lock a private effective-weight snapshot."""
+        return self._cached_decoder().start(state, suffix)
+
+    def decode_step(self, state, token_id: int):
+        """Process one appended token using a compiled, constant-shape cache update."""
+        return self._cached_decoder().step(state, token_id)
 
     @property
     def forbidden_generation_ids(self) -> tuple[int, ...]:
@@ -280,6 +308,12 @@ class NeedleBranchBackend(BranchBackend):
 
     def prefill(self, input_ids) -> PrefixState:
         """Compute one full prefix; retain lanes, causal context and engram values."""
+        initial, request_key, _ = self._prepare_input(input_ids)
+        stream = self._jax.lax.stop_gradient(self._advance(initial, 0, self._split))
+        return PrefixState(self._key, request_key, replace(initial, stream=stream))
+
+    def _prepare_input(self, input_ids):
+        """Validate tokens and assemble the frozen inputs common to both prefills."""
         jnp, cfg = self._jnp, self._cfg
         ids = np.asarray(input_ids)
         if (
@@ -329,10 +363,7 @@ class NeedleBranchBackend(BranchBackend):
             x[:, :, None, :], (*x.shape[:2], cfg.mhc_lanes, cfg.d_model)
         )
         initial = _NeedleState(stream, mask, local, rope, engram)
-        stream = self._jax.lax.stop_gradient(self._advance(initial, 0, self._split))
-        return PrefixState(
-            self._key, request_key, _NeedleState(stream, mask, local, rope, engram)
-        )
+        return initial, request_key, tokens
 
     def _check_state(self, state):
         if (

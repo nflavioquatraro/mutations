@@ -107,3 +107,42 @@ def benchmark_branch_request(
     return BranchLatencyReport(
         tuple(samples), float(np.median(samples)), float(np.percentile(samples, 95))
     )
+
+
+def benchmark_branch_generation(
+    model,
+    input_ids,
+    *,
+    max_new_tokens: int,
+    use_cache: bool | None = None,
+    warmup: int = 1,
+    repeats: int = 5,
+) -> BranchLatencyReport:
+    """Measure end-to-end greedy generation with a fixed token budget.
+
+    Includes routing, prefill, cache setup and every decode step, excluding
+    loading and tokenization. Host token selection synchronizes device work.
+    Warmup excludes JIT compilation for this exact reserved capacity/shape.
+    Compare identical prompts/budgets with use_cache=True and False; these
+    timings do not measure the separate quantized native engine.
+    """
+    if (
+        any(isinstance(v, bool) or not isinstance(v, int) for v in (warmup, repeats))
+        or warmup < 0
+        or repeats <= 0
+    ):
+        raise ValueError("warmup must be nonnegative and repeats positive integers.")
+    for _ in range(warmup):
+        model.generate_tokens(
+            input_ids, max_new_tokens=max_new_tokens, use_cache=use_cache
+        )
+    samples = []
+    for _ in range(repeats):
+        start = perf_counter()
+        model.generate_tokens(
+            input_ids, max_new_tokens=max_new_tokens, use_cache=use_cache
+        )
+        samples.append(perf_counter() - start)
+    return BranchLatencyReport(
+        tuple(samples), float(np.median(samples)), float(np.percentile(samples, 95))
+    )

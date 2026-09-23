@@ -46,14 +46,15 @@ class BranchedForwardResult:
 class BranchGenerationResult:
     """Generated token IDs and one locked route, without implied JSON validity.
 
-    prefix_evaluations counts full-sequence prefix passes. The reference decoder
-    recomputes history after the initial shared prefill; it has no incremental KV
-    implementation. A caller may supply a grammar-aware logits processor.
+    prefix_evaluations counts full-sequence prefix passes. Cached generation uses
+    one prefill and incremental token updates; uncached generation recomputes
+    history. A caller may supply a grammar-aware logits processor.
     """
 
     route: BranchRoute
     token_ids: tuple[int, ...]
     prefix_evaluations: int
+    cached: bool = False
 
 
 class BranchedModel:
@@ -282,6 +283,17 @@ class BranchedModel:
                 self.backend.logits(state, self.effective_suffix(route.branch_id)),
             )
 
+    def route_request(self, input_ids) -> BranchRoute:
+        """Select a response without executing it, for external native dispatch.
+
+        Runs the shared prefix and optional router suffix only. The caller must
+        render/tokenize the same request context used to fit the router. A stock
+        native response engine computes its own full prefill; no JAX cache is
+        transferred. Source calibration still needs native-outcome validation.
+        """
+        with self.operation():
+            return self._route(self.backend.prefill(input_ids))
+
     def forward_branch(self, input_ids, branch_id: str):
         """Force one response branch for training-data scoring or equivalence."""
         with self.operation():
@@ -298,13 +310,16 @@ class BranchedModel:
         max_new_tokens: int,
         eos_token_id: int | None = None,
         logits_processor=None,
+        use_cache: bool | None = None,
     ) -> BranchGenerationResult:
-        """Greedy reference decoding with a route locked for the complete response.
+        """Greedy decoding with a route locked for the complete response.
 
         input_ids is [1, sequence], unpadded. logits_processor, if supplied, takes
         (all_token_ids, next_logits) and returns a same-shape vector; -inf may
         mask tokens. It must retain at least one finite candidate. This API does
-        not implement Needle's native grammar, confidence gate or incremental KV.
+        not implement Needle's native grammar or confidence gate. use_cache=None
+        selects caching when the backend supports it; True requires support and
+        False retains the full-history reference path. Caches live for one call.
         """
         if (
             isinstance(max_new_tokens, bool)
@@ -312,21 +327,46 @@ class BranchedModel:
             or max_new_tokens <= 0
         ):
             raise ValueError("max_new_tokens must be a positive integer.")
+        if use_cache is not None and type(use_cache) is not bool:
+            raise ValueError("use_cache must be None, True or False.")
+        cached = (
+            self.backend.supports_cached_decoding if use_cache is None else use_cache
+        )
+        if cached and not self.backend.supports_cached_decoding:
+            raise NotImplementedError("This backend does not support cached decoding.")
         with self.operation():
             ids = np.array(input_ids, copy=True)
-            state = self.backend.prefill(ids)
+            if ids.ndim != 2 or ids.shape[0] != 1:
+                raise ValueError("Generation requires [1, sequence] token IDs.")
             limit = self.backend.max_sequence_length
             if limit is not None and ids.shape[1] + max_new_tokens > limit:
                 raise ValueError(
                     "Prompt plus reserved generation exceeds the backend context limit."
                 )
+            state = (
+                self.backend.prefill_cached(ids, capacity=ids.shape[1] + max_new_tokens)
+                if cached
+                else self.backend.prefill(ids)
+            )
             route = self._route(state)
             suffix = self.effective_suffix(route.branch_id)
+            if cached:
+                next_logits, decode_state = self.backend.start_decode(state, suffix)
+                # The incremental snapshot retains KV and bounded histories; the
+                # full prompt's residual lanes and engram arrays can be released.
+                state = None
             output = []
             for step in range(max_new_tokens):
-                if step:
+                if cached:
+                    if step:
+                        next_logits, decode_state = self.backend.decode_step(
+                            decode_state, output[-1]
+                        )
+                elif step:
                     state = self.backend.prefill(ids)
-                logits = np.asarray(self.backend.logits(state, suffix))[0, -1].copy()
+                if not cached:
+                    next_logits = self.backend.logits(state, suffix)
+                logits = np.asarray(next_logits)[0, -1].copy()
                 if logits_processor is not None:
                     processed = np.asarray(logits_processor(ids.copy(), logits.copy()))
                     if processed.shape != logits.shape:
@@ -347,4 +387,6 @@ class BranchedModel:
                 ids = np.concatenate(
                     (ids, np.array([[token]], dtype=ids.dtype)), axis=1
                 )
-            return BranchGenerationResult(route, tuple(output), len(output))
+            return BranchGenerationResult(
+                route, tuple(output), 1 if cached else len(output), cached
+            )

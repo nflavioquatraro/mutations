@@ -197,7 +197,11 @@ isolated specialist/router training, calibration binding and strict composition
 packages. See the [branching guide](src/anchored_moe/branching/README.md).
 Install `pip install -e ".[needle]"` and run
 `python examples/verify_needle_branches.py` for the offline tiny-Needle workflow.
-Native `.cact` export and optimized cached decoding remain separate work.
+BRN-007 and BRN-008 add compiled KV-cache decoding and standard `.cact` exports
+for each response branch. Run `python examples/verify_needle_deployment.py` to
+check cached generation and export. The stock native engine runs complete
+response models with external routing; native sharing of the prefix is not part
+of its API.
 
 ### Model-level prompt-routed adapters
 

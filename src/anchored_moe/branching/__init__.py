@@ -9,11 +9,20 @@ from .configuration import BranchConfig, BranchedModelConfig
 from .evaluation import (
     BranchLatencyReport,
     BranchUtilityReport,
+    benchmark_branch_generation,
     benchmark_branch_request,
     evaluate_branch_utilities,
 )
 from .model import BranchedForwardResult, BranchedModel, BranchGenerationResult
+from .native_export import (
+    CactExportConfig,
+    CactExportReport,
+    NativeBranchBundleReport,
+    export_needle_branch,
+    export_needle_bundle,
+)
 from .needle import NeedleBranchBackend
+from .needle_cache import NeedleDecodeState
 from .package import (
     BRANCH_PACKAGE_VERSION,
     BranchPackageError,
@@ -63,6 +72,8 @@ __all__ = [
     "BranchedForwardResult",
     "BranchedModel",
     "BranchedModelConfig",
+    "CactExportConfig",
+    "CactExportReport",
     "CategoricalRouterObjective",
     "CopiedSuffix",
     "FixedBranchSelection",
@@ -70,7 +81,9 @@ __all__ = [
     "JaxAdamStrategy",
     "LinearRequestScorer",
     "LoRASuffix",
+    "NativeBranchBundleReport",
     "NeedleBranchBackend",
+    "NeedleDecodeState",
     "PrefixState",
     "RequestScorer",
     "RequestScores",
@@ -80,9 +93,12 @@ __all__ = [
     "RouterTrainingExample",
     "ThresholdSelection",
     "UtilityRegressionObjective",
+    "benchmark_branch_generation",
     "benchmark_branch_request",
     "calibrate_utility_selection",
     "evaluate_branch_utilities",
+    "export_needle_branch",
+    "export_needle_bundle",
     "load_branch_package",
     "save_branch_package",
 ]

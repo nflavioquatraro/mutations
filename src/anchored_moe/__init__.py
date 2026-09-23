@@ -1,6 +1,12 @@
 """Public API for the Anchored Plug-in MoE framework."""
 
 from anchored_moe.branching import (
+    CactExportConfig,
+    CactExportReport,
+    NativeBranchBundleReport,
+    NeedleDecodeState,
+    export_needle_branch,
+    export_needle_bundle,
     BRANCH_PACKAGE_VERSION,
     ArgmaxSelection,
     BranchBackend,
@@ -36,6 +42,7 @@ from anchored_moe.branching import (
     ThresholdSelection,
     UtilityRegressionObjective,
     benchmark_branch_request,
+    benchmark_branch_generation,
     calibrate_utility_selection,
     evaluate_branch_utilities,
     load_branch_package,
@@ -297,6 +304,12 @@ from anchored_moe.adapters import (
 )
 
 __all__ = [
+    "CactExportConfig",
+    "CactExportReport",
+    "NativeBranchBundleReport",
+    "NeedleDecodeState",
+    "export_needle_branch",
+    "export_needle_bundle",
     "BRANCH_PACKAGE_VERSION",
     "ArgmaxSelection",
     "BranchBackend",
@@ -332,6 +345,7 @@ __all__ = [
     "ThresholdSelection",
     "UtilityRegressionObjective",
     "benchmark_branch_request",
+    "benchmark_branch_generation",
     "calibrate_utility_selection",
     "evaluate_branch_utilities",
     "load_branch_package",
