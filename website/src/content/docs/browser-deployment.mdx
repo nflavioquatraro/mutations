@@ -1,0 +1,278 @@
+---
+title: Browser deployment
+description: Download one frozen Needle base plus router and specialist patches, reconstruct native models locally, and route with recent conversation context through the official WASM runtime.
+order: 18
+group: Workflows
+source:
+  - src/anchored_moe/branching/README.md
+  - src/anchored_moe/branching/generative.py
+  - src/anchored_moe/branching/browser_export.py
+  - src/anchored_moe/branching/browser/bundle.mjs
+  - src/anchored_moe/branching/browser/runtime.mjs
+  - src/anchored_moe/branching/browser/needle-worker.js
+  - examples/verify_needle_browser.py
+  - examples/needle_browser.html
+feature_ids:
+  - BRN-008
+  - BRN-009
+  - BRN-010
+last_reviewed: 2026-09-24
+---
+
+import IntegrationBadge from "../../components/docs/IntegrationBadge.astro";
+
+## What runs in the browser
+
+The browser downloads a frozen base `.cact` model and small router/specialist
+patches as needed. JavaScript reconstructs complete native model files and
+loads them in separate official Needle WASM instances. The router produces a
+branch choice through normal tool-call generation; the chosen response model
+then handles the request.
+
+<IntegrationBadge status="Composable" />
+
+Training and export run in Python. Browser inference needs the exported ES
+modules and separately supplied `needle.js` / `needle.wasm` engine files.
+It has no JAX or Python runtime dependency and requires no npm package.
+
+This reduces model downloads. Each native instance still owns complete weights,
+prefill computation, and KV state. The official runtime has no shared-prefix
+split/resume interface; the [cached JAX path](/docs/needle-branches/#generate-with-an-incremental-kv-cache)
+is a separate execution strategy.
+
+## Export a browser bundle
+
+First construct and train a model with a frozen fallback, a private router
+suffix, and the desired specialists using the [Needle branches guide](/docs/needle-branches/).
+Continue from that guide's `model` and `router` objects:
+
+```python
+from anchored_moe.branching import export_needle_browser_bundle
+
+report = export_needle_browser_bundle(
+    model,
+    "deployment/browser",
+    router=router,
+    tokenizer="checkpoints/needle3.cact",
+)
+print(report.manifest_sha256)
+print(report.download_bytes, report.full_model_bytes)
+```
+
+The destination must not already exist. Export validates reconstruction before
+publishing the directory atomically. For the `base`, `router`, and `calendar`
+branches in that example, it produces:
+
+```text
+deployment/browser/
+  manifest.json
+  base.cact
+  router.ndpatch
+  calendar.ndpatch
+  browser/
+    bundle.mjs
+    runtime.mjs
+    needle-worker.js
+```
+
+The manifest binds the model hashes, patch metadata, and generative routing
+contract. Supply the official engine separately, for example under
+`deployment/browser/engine/needle.js` and `engine/needle.wasm`. Pin a matching
+engine pair in the application. Export does not download engines or train the
+router.
+
+## Base-plus-patch downloads
+
+All variants are exported with the same CQ4 settings. A patch describes which
+quantized byte ranges to copy from the base and which new bytes to insert.
+`create_cact_patch` and `apply_cact_patch` validate ranges and hashes, producing
+the exact bytes of the full exported model. The browser does not merge LoRA
+matrices, dequantize, or requantize weights.
+
+The shared base must be the exact `base.cact` emitted by this bundle. An
+unrelated stock CQ2 archive is not interchangeable with the CQ4 base. Patch
+size depends on changed quantized chunks and metadata, not just the number of
+LoRA parameters.
+
+`BrowserBranchBundle` fetches the base once per loader and downloads a patch
+only when its model is requested. It verifies assets before use and uses
+hash-keyed CacheStorage when available. If persistent caching is unavailable,
+it can fetch assets normally. Pin `report.manifest_sha256` in trusted
+application configuration to bind the manifest as well as its assets.
+
+`download_bytes` measures the base plus all patches; `full_model_bytes`
+measures separate full archives for comparison. Both exclude the engine,
+JavaScript, and manifest. A session that uses only some specialists can fetch
+fewer patches than this total.
+
+## Generative route contract
+
+The default `GenerativeToolRouter` asks the router model for exactly one
+`select_branch` call. The allowed `branch_id` values include every response
+branch and the frozen fallback. A valid native response has this shape:
+
+```json
+{
+  "function_calls": [
+    {"name": "select_branch", "arguments": {"branch_id": "calendar"}}
+  ]
+}
+```
+
+The runtime uses ordinary Needle completion with the route tool schema and
+parses the result strictly. Missing, multiple, malformed, or unknown choices
+select the base. Router failures and inference timeouts also select the base;
+a timed-out worker is terminated. The returned route contains a branch ID and
+reason, without a fabricated confidence score.
+
+Failure to run the selected response model is surfaced to the caller. Router
+fallback does not guarantee that the base can load or answer successfully.
+Tool calls returned by the response are data; this library never executes
+application tools.
+
+## Recent conversation context
+
+Each request supplies its own preceding user, assistant, and tool messages.
+The same bounded JSON envelope is passed to the router and response model:
+
+```json
+{
+  "history": [
+    {"role": "user", "content": "Schedule a meeting at noon"},
+    {"role": "assistant", "content": "Meeting scheduled"}
+  ],
+  "request": "Do the same tomorrow"
+}
+```
+
+`GenerativeRouterConfig` controls the route contract at training/export time:
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `fallback_branch` | `"base"` | Frozen response branch used when routing fails or no specialist fits. |
+| `max_history_messages` | `8` | Maximum number of preceding messages retained. |
+| `max_input_bytes` | `8192` | UTF-8 budget for the complete JSON envelope. |
+| `max_new_tokens` | `128` | Router generation reserve. |
+| `timeout_ms` | `10000` | Router inference timeout, separate from model loading. |
+
+The renderer retains a contiguous suffix of whole messages and drops the
+oldest ones to fit both history limits. It preserves the current request
+unchanged; a request that cannot fit even with empty history is rejected before
+dispatch. System-role history is not accepted. There is no hidden conversation
+state between calls and the current response must never enter routing input.
+
+The response receives the envelope as input too, so train or instruct
+specialists to read its `history` and `request` fields. Its `system` prompt and
+`tools` are supplied separately by the application.
+
+The byte budget is separate from the native token context limit. Before each
+completion, the worker checks a conservative BPE bound: static-prefix tokens,
+input UTF-8 bytes after space-to-metaspace replacement, 32 framing tokens, and
+the requested generation reserve. An overflow is rejected instead of relying
+on native history trimming. This can reject text that would fit after exact
+tokenization; reduce context or generation budgets if needed.
+
+## Run the official runtime
+
+Serve the bundle and pinned engine over HTTPS or localhost so WebCrypto is
+available. Serve JavaScript modules with the correct MIME type. The following
+module assumes the page is at the bundle root and the engine pair is in
+`engine/`; replace the manifest hash with the export report's value:
+
+```javascript
+import { BrowserBranchBundle } from "./browser/bundle.mjs";
+import {
+  BrowserBranchedModel,
+  NeedleWorkerBackend,
+} from "./browser/runtime.mjs";
+
+const bundle = await BrowserBranchBundle.load(
+  new URL("./manifest.json", location.href),
+  { manifestSha256: "<trusted report.manifest_sha256>" },
+);
+const backend = new NeedleWorkerBackend(bundle, {
+  engineUrl: new URL("./engine/needle.js", location.href),
+  maxResidentModels: 2,
+});
+const model = new BrowserBranchedModel(bundle, backend);
+
+try {
+  const { route, response } = await model.complete("Do the same tomorrow", {
+    history: [
+      { role: "user", content: "Schedule a meeting at noon" },
+      { role: "assistant", content: "Meeting scheduled" },
+    ],
+    system: "Read the history and current request in the JSON input.",
+    tools: [], // Supply your application's tool schemas here.
+    maxNewTokens: 256,
+    timeoutMs: 30000,
+  });
+  console.log(route.branch_id, route.reason, response);
+} finally {
+  model.dispose();
+}
+```
+
+In an interactive application, keep the owner across sequential requests and
+call `dispose()` when its lifetime ends. Concurrent requests on the same owner
+are rejected. Each completion resets native conversation state, so always
+provide the relevant history explicitly.
+
+`NeedleWorkerBackend` keeps at most two model workers resident by default and
+evicts the least recently used one when necessary. Downloads/reconstruction
+and worker initialization have separate loading bounds controlled by
+`loadTimeoutMs` (default 60,000 ms). A `wasmUrl` override is available when the
+WASM file is hosted separately from `needle.js`. Worker residency limits do not
+eliminate the memory needed for base bytes, patches, and reconstruction.
+
+## Replace routing or transport independently
+
+The default browser owner uses the generative contract in
+`bundle.manifest.routing`. Pass `{ router: customRouter }` as the third
+`BrowserBranchedModel` argument to use another strategy. It implements
+`route(request, history, backend)` and returns a route with `branch_id` and
+`reason`. Unknown branch IDs fall back to base.
+
+A custom backend implements `complete(branchId, options)` and `dispose()`.
+`BrowserBranchBundle.load()` also accepts a `fetcher` and a `cache` option;
+`NeedleWorkerBackend` accepts a `workerFactory`. Routing, model transport, and
+native execution can therefore change independently from suffix training.
+
+The browser contract is generation-based. The affine scorer and calibrated
+thresholds used by the JAX owner are not exported as browser routing logic.
+
+## Verify a local browser bundle
+
+The repository includes a synthetic smoke fixture. From the repository root,
+with the `needle` extra installed, choose a new output directory:
+
+```bash
+python examples/verify_needle_browser.py --output .cache/browser-demo
+```
+
+This creates random tiny models, a bundle, and an `index.html` test page.
+Place the matching official `needle.js` and `needle.wasm` files in its
+`engine/` directory, then serve it:
+
+```bash
+python -m http.server 8000 --bind 127.0.0.1 --directory .cache/browser-demo
+```
+
+Open `http://127.0.0.1:8000` and select **Run deployment checks**. The fixture
+loads, prefills, and decodes the base, router, and specialist variants, then
+exercises context-aware routing fallback. It does not demonstrate a trained
+calendar specialist or learned route quality.
+
+The 2026-09-24 smoke run used official engine 3.0.1 from
+`Cactus-Compute/needle3` revision
+`b274efcb211a9eef48c9a88da4b43bd569696a39`. Its model assets totaled 204,502 bytes
+versus 389,910 bytes for three complete archives, about 48% less. These are
+synthetic transport measurements, excluding engine/JavaScript/manifest assets.
+Evaluate download size, peak memory, latency, and held-out route/response
+quality with the actual exported model and target browser before deployment.
+
+## Related pages
+
+- [Needle branches](/docs/needle-branches/) covers construction, isolated training, and native export formats.
+- [Inference](/docs/inference/) covers the separate MLP dispatch and registry workflow.
+- [End-to-end examples](/docs/examples/#needle-branching-and-browser-deployment) links the branch verification entry points.

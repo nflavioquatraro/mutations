@@ -5,6 +5,7 @@ order: 8
 group: Workflows
 source:
   - src/anchored_moe/training/README.md
+  - src/anchored_moe/branching/training.py
   - src/anchored_moe/training/expert_trainer.py
   - src/anchored_moe/training/independent.py
   - src/anchored_moe/training/mini_moe.py
@@ -28,7 +29,9 @@ feature_ids:
   - BAL-003
   - BAL-004
   - BAL-005
-last_reviewed: 2026-09-15
+  - BRN-005
+  - BRN-009
+last_reviewed: 2026-09-24
 ---
 
 import CodeDisclosure from "../../components/docs/CodeDisclosure.astro";
@@ -417,6 +420,19 @@ Expected invariant: the same independently trained pair updates again with
 fresh local heads, while report provenance and exact anchor cleanup remain
 auditable.
 </CodeDisclosure>
+
+## Needle suffix training
+
+The separate [Needle workflow](/docs/needle-branches/#train-specialists-independently)
+uses `BranchTrainer` with interchangeable optimizer and objective strategies.
+`train_specialist()` updates one response suffix; `train_router()` fits the
+affine scorer and optional router suffix. `train_generative_router()` trains
+only the private suffix to emit route tool calls from recent conversation
+context, keeping response branches and the affine head unchanged.
+
+See the [generative training example](/docs/needle-branches/#train-a-context-aware-generative-router)
+for consistent prompt rendering and label masking. Evaluate route quality again
+after CQ4 export; floating-reference fitting does not validate native outcomes.
 
 ## Current limitations
 

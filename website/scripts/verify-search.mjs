@@ -68,6 +68,24 @@ for (const record of records) {
 
 const cases = [
   {
+    query: "Needle branches",
+    title: "Needle branches",
+    matchKind: "Title",
+    href: `${siteBase}/docs/needle-branches/`,
+  },
+  {
+    query: "BRN-010",
+    title: "Browser deployment",
+    matchKind: "Feature ID",
+    href: `${siteBase}/docs/browser-deployment/`,
+  },
+  {
+    query: "Base-plus-patch downloads",
+    title: "Browser deployment",
+    matchKind: "Heading",
+    hrefPrefix: `${siteBase}/docs/browser-deployment/#`,
+  },
+  {
     query: "ADP-001",
     title: "Prompt-routed adapters",
     matchKind: "Feature ID",

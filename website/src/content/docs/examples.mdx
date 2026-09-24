@@ -7,6 +7,9 @@ source:
   - website-implementation-plan.md
   - feature-implementation-plan.md
   - examples/verify_dense_equivalence.py
+  - examples/verify_needle_branches.py
+  - examples/verify_needle_deployment.py
+  - examples/verify_needle_browser.py
   - examples/train_expert_package.py
   - examples/fit_router.py
   - examples/verify_package_runtime.py
@@ -98,7 +101,11 @@ feature_ids:
   - NB-003
   - NB-004
   - NB-005
-last_reviewed: 2026-07-30
+  - BRN-006
+  - BRN-007
+  - BRN-008
+  - BRN-009
+last_reviewed: 2026-09-24
 ---
 
 import CodeDisclosure from "../../components/docs/CodeDisclosure.astro";
@@ -219,6 +226,10 @@ under a strict compute cap, then retrieve fine-grained expert identifiers while
 keeping the unimplemented execution boundaries explicit.
 
 ## Compare the workflows
+
+For the separate Needle path, see [Needle branching and browser deployment](#needle-branching-and-browser-deployment)
+below. Its examples cover shared-prefix training, cached decoding, native
+export, and generative routing through the official browser runtime.
 
 <StrategyTable
   caption="End-to-end workflow comparison"
@@ -2683,3 +2694,31 @@ explicit outer step.
   workflows; none yet orchestrates product-key query or key learning.
 - [Evaluation](/docs/evaluation/) separates exact retrieval correctness from
   quality, memory, latency, and production-scaling evidence.
+
+## Needle branching and browser deployment
+
+<IntegrationBadge status="Composable" />
+
+These examples construct tiny random Needle models locally. Install the
+optional backend and run the checks from the repository root:
+
+```bash
+python -m pip install -e ".[needle]"
+python examples/verify_needle_branches.py
+python examples/verify_needle_deployment.py
+python examples/verify_needle_browser.py --output .cache/browser-demo
+```
+
+- `verify_needle_branches.py` checks shared-prefix equivalence, isolated
+  specialist/router fitting, held-out calibration, and exact package reload.
+- `verify_needle_deployment.py` checks cached/reference generation parity and
+  writes full native response models.
+- `verify_needle_browser.py` creates a base-plus-patch bundle and an HTML smoke
+  page. Choose a fresh output directory, supply the official engine files, and
+  serve the directory using the [browser walkthrough](/docs/browser-deployment/#verify-a-local-browser-bundle).
+
+The browser page loads and decodes all reconstructed variants and exercises
+fallback with explicit recent context. These fixtures validate implementation
+and transport behavior; they do not establish learned route quality or
+production-model performance. See [Needle branches](/docs/needle-branches/)
+for training with caller-labeled requests and a real local checkpoint.
