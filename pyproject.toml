@@ -34,7 +34,7 @@ dev = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-anchored_moe = ["*/README.md"]
+anchored_moe = ["*/README.md", "branching/browser/*.mjs", "branching/browser/*.js"]
 
 [tool.pytest.ini_options]
 addopts = "-ra"

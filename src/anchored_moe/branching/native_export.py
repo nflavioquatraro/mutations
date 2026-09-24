@@ -144,12 +144,15 @@ def _require_exportable(model):
         raise ValueError("Recalibrate or select a manual policy before native export.")
 
 
-def _merged_parameters(model, branch_id):
+def _merged_parameters(model, branch_id, *, allow_router=False):
     from flax.core import unfreeze
     from flax.traverse_util import flatten_dict, unflatten_dict
     from needle.model.architecture import HEAD_KEYS
 
-    if branch_id not in model.response_ids:
+    allowed = set(model.response_ids)
+    if allow_router and model.config.router_branch:
+        allowed.add(model.config.router_branch.branch_id)
+    if branch_id not in allowed:
         raise ValueError(
             "Native response export requires an installed response branch."
         )
@@ -179,7 +182,7 @@ def _merged_parameters(model, branch_id):
     ), dropped
 
 
-def _write_response(model, branch_id, path, blob, config):
+def _write_response(model, branch_id, path, blob, config, *, allow_router=False):
     from needle.model.architecture import (
         effective_kv_window,
         engram_geometry,
@@ -187,7 +190,9 @@ def _write_response(model, branch_id, path, blob, config):
     )
     from needle.model.export import read_export, read_tokenizer_blob, write_export
 
-    parameters, dropped = _merged_parameters(model, branch_id)
+    parameters, dropped = _merged_parameters(
+        model, branch_id, allow_router=allow_router
+    )
     info = write_export(
         parameters,
         model.backend._cfg,

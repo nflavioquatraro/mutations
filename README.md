@@ -202,6 +202,13 @@ for each response branch. Run `python examples/verify_needle_deployment.py` to
 check cached generation and export. The stock native engine runs complete
 response models with external routing; native sharing of the prefix is not part
 of its API.
+BRN-009 and BRN-010 add the preferred generative route-tool strategy with recent
+conversation context, isolated router-suffix training, base-plus-patch downloads,
+and a browser loader/worker backend for the official Needle WASM engine. The
+browser reconstructs ordinary full models; it shares download bytes rather than
+runtime weights or KV caches. See the guide for training and deployment examples,
+or generate a synthetic browser check with
+`python examples/verify_needle_browser.py --output .cache/browser-demo`.
 
 ### Model-level prompt-routed adapters
 

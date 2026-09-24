@@ -590,3 +590,102 @@ def test_native_engine_loads_export_when_local_library_supplied(native, tmp_path
         env={**os.environ, "NEEDLE_TELEMETRY": "0", "DO_NOT_TRACK": "1"},
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_generative_router_training_owns_only_router_suffix(native):
+    model = owner(native)
+    before = {
+        name: tensor_digest(model.branch_parameters(name))
+        for name in ("base", "specialist", "router")
+    }
+    base_digest = tensor_digest(model.backend.suffix_parameters)
+    head_digest = tensor_digest(model.scorer.parameters)
+    ids = np.array([[2, 5, 6, 7]], np.int32)
+    labels = np.array([[-100, -100, 6, 7]], np.int32)
+    report = BranchTrainer(JaxAdamStrategy(steps=2)).train_generative_router(
+        model,
+        [ResponseTrainingExample(ids, labels)],
+        data_id="route-tool-fit",
+    )
+    assert report.final_loss < report.initial_loss
+    assert before["router"] != tensor_digest(model.branch_parameters("router"))
+    for name in ("base", "specialist"):
+        assert before[name] == tensor_digest(model.branch_parameters(name))
+    assert base_digest == tensor_digest(model.backend.suffix_parameters)
+    assert head_digest == tensor_digest(model.scorer.parameters)
+    with pytest.raises(ValueError, match="declared"):
+        BranchTrainer().train_generative_router(
+            owner(native, router=False), [], data_id="fit"
+        )
+
+
+def test_browser_export_reconstructs_every_branch_and_router_exactly(native, tmp_path):
+    from anchored_moe.branching import (
+        GenerativeRouterConfig,
+        apply_cact_patch,
+        export_needle_browser_bundle,
+    )
+    from anchored_moe.branching.native_export import CactExportConfig, _write_response
+
+    model = owner(native, copied=True)
+    for branch in ("specialist", "router"):
+        tensors = model.branch_parameters(branch)
+        key = (
+            next(k for k in tensors if k.endswith("/B"))
+            if branch == "router"
+            else next(k for k in tensors if "/hc/" in k)
+        )
+        tensors[key] += 0.12
+        model.replace_branch_parameters(branch, tensors)
+    before = model.composition_key
+    contract = GenerativeRouterConfig(model.response_ids)
+    report = export_needle_browser_bundle(
+        model, tmp_path / "browser", router=contract, tokenizer=_tokenizer_blob()
+    )
+    assert model.composition_key == before
+    assert report.download_bytes < report.full_model_bytes
+    manifest = json.loads((report.path / "manifest.json").read_text())
+    assert manifest["routing"]["model_id"] == "router"
+    assert manifest["routing"]["strategy"] == "generative-tool-v1"
+    assert (report.path / "browser/runtime.mjs").is_file()
+    assert not list(report.path.glob("*safetensors"))
+    base = (report.path / "base.cact").read_bytes()
+    for branch in ("specialist", "router"):
+        target = tmp_path / f"{branch}.cact"
+        _write_response(
+            model,
+            branch,
+            target,
+            _tokenizer_blob(),
+            CactExportConfig(),
+            allow_router=True,
+        )
+        patch = (report.path / manifest["models"][branch]["patch"]["file"]).read_bytes()
+        assert apply_cact_patch(base, patch) == target.read_bytes()
+    with pytest.raises(FileExistsError):
+        export_needle_browser_bundle(
+            model, report.path, router=contract, tokenizer=_tokenizer_blob()
+        )
+
+
+def test_browser_export_failure_is_atomic(native, tmp_path, monkeypatch):
+    from anchored_moe.branching import (
+        GenerativeRouterConfig,
+        browser_export,
+        export_needle_browser_bundle,
+    )
+
+    model = owner(native)
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("injected patch failure")
+
+    monkeypatch.setattr(browser_export, "create_cact_patch", fail)
+    with pytest.raises(RuntimeError, match="injected"):
+        export_needle_browser_bundle(
+            model,
+            tmp_path / "browser",
+            router=GenerativeRouterConfig(model.response_ids),
+            tokenizer=_tokenizer_blob(),
+        )
+    assert list(tmp_path.iterdir()) == []

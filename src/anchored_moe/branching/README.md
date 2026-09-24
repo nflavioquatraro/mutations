@@ -12,7 +12,10 @@ whole-model PEFT adapter owner. Public imports are available from
 The first backend is the native JAX/Flax Needle 3 **reference model**, with
 incremental KV-cached generation. Standard `.cact` export is available for each
 response branch. The stock native engine runs a complete model per branch;
-request routing and prefix sharing are not part of its published ABI. No model
+prefix sharing is not part of its published ABI. An additional browser path uses
+a generative route tool, recent conversation context and separate official WASM
+instances. Base-plus-patch downloads reconstruct complete native models locally.
+No model
 weights are downloaded implicitly. Joint expert mixtures and automatic dataset
 generation are not supplied.
 
@@ -28,6 +31,8 @@ generation are not supplied.
 | BRN-006 | `save_branch_package`, `load_branch_package`, `evaluate_branch_utilities`, `benchmark_branch_request` | `package.py`, `evaluation.py` | Validated |
 | BRN-007 | `generate_tokens(use_cache=...)`, `NeedleDecodeState`, `benchmark_branch_generation` | `backend.py`, `needle_cache.py`, `model.py`, `evaluation.py` | Validated |
 | BRN-008 | `CactExportConfig`, `export_needle_branch`, `export_needle_bundle` | `native_export.py` | Validated |
+| BRN-009 | `GenerativeRouterConfig`, `RoutingMessage`, `prepare_generative_router_example`, `train_generative_router` | `generative.py`, `training.py` | Validated |
+| BRN-010 | `BrowserBranchBundleReport`, `export_needle_browser_bundle`, `create_cact_patch`, `apply_cact_patch` | `browser_export.py` and `browser/` JavaScript assets | Validated |
 
 ## Mathematical formulation
 
@@ -263,7 +268,155 @@ calibration, exact save/reload behavior and synchronized latency samples.
 Run `python examples/verify_needle_deployment.py` for cached/reference generation
 parity, two native response exports and warm end-to-end decoding measurements.
 
+### Generative routing and browser delivery (BRN-009, BRN-010)
+
+The preferred browser strategy generates one `select_branch` tool call whose
+`branch_id` enum includes every response and the frozen fallback. It uses the
+ordinary native completion API and its grammar. Invalid/missing/multiple calls,
+unknown routes, native failures and inference timeouts select the base. A valid
+route has no invented probability or confidence score. The affine/JAX strategy
+remains available for research and is independent of this export path.
+
+`GenerativeRouterConfig` retains the last eight user/assistant/tool messages by
+default, dropping whole oldest messages to fit an 8192-byte UTF-8 JSON envelope.
+It always preserves the current request. A current request that cannot fit is
+rejected before routing. The caller supplies history preceding this request;
+there is no hidden cross-request conversation state or future response in the
+router input. History roles are data inside the envelope. Training uses the
+same envelope and exact tool-schema string; tokenized training examples reserve
+generation capacity and reject overflow instead of truncating labels. Native
+context limits still apply independently of the byte limit. Before completion,
+the browser adds the native static-prefix token count, input UTF-8 byte count
+after the tokenizer's space-to-metaspace replacement,
+32 framing tokens and the generation reserve, and rejects if this conservative
+BPE upper bound exceeds the archive's context limit. This may reject text that
+would fit after tokenization, but avoids relying on native history trimming.
+
+Train from caller-labeled data using the model's matching deployed tokenizer:
+
+```python
+from anchored_moe.branching import (
+    BranchTrainer,
+    GenerativeRouterConfig,
+    JaxAdamStrategy,
+    RoutingMessage,
+    export_needle_browser_bundle,
+    prepare_generative_router_example,
+)
+from needle.model.export import RefTokenizer
+
+router = GenerativeRouterConfig(
+    model.response_ids,
+    fallback_branch=model.config.fallback_branch,
+    descriptions=(
+        ("base", "General requests"),
+        ("specialist", "Calendar and scheduling requests"),
+    ),
+)
+tokenizer = RefTokenizer.from_cact("original.cact")
+example = prepare_generative_router_example(
+    router,
+    tokenizer,
+    "Do the same tomorrow",
+    "specialist",
+    history=(
+        RoutingMessage("user", "Schedule a meeting at noon"),
+        RoutingMessage("assistant", "Meeting scheduled"),
+    ),
+    max_sequence_length=model.backend.max_sequence_length,
+)
+trainer = BranchTrainer(JaxAdamStrategy(steps=20))
+trainer.train_generative_router(model, [example], data_id="route-training-v1")
+report = export_needle_browser_bundle(
+    model,
+    "browser-bundle",
+    router=router,
+    tokenizer="original.cact",
+)
+```
+
+`model` must declare a trainable `router_branch`; its prefix, responses and affine
+head remain frozen during this training call. This uses the same configurable
+objective/optimizer and LoRA/copied suffix ownership as specialist fitting. The
+single example illustrates the interface; deployment requires representative
+labels, explicit base examples and held-out route-quality evaluation after CQ4
+export. Export does not train the model or claim calibrated routing quality.
+`save_branch_package` continues to save the learned router suffix; the generative
+contract is supplied separately to browser export and stored in its manifest.
+
+The bundle contains `base.cact`, one `.ndpatch` per specialist/router, a manifest,
+and the three dependency-free JavaScript assets under `browser/`. The base is
+re-exported with the same pinned CQ4 settings as all branches; it is not a patch
+against an unrelated stock CQ2 download. A patch contains an eight-byte
+`NDPATCH1` magic, little-endian uint32 JSON header length, a JSON header and literal
+bytes. The header pins base/target sizes and SHA-256 hashes, payload digest, and
+ordered `["base"|"patch", offset, length]` copy instructions. Reconstruction
+validates every range and the complete target hash before passing any bytes to
+the native engine. It does no tensor arithmetic. Export verifies exact roundtrips
+before atomic publication and refuses to overwrite existing destinations.
+
+Host the bundle and a matching, pinned official `needle.js`/`needle.wasm` engine
+over HTTPS or localhost (Web Crypto requires a secure context). No engine or
+weights are downloaded implicitly by Python. Supply engine URLs explicitly:
+
+```javascript
+import { BrowserBranchBundle } from "./browser/bundle.mjs";
+import { BrowserBranchedModel, NeedleWorkerBackend } from "./browser/runtime.mjs";
+
+const bundle = await BrowserBranchBundle.load("/models/manifest.json", {
+  manifestSha256: "<report.manifest_sha256>", // pin from the trusted export
+});
+const backend = new NeedleWorkerBackend(bundle, {
+  engineUrl: new URL("/engine/needle.js", location.href),
+  maxResidentModels: 2,
+});
+const model = new BrowserBranchedModel(bundle, backend);
+const result = await model.complete("Do the same tomorrow", {
+  history: [
+    { role: "user", content: "Schedule a meeting at noon" },
+    { role: "assistant", content: "Meeting scheduled" },
+  ],
+  system: "Use the history and current request in the JSON input.",
+  tools: calendarTools,
+});
+console.log(result.route, result.response);
+model.dispose();
+```
+
+`BrowserBranchBundle` downloads the base once, fetches patches lazily and caches
+verified assets by digest through CacheStorage when available. Cache failure
+falls back to normal fetching. JavaScript assets and engine delivery use normal
+hosting/browser caching; model transport sizes exclude these and the manifest.
+Reconstructed complete model buffers are transferred to isolated classic workers
+which retain archive memory until termination. Residency defaults to two models
+and evicts the least recently used worker. Startup/downloads have a separate
+60-second deadline; router inference defaults to 10 seconds and 128 new tokens.
+A synchronous WASM timeout terminates the worker, not merely the awaiting promise.
+
+Each completion explicitly reinitializes native conversation state. The chosen
+response receives the same bounded history/request envelope; specialists should
+be trained/instructed for this input format. Returned tool calls are data only;
+the library never executes application tools. One model owner rejects concurrent
+requests; use separate owners for independent sessions. `GenerativeToolRouter`
+can be replaced by any object implementing `route(request, history, backend)`;
+the backend is separately replaceable via `complete(branchId, options)`/`dispose`.
+No Python or JAX is needed in the browser. Separate native models still duplicate
+weights, prefill computation and KV caches; the savings are in model downloads.
+
+Run `python examples/verify_needle_browser.py --output .cache/browser-demo`, copy
+the official engine into `.cache/browser-demo/engine/`, and serve that directory
+with `python -m http.server --bind 127.0.0.1 --directory .cache/browser-demo`.
+Open `index.html` and run the deployment checks. This synthetic example exercises
+all reconstructed branches plus context-aware fallback; it does not demonstrate
+trained routing accuracy. The optional engine 3.0.1 browser validation uses
+`Cactus-Compute/needle3` revision `b274efcb211a9eef48c9a88da4b43bd569696a39`.
+
 ## References
+
+- [Official browser engine](https://www.cactuscompute.com/blog/needle-supported-devices)
+  and [native container contract](https://www.cactuscompute.com/blog/cact-format)
+  underpin BRN-009 and BRN-010. Patches are project-specific transport artifacts;
+  the reconstructed bytes remain ordinary native `.cact` files.
 
 - [Needle architecture](https://github.com/cactus-compute/needle/blob/main/needle/model/architecture.py):
   upstream layer execution and mHC/engram semantics. The backend uses the pinned
@@ -308,8 +461,8 @@ geometry limits still apply: the width-16 JAX toy fixture is rejected by the
 pinned engine; native acceptance uses width 128, 64-dimensional heads and four
 residual lanes. Format roundtrip alone is not a native execution guarantee.
 
-All 38 branch tests pass across full regression and final focused reruns with
-the pinned Needle package on CPU. The original offline
+The initial deployment validation (2026-09-23) passed 38 branch tests across full
+regression and final focused reruns with the pinned Needle package on CPU. The original offline
 example checks float32 native parity (maximum absolute logit error approximately
 `4.84e-8`), isolated fitting and exact package reload. Lint and wheel build pass.
 Full regression: 707 passed, two existing Hub transport symlink tests failed for
@@ -325,6 +478,18 @@ smoke test passed with the official Windows x86_64 engine 3.0.1, downloaded from
 `Cactus-Compute/needle3` revision `b274efcb211a9eef48c9a88da4b43bd569696a39`.
 Native model loading, prompt prefill and short token decoding are covered;
 real-weight quality and device performance still require evaluation.
+
+Browser/generative validation on 2026-09-24 passed 70 targeted Python tests,
+including seven documentation checks and a Node-driven test containing seven
+JavaScript cases. These cover training isolation, history/render parity,
+corrupt/truncated patches, byte-exact router/specialist reconstruction, lazy
+downloads, strict decisions, timeout termination, context bounds and concurrent
+request rejection. The official WASM engine loaded/prefilled/decoded all three
+reconstructed synthetic variants in the browser and exercised context-aware
+fallback. The fixture downloaded 204,502 model bytes instead of 389,910 bytes for
+three complete archives (about 48% less), excluding engine/JS/manifest assets.
+This is a synthetic transport result, not a real-weight compression or routing
+quality claim. Wheel contents, feature-module lint and dependency checks passed.
 
 These are CPU correctness tests on random small models, not real Needle 3 quality
 or performance evaluations. No native shared-prefix branch ABI, grammar/confidence

@@ -5,6 +5,12 @@ dependencies are loaded only by backend construction and native training calls.
 """
 
 from .backend import BranchBackend, PrefixState
+from .browser_export import (
+    BrowserBranchBundleReport,
+    apply_cact_patch,
+    create_cact_patch,
+    export_needle_browser_bundle,
+)
 from .configuration import BranchConfig, BranchedModelConfig
 from .evaluation import (
     BranchLatencyReport,
@@ -12,6 +18,12 @@ from .evaluation import (
     benchmark_branch_generation,
     benchmark_branch_request,
     evaluate_branch_utilities,
+)
+from .generative import (
+    GenerativeRouterConfig,
+    RoutingMessage,
+    parse_generative_route,
+    prepare_generative_router_example,
 )
 from .model import BranchedForwardResult, BranchedModel, BranchGenerationResult
 from .native_export import (
@@ -72,12 +84,14 @@ __all__ = [
     "BranchedForwardResult",
     "BranchedModel",
     "BranchedModelConfig",
+    "BrowserBranchBundleReport",
     "CactExportConfig",
     "CactExportReport",
     "CategoricalRouterObjective",
     "CopiedSuffix",
     "FixedBranchSelection",
     "FrozenSuffix",
+    "GenerativeRouterConfig",
     "JaxAdamStrategy",
     "LinearRequestScorer",
     "LoRASuffix",
@@ -91,14 +105,20 @@ __all__ = [
     "ResponseObjective",
     "ResponseTrainingExample",
     "RouterTrainingExample",
+    "RoutingMessage",
     "ThresholdSelection",
     "UtilityRegressionObjective",
+    "apply_cact_patch",
     "benchmark_branch_generation",
     "benchmark_branch_request",
     "calibrate_utility_selection",
+    "create_cact_patch",
     "evaluate_branch_utilities",
     "export_needle_branch",
+    "export_needle_browser_bundle",
     "export_needle_bundle",
     "load_branch_package",
+    "parse_generative_route",
+    "prepare_generative_router_example",
     "save_branch_package",
 ]

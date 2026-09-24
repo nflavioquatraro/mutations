@@ -1,6 +1,14 @@
 """Public API for the Anchored Plug-in MoE framework."""
 
 from anchored_moe.branching import (
+    BrowserBranchBundleReport,
+    GenerativeRouterConfig,
+    RoutingMessage,
+    apply_cact_patch,
+    create_cact_patch,
+    export_needle_browser_bundle,
+    parse_generative_route,
+    prepare_generative_router_example,
     CactExportConfig,
     CactExportReport,
     NativeBranchBundleReport,
@@ -304,6 +312,14 @@ from anchored_moe.adapters import (
 )
 
 __all__ = [
+    "BrowserBranchBundleReport",
+    "GenerativeRouterConfig",
+    "RoutingMessage",
+    "apply_cact_patch",
+    "create_cact_patch",
+    "export_needle_browser_bundle",
+    "parse_generative_route",
+    "prepare_generative_router_example",
     "CactExportConfig",
     "CactExportReport",
     "NativeBranchBundleReport",

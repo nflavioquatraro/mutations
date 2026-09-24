@@ -282,6 +282,53 @@ class BranchTrainer:
         the start of this call. Failure publishes nothing. data_id is recorded to
         reject reuse of a known fitting dataset for calibration.
         """
+        if branch_id not in model.response_ids:
+            raise ValueError("Training requires a trainable response branch.")
+        return self._train_generation(
+            model,
+            branch_id,
+            examples,
+            data_id=data_id,
+            objective=objective,
+            drift_weight=drift_weight,
+        )
+
+    def train_generative_router(
+        self,
+        model,
+        examples,
+        *,
+        data_id: str,
+        objective: BranchObjective | None = None,
+        drift_weight: float = 0.0,
+    ) -> BranchTrainingReport:
+        """Train only the declared router suffix on masked route-tool targets.
+
+        Use prepare_generative_router_example for the browser context contract.
+        The affine scorer, responses and shared base remain unchanged. The same
+        objective/optimizer interfaces used by specialists remain interchangeable.
+        """
+        if model.config.router_branch is None:
+            raise ValueError("Generative routing requires a declared router branch.")
+        return self._train_generation(
+            model,
+            model.config.router_branch.branch_id,
+            examples,
+            data_id=data_id,
+            objective=objective,
+            drift_weight=drift_weight,
+        )
+
+    def _train_generation(
+        self,
+        model,
+        branch_id,
+        examples,
+        *,
+        data_id,
+        objective,
+        drift_weight,
+    ):
         import jax.numpy as jnp
 
         objective = objective or ResponseObjective()
@@ -297,10 +344,10 @@ class BranchTrainer:
         with model.operation():
             self._check_data(model, data_id)
             if (
-                branch_id not in model.response_ids
+                branch_id not in model._configs
                 or model._configs[branch_id].parameterization == "frozen"
             ):
-                raise ValueError("Training requires a trainable response branch.")
+                raise ValueError("Training requires a trainable generation branch.")
             initial = model.backend.native_parameters(
                 model.branch_parameters(branch_id)
             )
