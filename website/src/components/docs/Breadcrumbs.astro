@@ -1,0 +1,57 @@
+---
+import { sitePath } from "../../lib/site-path";
+
+export interface Breadcrumb {
+  name: string;
+  path: string;
+}
+
+interface Props {
+  items: Breadcrumb[];
+}
+
+const { items } = Astro.props;
+---
+
+<nav class="breadcrumbs" aria-label="Breadcrumb">
+  <ol>
+    {items.map((item, index) => (
+      <li>
+        {index === items.length - 1 ? (
+          <span aria-current="page">{item.name}</span>
+        ) : (
+          <a href={sitePath(item.path)}>{item.name}</a>
+        )}
+      </li>
+    ))}
+  </ol>
+</nav>
+
+<style>
+  .breadcrumbs {
+    margin-bottom: 1.75rem;
+    color: var(--ink-soft);
+    font-size: 0.8rem;
+    line-height: 1.6;
+  }
+
+  ol {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 0;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  li + li::before {
+    content: "/";
+    margin: 0 0.65rem;
+    opacity: 0.6;
+  }
+
+  a {
+    text-decoration: underline;
+    text-underline-offset: 0.2em;
+  }
+</style>

@@ -1,0 +1,335 @@
+---
+title: Needle branches
+seo_title: "Needle Shared-Prefix LLM Branches and LoRA Training"
+description: "Build frozen-prefix Needle LLM branches, train independent LoRA or copied suffixes, and deploy specialists with cached JAX decoding or native model exports."
+order: 17
+group: Workflows
+source:
+  - src/anchored_moe/branching/README.md
+  - src/anchored_moe/branching/configuration.py
+  - src/anchored_moe/branching/needle.py
+  - src/anchored_moe/branching/model.py
+  - src/anchored_moe/branching/training.py
+  - src/anchored_moe/branching/generative.py
+  - src/anchored_moe/branching/native_export.py
+  - src/anchored_moe/branching/package.py
+  - examples/verify_needle_branches.py
+  - examples/verify_needle_deployment.py
+feature_ids:
+  - BRN-001
+  - BRN-002
+  - BRN-003
+  - BRN-004
+  - BRN-005
+  - BRN-006
+  - BRN-007
+  - BRN-008
+  - BRN-009
+last_reviewed: 2026-09-24
+---
+
+import CodeDisclosure from "../../components/docs/CodeDisclosure.astro";
+import IntegrationBadge from "../../components/docs/IntegrationBadge.astro";
+import StrategyTable from "../../components/docs/StrategyTable.astro";
+
+export const branchStrategies = [
+  {
+    strategy: "Frozen response suffix",
+    parameterization: "frozen",
+    ownership: "Original suffix; explicit fallback with no trainable weights",
+  },
+  {
+    strategy: "LoRA suffix",
+    parameterization: "lora",
+    ownership: "Independent low-rank updates to supported suffix projections",
+  },
+  {
+    strategy: "Copied suffix",
+    parameterization: "copy",
+    ownership: "Independent block and layer-specific mHC tensors in the suffix",
+  },
+];
+
+## What this path does
+
+A `BranchedModel` splits a Needle 3 model into a frozen prefix and independent
+last-layer suffixes. One suffix can classify a request, another can specialize
+in a domain, and the original frozen suffix remains the response fallback.
+Routing chooses one response branch for the whole request.
+
+<IntegrationBadge status="Composable" />
+
+This path has its own owner, training strategies, and artifact format. It is
+separate from the Hugging Face MLP conversion and `ExpertRegistry` lifecycle.
+The backend preserves Needle's attention, mHC residual lanes, QKV convolutions,
+and frozen engram computation. It does not replace Needle blocks with generic
+dense MLPs.
+
+In JAX, the prefix runs once and its full state feeds both the router and
+selected response suffix. In the [browser deployment](/docs/browser-deployment/),
+complete native models run separately while sharing the downloaded base bytes.
+
+## Install and construct branches
+
+Install the optional reference-model and training dependencies:
+
+```bash
+python -m pip install -e ".[needle]"
+```
+
+The backend pins `cactus-needle==3.0.4`. Supply a local format-v2 master
+`.safetensors` checkpoint with configuration metadata; a quantized `.cact` file
+cannot serve as the training checkpoint. No weights are downloaded implicitly.
+Ordinary package import does not load JAX, Flax, Optax, or Needle.
+
+This example assumes a checkpoint with more than 16 layers. The split is a
+layer count and must leave at least one layer on each side:
+
+```python
+import numpy as np
+from anchored_moe.branching import (
+    BranchConfig,
+    BranchedModel,
+    BranchedModelConfig,
+    FixedBranchSelection,
+    LinearRequestScorer,
+    NeedleBranchBackend,
+)
+
+backend = NeedleBranchBackend.from_checkpoint(
+    "checkpoints/needle3.safetensors",
+    shared_prefix_layers=16,
+    model_id="Cactus-Compute/needle3",
+    revision="<pinned-commit>",
+    tokenizer_id="<pinned-tokenizer-identity>",
+)
+model = BranchedModel(
+    backend,
+    BranchedModelConfig(
+        shared_prefix_layers=16,
+        response_branches=(
+            BranchConfig("base", "frozen"),
+            BranchConfig("calendar", "lora", rank=8),
+        ),
+        router_branch=BranchConfig("router", "lora", rank=8),
+    ),
+    LinearRequestScorer(
+        ("calendar",),
+        np.zeros((backend.feature_size, 1), np.float32),
+        [0.0],
+    ),
+    FixedBranchSelection("base"),
+)
+```
+
+The Python selection policy above deliberately selects the base while branches
+are being prepared. The browser's generative router is configured separately.
+
+<StrategyTable
+  caption="Suffix ownership choices"
+  description="Router and specialist suffixes can use independent parameterizations. A frozen response fallback is required."
+  columns={[
+    { key: "strategy", label: "Strategy" },
+    { key: "parameterization", label: "BranchConfig value" },
+    { key: "ownership", label: "Owned parameters" },
+  ]}
+  rows={branchStrategies}
+/>
+
+All choices keep the shared prefix, embeddings, final normalization, tied
+language-model head, and engram memory/projections frozen. A copied suffix
+trains its declared block tensors; it does not copy and train the entire model.
+
+## Choose a routing strategy
+
+The JAX path separates scoring from selection. `LinearRequestScorer` reads
+pooled prefix features, or pooled features from the optional router suffix.
+Set `router_branch=None` for a small linear head directly on the prefix.
+`ArgmaxSelection`, `ThresholdSelection`, and `FixedBranchSelection` are
+interchangeable policies.
+
+Utility scores estimate the improvement over base, whose evidence is zero;
+ties favor base. Probability-mode scores use a softmax over all responses.
+A utility value is not a probability. Use `calibrate_utility_selection` on
+held-out data when choosing activation thresholds. Updating a branch or scorer
+invalidates composition-bound calibration and requires recalibration.
+
+For official-runtime deployment, the preferred router generates a single
+`select_branch` tool call through normal completion. It can read recent
+conversation context without a JavaScript JAX runtime. Train that suffix below,
+then use the [browser guide](/docs/browser-deployment/) to export and execute it.
+Training this suffix does not change the Python owner's scorer or selection
+policy: `route_request()` and `generate_tokens()` still use those objects.
+
+## Train specialists independently
+
+`BranchTrainer.train_specialist(model, branch_id, examples, data_id=...)`
+optimizes only the named response suffix. Supply `ResponseTrainingExample`
+objects with aligned input IDs and labels; mask prompt positions with `-100`.
+The objective is shifted causal cross-entropy, with optional precomputed
+anchor-logit replay KL and parameter drift penalties.
+
+`train_router()` fits the affine scorer and, optionally, its private suffix.
+Use `train_suffix=False` for head-only fitting. Router examples must describe
+the request before its answer is generated. Training and calibration datasets
+must remain separate.
+
+`JaxAdamStrategy` is the provided optimizer strategy. To replace it, implement
+`BranchTrainingStrategy.optimize(parameters, loss_fn)`. A `BranchObjective`
+supplies validation and a differentiable scalar loss. Each training call owns
+only its supplied parameter tree and publishes a validated result atomically;
+a failed call leaves the model unchanged.
+
+## Train a context-aware generative router
+
+Continue from the `model` above using the matching deployed tokenizer. The
+helper renders the same history envelope, system prompt, and tool schema used
+by browser inference, and masks prompt labels automatically:
+
+```python
+from anchored_moe.branching import (
+    BranchTrainer,
+    GenerativeRouterConfig,
+    JaxAdamStrategy,
+    RoutingMessage,
+    prepare_generative_router_example,
+)
+from needle.model.export import RefTokenizer
+
+router = GenerativeRouterConfig(
+    model.response_ids,
+    fallback_branch=model.config.fallback_branch,
+    descriptions=(
+        ("base", "General requests"),
+        ("calendar", "Calendar and scheduling requests"),
+    ),
+)
+tokenizer = RefTokenizer.from_cact("checkpoints/needle3.cact")
+example = prepare_generative_router_example(
+    router,
+    tokenizer,
+    "Do the same tomorrow",
+    "calendar",
+    history=(
+        RoutingMessage("user", "Schedule a meeting at noon"),
+        RoutingMessage("assistant", "Meeting scheduled"),
+    ),
+    max_sequence_length=model.backend.max_sequence_length,
+)
+trainer = BranchTrainer(JaxAdamStrategy(steps=20))
+trainer.train_generative_router(model, [example], data_id="route-training-v1")
+```
+
+This call trains only the router suffix. The prefix, response suffixes, and
+affine head remain unchanged. The single example demonstrates the API; train
+with representative labeled requests, context-dependent cases, and explicit
+base choices, then evaluate held-out routes after quantized export.
+
+The renderer rejects token overflow, reserving generation capacity. History
+contains preceding messages only. See the [context contract](/docs/browser-deployment/#recent-conversation-context)
+for truncation rules and runtime limits.
+
+## Generate with an incremental KV cache
+
+For the Python owner, provide an unpadded integer token array shaped
+`[1, sequence]`, rendered consistently with the affine router's training data:
+
+```python
+result = model.generate_tokens(input_ids, max_new_tokens=64, use_cache=True)
+assert result.prefix_evaluations == 1
+```
+
+The route stays fixed for the response. Prefill runs once; subsequent tokens
+reuse global KV state, bounded local-attention rings, QKV convolution tails,
+and engram history. Each response has private immutable decode state.
+There is no automatic cache reuse between requests.
+
+Caching is the default when the backend supports it. `use_cache=False` selects
+full-history recomputation for parity/debugging. `benchmark_branch_generation`
+compares both paths including routing, prefill, and decoding. This JAX greedy
+decoder has an optional logits processor but does not itself guarantee
+schema-valid tool calls.
+
+## Save or export a composition
+
+Choose the artifact for the runtime you intend to use:
+
+| API | Artifact | Execution |
+|---|---|---|
+| `save_branch_package` / `load_branch_package` | `manifest.json` and branch-only `branches.safetensors` | Reload against the same pinned JAX base; strict topology, identity, and integrity checks. |
+| `export_needle_branch` | One complete `.cact` response model | Official native runtime; the application chooses the branch. |
+| `export_needle_bundle` | Complete response `.cact` files, manifest, and `routing.safetensors` | Affine routing remains external and needs the source JAX base. |
+| `export_needle_browser_bundle` | One base `.cact`, router/specialist byte patches, manifest, and browser loaders | Generative routing and response completion through separate official WASM instances. |
+
+The reference package saves the learned router suffix, while
+`GenerativeRouterConfig` is supplied separately to browser export and stored in
+its manifest. Reference packages do not contain optimizer state.
+
+```python
+from anchored_moe.branching import export_needle_branch, export_needle_bundle
+
+artifact = export_needle_branch(
+    model,
+    "calendar",
+    "deployment/calendar.cact",
+    tokenizer="checkpoints/needle3.cact",
+)
+bundle = export_needle_bundle(
+    model,
+    "deployment/all-branches",
+    tokenizer="checkpoints/needle3.cact",
+)
+```
+
+Native export merges the selected suffix offline and writes CQ4 weights with
+128-element groups. Exports refuse overwrite. The standard native bundle
+does not make the affine router executable in the official engine. Its response
+models each contain the full prefix and allocate separate native caches.
+
+Quantized deployment can change both response quality and routing outcomes.
+Source-reference calibration is not native-quality validation. Original
+Needle probe heads are omitted because their behavior after these changes has
+not been validated.
+
+## Run the small-model checks
+
+These examples use random local models and do not download weights. Run them
+after installing the `needle` extra:
+
+<CodeDisclosure
+  summary="Verify shared-prefix equivalence, isolated training, and package reload"
+  source="examples/verify_needle_branches.py"
+  verified
+>
+
+```python
+import runpy
+runpy.run_path("examples/verify_needle_branches.py", run_name="__main__")
+```
+
+</CodeDisclosure>
+
+<CodeDisclosure
+  summary="Compare cached generation and export native response models"
+  source="examples/verify_needle_deployment.py"
+  verified
+>
+
+```python
+import runpy
+runpy.run_path("examples/verify_needle_deployment.py", run_name="__main__")
+```
+
+</CodeDisclosure>
+
+The checks establish small-model correctness. Real Needle weights, route
+quality, CQ4 quality, and target-device performance need separate evaluation.
+Current boundaries include single unpadded requests, isolated branch training,
+and no shared-prefix native ABI or learned engram updates.
+
+## Related pages
+
+- [Browser deployment](/docs/browser-deployment/) covers byte patches, recent context, and official WASM execution.
+- [Routers](/docs/routers/) explains the separate token-level router pipeline.
+- [Training](/docs/training/) covers MLP expert training and preservation objectives.
+- [Prompt-routed adapters](/docs/adapters/) covers the separate whole-model PEFT path.

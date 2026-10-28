@@ -1,12 +1,14 @@
 ---
 title: Overview
-description: The immutable-anchor idea, the package lifecycle, and the boundary between integrated workflows and research primitives.
+seo_title: "Anchored Plug-in MoE for Frozen Language Models"
+description: "Understand Mutations and Anchored Plug-in MoE: frozen LLM backbones, independent expert packages, exact base-model fallback, and supported workflows."
 order: 1
 group: Introduction
 source:
   - README.md
   - anchored-plugin-moe-architecture.md
   - feature-implementation-plan.md
+  - src/anchored_moe/branching/README.md
 feature_ids:
   - CORE-001
   - CORE-004
@@ -14,7 +16,8 @@ feature_ids:
   - CORE-006
   - POL-001
   - INF-001
-last_reviewed: 2026-07-30
+  - BRN-001
+last_reviewed: 2026-09-24
 ---
 
 import CodeDisclosure from "../../components/docs/CodeDisclosure.astro";
@@ -23,6 +26,18 @@ import PaperReference from "../../components/docs/PaperReference.astro";
 import StrategyTable from "../../components/docs/StrategyTable.astro";
 
 export const overviewStrategies = [
+  {
+    approach: "Needle shared-prefix branches",
+    status: { status: "Composable" },
+    meaning:
+      "Independent router and specialist suffixes support isolated training, cached JAX decoding, and native export.",
+  },
+  {
+    approach: "Browser base-plus-patch deployment",
+    status: { status: "Composable" },
+    meaning:
+      "Recent-context generative routing and separate official WASM models share base downloads through verified byte patches.",
+  },
   {
     approach: "Exact anchor conversion",
     status: { status: "Integrated" },
@@ -75,7 +90,7 @@ lifecycle.
 
 ## Where it fits
 
-The system sits around a Hugging Face causal language model:
+The MLP-expert path sits around a Hugging Face causal language model:
 
 1. a backend locates selected MLP layers;
 2. each selected MLP is wrapped while preserving its original module as the
@@ -86,8 +101,14 @@ The system sits around a Hugging Face causal language model:
 6. export records a reproducible composition without duplicating the anchor in
    every package.
 
-Attention, embeddings, normalization, and the language-model head remain part
-of the frozen shared backbone.
+In this MLP-expert path, attention, embeddings, normalization, and the
+language-model head remain part of the frozen shared backbone.
+
+The [Needle branches](/docs/needle-branches/) path instead shares a frozen
+prefix and specializes complete last-layer suffixes, selecting one response
+branch per request. Its [browser deployment](/docs/browser-deployment/) uses a
+generative router with recent conversation context and downloads one base plus
+router/specialist patches. Both paths preserve an explicit frozen fallback.
 
 ## Implemented approaches
 

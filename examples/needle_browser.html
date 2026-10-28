@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Needle browser deployment check</title>
+<style>body{font:16px system-ui;max-width:900px;margin:3rem auto;padding:1rem}button{padding:.7rem}pre{white-space:pre-wrap;background:#f3f3f3;padding:1rem}</style>
+<h1>Needle browser deployment check</h1>
+<p>Synthetic weights: validates reconstruction and official WASM execution, not model quality. No tool calls are executed.</p>
+<button id="run">Run deployment checks</button>
+<pre id="output">Ready. Place the official needle.js and needle.wasm in ./engine/.</pre>
+<script type="module">
+import { BrowserBranchBundle } from "./browser/bundle.mjs";
+import { BrowserBranchedModel, NeedleWorkerBackend } from "./browser/runtime.mjs";
+const button = document.querySelector("#run"), output = document.querySelector("#output");
+button.onclick = async () => {
+  button.disabled = true;
+  output.textContent = "Running…";
+  let backend;
+  try {
+    const bundle = await BrowserBranchBundle.load(new URL("./manifest.json", location.href));
+    backend = new NeedleWorkerBackend(bundle, { engineUrl: new URL("./engine/needle.js", location.href) });
+    const results = [];
+    for (const branch of Object.keys(bundle.manifest.models)) {
+      const response = await backend.complete(branch, { input: "A", maxNewTokens: 2,
+        tools: [{name: "A", description: "A", parameters: {type: "object", properties: {}}}] });
+      results.push({ branch, loaded_and_decoded: true, response });
+    }
+    const model = new BrowserBranchedModel(bundle, backend);
+    const routed = await model.complete("B", { history: [{role: "user", content: "A"}], maxNewTokens: 2,
+      tools: [{name: "A", description: "A", parameters: {type: "object", properties: {}}}] });
+    output.textContent = JSON.stringify({ status: "passed", full_model_bytes: bundle.manifest.full_model_bytes,
+      download_bytes: bundle.manifest.download_bytes, results, routed }, null, 2);
+  } catch (error) { output.textContent = `FAILED: ${error.stack || error}`; }
+  finally { backend?.dispose(); button.disabled = false; }
+};
+</script>
+</html>

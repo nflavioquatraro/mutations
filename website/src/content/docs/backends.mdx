@@ -1,12 +1,14 @@
 ---
 title: Backends
-description: Discover model-family MLPs, convert selected Qwen3 layers safely, and preserve exact dense behavior behind a model-neutral contract.
+seo_title: "Hugging Face and Qwen3 Model Backends"
+description: "Discover and convert Qwen3 MLP layers with the Mutations backend contract while preserving exact Hugging Face model behavior and frozen backbone weights."
 order: 4
 group: Core components
 source:
   - src/anchored_moe/backends/README.md
   - src/anchored_moe/backends/base.py
   - src/anchored_moe/backends/qwen3.py
+  - src/anchored_moe/branching/needle.py
   - src/anchored_moe/modeling.py
   - tests/unit/test_backend.py
   - tests/integration/test_qwen3_equivalence.py
@@ -15,7 +17,8 @@ feature_ids:
   - CORE-002
   - CORE-003
   - CORE-005
-last_reviewed: 2026-07-30
+  - BRN-002
+last_reviewed: 2026-09-24
 ---
 
 import CodeDisclosure from "../../components/docs/CodeDisclosure.astro";
@@ -46,11 +49,18 @@ export const backendStrategies = [
       "The adapter supports model.layers directly, while the complete loading and generation façade targets causal language models.",
   },
   {
+    approach: "Needle shared-prefix backend",
+    modelShape: "Native Needle 3 JAX/Flax reference model",
+    status: { status: "Composable" },
+    boundary:
+      "A separate BranchBackend splits prefix and suffix execution while preserving Needle blocks; it does not convert MLPs through ModelBackend.",
+  },
+  {
     approach: "Additional model families",
     modelShape: "Llama, Mistral, and other layouts",
     status: { status: "Planned" },
     boundary:
-      "No other family adapter or equivalence suite is implemented yet.",
+      "No additional MLP-conversion family adapter or equivalence suite is implemented yet.",
   },
 ];
 
@@ -63,10 +73,15 @@ and report exactly which layers were converted.
 
 <IntegrationBadge status="Integrated" />
 
-Qwen3 is the first and only validated backend. Routing decisions, expert
+Qwen3 is the validated MLP-conversion backend. Routing decisions, expert
 weights, calibration, package lifecycle, and sparse dispatch remain outside
 this layer so another model family can be added without changing those
 strategies.
+
+`NeedleBranchBackend` implements a separate shared-prefix contract for Needle
+3. See [Needle branches](/docs/needle-branches/) for suffix ownership, isolated
+training, cached decoding, and native export. It is not selected through
+`AnchoredMoEConfig` or the Hugging Face model façade.
 
 ## Where it fits
 

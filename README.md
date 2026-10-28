@@ -1,11 +1,50 @@
-# mutations
-# Anchored Plug-in MoE
+# Mutations: Modular MoE and LoRA Routing for Frozen LLMs
 
-Anchored Plug-in MoE is a research framework for installing independently
-trained specialization packages into an immutable Hugging Face causal language
-model. The dense model remains an exact fallback while expert representation,
-routing, combination, calibration, and package lifecycle remain independently
-configurable.
+Mutations is an open-source Python research framework for **Mixture-of-Experts
+(MoE), LoRA adapters, and routed language-model specialization** around a frozen
+base. Its Anchored Plug-in MoE architecture installs independently trained
+expert packages into a Hugging Face causal language model while retaining the
+original dense model as an exact fallback. The Python package is `anchored_moe`.
+
+**[Website](https://nflavioquatraro.github.io/mutations/)** ·
+**[Documentation](https://nflavioquatraro.github.io/mutations/docs/)** ·
+**[Getting started](https://nflavioquatraro.github.io/mutations/docs/getting-started/)** ·
+**[Framework paper](https://nflavioquatraro.github.io/mutations/paper.pdf)**
+
+## Choose a specialization workflow
+
+| Workflow | What it does | Guide |
+|---|---|---|
+| Anchored plug-in MoE | Converts Qwen3 MLPs, trains independent experts, and supports a packaged anchored top-1 lifecycle with exact base-model fallback. | [MoE experts](https://nflavioquatraro.github.io/mutations/docs/experts/) |
+| Prompt-routed LoRA adapters | Adapts attention and MLP projections; an external router selects one specialist or the frozen base for a complete response. | [LoRA adapters](https://nflavioquatraro.github.io/mutations/docs/adapters/) |
+| Needle response branches | Trains independent suffixes around a frozen prefix, with cached JAX decoding and native or browser deployment. Browser models share download bytes. | [Needle branches](https://nflavioquatraro.github.io/mutations/docs/needle-branches/) · [Browser/WASM deployment](https://nflavioquatraro.github.io/mutations/docs/browser-deployment/) |
+
+The packaged anchored top-1 path is integrated. LoRA, branching, and advanced
+routing strategies have their own composable or research boundaries, documented
+in each guide. This repository provides verified workflows and research
+primitives; model-quality improvements require held-out evaluation.
+
+## Quick start
+
+Use Python 3.10 or newer. From a checkout of this repository:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[dev]"
+python examples/verify_dense_equivalence.py
+```
+
+On Windows PowerShell, activate with `.venv\Scripts\Activate.ps1`. This example
+uses a tiny, randomly initialized Qwen3 model and downloads no model weights.
+Follow the [Qwen3 conversion guide](https://nflavioquatraro.github.io/mutations/docs/getting-started/)
+or [verified MoE and LoRA examples](https://nflavioquatraro.github.io/mutations/docs/examples/)
+for the next steps.
+
+## Implementation details
+
+<details>
+<summary>Complete implementation inventory and current limitations</summary>
 
 The current implementation covers the modular top-1 foundation and the first
 standalone weighted top-2 strategy primitives:
@@ -186,7 +225,31 @@ BAL-005 currently plans sparse assignments only; expert execution, Trainer and
 distributed token groups, and autoregressive decoding remain explicit future
 work.
 
+</details>
+
 ## Development setup
+
+### Shared-prefix Needle response branches
+
+BRN-001 through BRN-006 add an optional reference-runtime path with a frozen
+shared prefix, independent LoRA or copied suffixes, a frozen original fallback,
+linear or private-suffix request scoring, interchangeable selection policies,
+isolated specialist/router training, calibration binding and strict composition
+packages. See the [branching guide](src/anchored_moe/branching/README.md).
+Install `pip install -e ".[needle]"` and run
+`python examples/verify_needle_branches.py` for the offline tiny-Needle workflow.
+BRN-007 and BRN-008 add compiled KV-cache decoding and standard `.cact` exports
+for each response branch. Run `python examples/verify_needle_deployment.py` to
+check cached generation and export. The stock native engine runs complete
+response models with external routing; native sharing of the prefix is not part
+of its API.
+BRN-009 and BRN-010 add the preferred generative route-tool strategy with recent
+conversation context, isolated router-suffix training, base-plus-patch downloads,
+and a browser loader/worker backend for the official Needle WASM engine. The
+browser reconstructs ordinary full models; it shares download bytes rather than
+runtime weights or KV caches. See the guide for training and deployment examples,
+or generate a synthetic browser check with
+`python examples/verify_needle_browser.py --output .cache/browser-demo`.
 
 ### Model-level prompt-routed adapters
 

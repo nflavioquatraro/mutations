@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: "If you use Mutations in your research, please cite this repository."
+type: software
+title: "Mutations: Modular MoE and LoRA Routing for Frozen Language Models"
+authors:
+  - family-names: Quatraro
+    given-names: Nicola Flavio
+    affiliation: Independent research
+repository-code: "https://github.com/nflavioquatraro/mutations"
+url: "https://nflavioquatraro.github.io/mutations/"
+license: MIT
+keywords:
+  - mixture-of-experts
+  - LoRA
+  - frozen language models
+  - expert routing
+  - modular model composition

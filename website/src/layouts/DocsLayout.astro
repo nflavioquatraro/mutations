@@ -1,5 +1,6 @@
 ---
 import Brand from "../components/Brand.astro";
+import Breadcrumbs from "../components/docs/Breadcrumbs.astro";
 import DocsSidebar from "../components/docs/DocsSidebar.astro";
 import DocumentPagination from "../components/docs/DocumentPagination.astro";
 import MobileDocsNavigation from "../components/docs/MobileDocsNavigation.astro";
@@ -20,6 +21,11 @@ interface Props {
 }
 
 const { entry, headings } = Astro.props;
+const breadcrumbs = [
+  { name: "Mutations", path: "" },
+  { name: "Documentation", path: "docs/" },
+  { name: entry.data.title, path: `docs/${entry.id}/` },
+];
 const entries = await getOrderedDocs();
 const neighbors = getDocumentNeighbors(entries, entry.id);
 const reviewed = new Intl.DateTimeFormat("en", {
@@ -31,10 +37,12 @@ const reviewed = new Intl.DateTimeFormat("en", {
 ---
 
 <BaseLayout
-  title={`${entry.data.title} — Mutations`}
+  title={`${entry.data.seo_title} — Mutations`}
   description={entry.data.description}
   pageClass="docs-article-page"
   showChrome={false}
+  breadcrumbs={breadcrumbs}
+  article
 >
   <header class="docs-header article-header">
     <a href={sitePath()} aria-label="Mutations home"><Brand compact /></a>
@@ -56,11 +64,12 @@ const reviewed = new Intl.DateTimeFormat("en", {
     <DocsSidebar currentEntry={entry} entries={entries} reviewed={reviewed} />
 
     <main id="main-content" class="article-shell">
+      <Breadcrumbs items={breadcrumbs} />
       <header class="article-title">
         <p class="section-kicker">
           {String(entry.data.order).padStart(2, "0")} / {entry.data.group}
         </p>
-        <h1>{entry.data.title}</h1>
+        <h1>{entry.data.seo_title}</h1>
         <p>{entry.data.description}</p>
         <div class="article-sources" aria-label="Page sources">
           <span>Sources</span>

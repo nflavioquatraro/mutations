@@ -1,5 +1,6 @@
 ---
 import Brand from "../../components/Brand.astro";
+import Breadcrumbs from "../../components/docs/Breadcrumbs.astro";
 import DocsSearch from "../../components/docs/DocsSearch.astro";
 import BaseLayout from "../../layouts/BaseLayout.astro";
 import {
@@ -12,13 +13,18 @@ import { sitePath } from "../../lib/site-path";
 const docs = await getOrderedDocs();
 const groupedDocs = groupDocumentationEntries(docs);
 const searchRecords = await buildDocumentationSearchIndex(docs);
+const breadcrumbs = [
+  { name: "Mutations", path: "" },
+  { name: "Documentation", path: "docs/" },
+];
 ---
 
 <BaseLayout
-  title="Documentation — Mutations"
-  description="Package-aligned documentation for the Mutations anchored plug-in Mixture-of-Experts framework."
+  title="MoE, LoRA, and Frozen LLM Documentation — Mutations"
+  description="Learn Anchored Plug-in MoE, Qwen3 conversion, LoRA expert training, router calibration, and Needle browser deployment with verified Mutations examples."
   pageClass="docs-page"
   showChrome={false}
+  breadcrumbs={breadcrumbs}
 >
   <header class="docs-header">
     <a href={sitePath()} aria-label="Mutations home"><Brand compact /></a>
@@ -30,13 +36,15 @@ const searchRecords = await buildDocumentationSearchIndex(docs);
   </header>
 
   <main id="main-content" class="docs-index">
+    <Breadcrumbs items={breadcrumbs} />
     <div class="docs-intro">
       <p class="section-kicker">Framework documentation</p>
-      <h1>From stable anchor<br /><span>to routed capability.</span></h1>
+      <h1>MoE and LoRA routing<br /><span>for frozen language models.</span></h1>
       <div class="docs-intro-copy">
         <p>
-          Learn the system from its exact fallback invariant through package
-          composition, calibration, routing, and evaluation.
+          Learn Mutations, the Anchored Plug-in MoE Python framework: convert
+          Qwen3 models, train specialists, calibrate expert routing, and deploy
+          Needle branches while preserving a frozen base-model fallback.
         </p>
         <p class="docs-rollout-note">
           All {docs.length} guides are published and validated. Integration labels

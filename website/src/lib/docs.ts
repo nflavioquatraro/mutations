@@ -39,8 +39,11 @@ const repositoryRoot = existsSync(
 )
   ? executionRoot
   : resolve(executionRoot, "..");
+// A manually dispatched Pages build may publish a feature branch. Link to the
+// exact source commit rather than sending readers to files missing from main.
+const sourceRevision = process.env.GITHUB_SHA?.trim() || "main";
 const repositorySourceBase =
-  "https://github.com/nflavioquatraro/mutations/blob/main";
+  `https://github.com/nflavioquatraro/mutations/blob/${encodeURIComponent(sourceRevision)}`;
 
 function validateSourcePath(source: string, documentId: string): void {
   const sourcePath = resolve(repositoryRoot, source);

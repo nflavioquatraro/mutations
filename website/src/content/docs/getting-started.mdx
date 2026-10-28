@@ -1,6 +1,7 @@
 ---
 title: Getting started
-description: Install the project, convert a local Qwen3 anchor, and verify exact forced-anchor behavior without downloading model weights.
+seo_title: "Install Mutations and Convert a Qwen3 Model"
+description: "Install the Mutations Python framework, convert a local Qwen3 model to anchored MoE layers, and verify exact fallback without downloading model weights."
 order: 2
 group: Introduction
 source:
@@ -14,7 +15,7 @@ feature_ids:
   - CORE-004
   - EVAL-001
   - NB-002
-last_reviewed: 2026-07-30
+last_reviewed: 2026-09-24
 ---
 
 import CodeDisclosure from "../../components/docs/CodeDisclosure.astro";
@@ -33,6 +34,11 @@ returns exactly the same hidden states and logits.
 The workflow is deliberately local and deterministic. It constructs a tiny,
 randomly initialized Qwen3 model and downloads neither model weights nor
 tokenizer data.
+
+For Needle 3, start with [Needle branches](/docs/needle-branches/) to install
+the optional JAX backend, train independent suffixes, and export native models.
+Then follow [browser deployment](/docs/browser-deployment/) for generative
+routing with recent context and base-plus-patch downloads.
 
 ## Before you begin
 

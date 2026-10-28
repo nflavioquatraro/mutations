@@ -1,10 +1,12 @@
 ---
 title: Routers
-description: Understand how frozen features become calibrated expert evidence, how package heads compile into a logical runtime, and where advanced router strategies stop today.
+seo_title: "MoE Expert Routing and Router Calibration"
+description: "Learn MoE expert routing with frozen features, affine heads, hierarchical selection, prompt shortlists, router distillation, and calibrated specialist scores."
 order: 6
 group: Core components
 source:
   - src/anchored_moe/routers/README.md
+  - src/anchored_moe/branching/generative.py
   - src/anchored_moe/routers/base.py
   - src/anchored_moe/routers/features.py
   - src/anchored_moe/routers/heads.py
@@ -25,7 +27,8 @@ feature_ids:
   - RTR-006
   - RTR-007
   - RTR-008
-last_reviewed: 2026-07-31
+  - BRN-009
+last_reviewed: 2026-09-24
 ---
 
 import CodeDisclosure from "../../components/docs/CodeDisclosure.astro";
@@ -107,6 +110,15 @@ recalibration and distillation are explicitly composable, while hierarchical,
 shortlisted, and cross-layer strategies remain research primitives.
 
 ## Where it fits
+
+For request-level Needle routing, see [Needle branches](/docs/needle-branches/).
+That owner supports a linear head on shared features or a private router
+suffix. The preferred [browser router](/docs/browser-deployment/#generative-route-contract)
+generates one `select_branch` tool call using the current request and bounded
+recent conversation context. Invalid choices or router failures select the
+frozen base; generated choices do not carry calibrated probabilities.
+
+The remainder of this page describes the token-level MLP router pipeline.
 
 The router is one stage in a deliberately separated runtime:
 

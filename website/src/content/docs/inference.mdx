@@ -1,10 +1,13 @@
 ---
 title: Inference
-description: Materialize an active package registry, dispatch tokens through anchored top-1 routes, restore exact anchor fallback, and inspect privacy-safe route telemetry.
+seo_title: "Sparse MoE Inference with Exact Base-Model Fallback"
+description: "Run sparse anchored top-1 MoE inference, compose expert packages with a frozen Qwen3 base, and inspect dispatch, capacity fallback, and route telemetry."
 order: 11
 group: Workflows
 source:
   - src/anchored_moe/inference/README.md
+  - src/anchored_moe/branching/model.py
+  - src/anchored_moe/branching/browser/runtime.mjs
   - src/anchored_moe/inference/dispatch.py
   - src/anchored_moe/inference/composition.py
   - src/anchored_moe/inference/telemetry.py
@@ -20,7 +23,8 @@ feature_ids:
   - COM-005
   - EVAL-002
   - PKG-007
-last_reviewed: 2026-09-15
+  - BRN-007
+last_reviewed: 2026-09-24
 ---
 
 import CodeDisclosure from "../../components/docs/CodeDisclosure.astro";
@@ -282,6 +286,19 @@ Expected invariant: removal does nothing until synchronization, an empty
 synchronized registry restores exact dense logits, and deterministic
 reinsertion restores the same registry identity and routed logits.
 </CodeDisclosure>
+
+## Needle request-level execution
+
+[Needle cached generation](/docs/needle-branches/#generate-with-an-incremental-kv-cache)
+routes once per response, shares one JAX prefix prefill, and reuses incremental
+KV state while decoding. `use_cache=False` remains the full-history parity
+path. This execution is owned by `BranchedModel`, independently of registry
+synchronization and MLP dispatch.
+
+[Browser deployment](/docs/browser-deployment/) reconstructs complete `.cact`
+models from one base and lazy router/specialist patches, then runs each through
+the official WASM runtime. The generative router sees recent context. Downloads
+share base bytes; native weights, prefill, and KV caches remain separate.
 
 ## Current limitations
 

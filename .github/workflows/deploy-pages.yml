@@ -24,6 +24,8 @@ jobs:
 
       - name: Build and upload Astro website
         uses: withastro/action@v6
+        env:
+          PUBLIC_GOOGLE_SITE_VERIFICATION: ${{ vars.GOOGLE_SITE_VERIFICATION }}
         with:
           path: ./website
           node-version: 24
