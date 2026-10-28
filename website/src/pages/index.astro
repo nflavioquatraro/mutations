@@ -17,20 +17,26 @@ const documentationGuideCount = (await getOrderedDocs()).length;
   <main id="main-content" class="story" data-story>
     <section class="panel panel-orbital is-active" id="orbital" data-panel data-index="1">
       <div class="panel-inner hero-inner">
-        <p class="section-kicker">A framework for local intelligence</p>
+        <p class="section-kicker">Mutations / Anchored Plug-in MoE</p>
         <h1>
-          Keep the base stable.<br />
-          <span>Let capability mutate.</span>
+          MoE and LoRA.<br />
+          <span>One frozen LLM.</span>
         </h1>
         <p class="hero-summary">
-          Bounded, routed adaptations for frozen language-model agents—designed to be
-          measurable, reversible, and practical on local hardware.
+          A Python research framework for Mixture-of-Experts routing, LoRA adapters,
+          and modular language-model specialization. Train independent specialists
+          while preserving an exact base-model fallback.
         </p>
         <div class="hero-actions">
           <a class="text-link" href={sitePath("docs/getting-started/")}>Get started <span>→</span></a>
           <a class="text-link text-link-muted" href={sitePath("docs/examples/")}>Compare workflows <span>→</span></a>
           <a class="text-link text-link-muted" href={sitePath("paper.pdf")}>Read the paper <span>↗</span></a>
         </div>
+        <nav class="hero-workflows" aria-label="Specialization workflows">
+          <a href={sitePath("docs/experts/")}>MoE experts</a>
+          <a href={sitePath("docs/adapters/")}>LoRA adapters</a>
+          <a href={sitePath("docs/browser-deployment/")}>Browser LLMs</a>
+        </nav>
       </div>
       <div class="hero-orbital-visual">
         <MutationOrbital />
@@ -43,8 +49,9 @@ const documentationGuideCount = (await getOrderedDocs()).length;
           <p class="section-kicker">02 / Architecture</p>
           <h2>One stable base.<br /><span>Mutations on demand.</span></h2>
           <p>
-            A conservative router activates specialized capacity only when it is useful.
-            The original model remains available as the exact fallback behavior.
+            Route tokens through packaged Qwen3 experts, select prompt-level LoRA
+            adapters, or deploy Needle response branches. Each path keeps an explicit
+            frozen-model fallback.
           </p>
         </div>
 
@@ -68,7 +75,7 @@ const documentationGuideCount = (await getOrderedDocs()).length;
           </div>
           <div class="route-node route-mutation">
             <span>B</span>
-            <strong>Mutation path</strong>
+            <strong>Specialist path</strong>
             <small>specialized support</small>
           </div>
         </div>
@@ -94,7 +101,7 @@ const documentationGuideCount = (await getOrderedDocs()).length;
         </div>
 
         <a class="diagram-window reveal" href={sitePath("architecture.png")} aria-label="Open the full architecture diagram">
-          <img src={sitePath("architecture.png")} alt="Routed Code-MoE architecture diagram" loading="lazy" />
+          <img src={sitePath("architecture.png")} alt="MoE architecture with a frozen language model, expert router, and specialist MLPs" loading="lazy" />
           <span class="diagram-label">Architecture / full view ↗</span>
         </a>
 
@@ -127,8 +134,8 @@ const documentationGuideCount = (await getOrderedDocs()).length;
           </a>
           <a class="resource-card" href={sitePath("docs/")}>
             <span class="resource-number">D / {documentationGuideCount} guides</span>
-            <strong>Framework docs</strong>
-            <p>Package-aligned concepts, verified workflows, implementation boundaries, and references.</p>
+            <strong>MoE and LoRA guides</strong>
+            <p>Qwen3 conversion, expert training, routing policies, and Needle/WASM deployment.</p>
             <span class="resource-arrow">Browse docs →</span>
           </a>
           <a class="resource-card" href="https://github.com/nflavioquatraro/mutations" rel="noreferrer">

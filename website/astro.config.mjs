@@ -9,6 +9,7 @@ export default defineConfig({
   site: "https://nflavioquatraro.github.io",
   base: siteBase,
   output: "static",
+  trailingSlash: "always",
   integrations: [mdx()],
   markdown: {
     processor: unified({

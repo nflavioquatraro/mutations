@@ -1,5 +1,7 @@
 ---
 import Brand from "../components/Brand.astro";
+import type { Breadcrumb } from "../components/docs/Breadcrumbs.astro";
+import { project } from "../data/site";
 import { sitePath } from "../lib/site-path";
 import "../styles/global.css";
 
@@ -8,18 +10,85 @@ interface Props {
   description?: string;
   pageClass?: string;
   showChrome?: boolean;
+  breadcrumbs?: Breadcrumb[];
+  article?: boolean;
 }
 
 const {
-  title = "Mutations — Bounded Architectural Adaptation",
-  description = "A framework for modular, routed adaptations around frozen language models.",
+  title = project.title,
+  description = project.description,
   pageClass = "",
   showChrome = true,
+  breadcrumbs = [],
+  article = false,
 } = Astro.props;
 
 const canonical = Astro.site ? new URL(Astro.url.pathname, Astro.site) : undefined;
 const ogImage = Astro.site ? new URL(sitePath("og.png?v=2"), Astro.site) : undefined;
-const ogImageAlt = "Mutations — A framework for modular, routed adaptations around frozen language models.";
+const ogImageAlt = "Mutations — modular adaptations around frozen language models.";
+const homeUrl = Astro.site ? new URL(sitePath(), Astro.site).href : undefined;
+const googleVerification = import.meta.env.PUBLIC_GOOGLE_SITE_VERIFICATION?.trim();
+const structuredData = canonical && homeUrl
+  ? {
+      "@context": "https://schema.org",
+      "@graph": [
+        {
+          "@type": "WebSite",
+          "@id": `${homeUrl}#website`,
+          url: homeUrl,
+          name: project.name,
+          alternateName: project.alternateNames,
+          description: project.description,
+          inLanguage: "en",
+        },
+        {
+          "@type": article ? "TechArticle" : "WebPage",
+          "@id": `${canonical.href}#webpage`,
+          url: canonical.href,
+          name: title,
+          ...(article ? { headline: title, author: project.author } : {}),
+          description,
+          inLanguage: "en",
+          isPartOf: { "@id": `${homeUrl}#website` },
+          about: { "@id": `${homeUrl}#software` },
+          ...(breadcrumbs.length > 1
+            ? { breadcrumb: { "@id": `${canonical.href}#breadcrumb` } }
+            : {}),
+        },
+        ...(canonical.href === homeUrl
+          ? [{
+              "@type": "SoftwareSourceCode",
+              "@id": `${homeUrl}#software`,
+              name: project.name,
+              alternateName: project.alternateNames,
+              description: project.description,
+              url: homeUrl,
+              codeRepository: project.repository,
+              programmingLanguage: "Python",
+              runtimePlatform: "Python 3.10+",
+              license: `${project.repository}/blob/main/LICENSE`,
+              author: project.author,
+              isAccessibleForFree: true,
+            }]
+          : []),
+        ...(breadcrumbs.length > 1
+          ? [{
+              "@type": "BreadcrumbList",
+              "@id": `${canonical.href}#breadcrumb`,
+              itemListElement: breadcrumbs.map((item, index) => ({
+                "@type": "ListItem",
+                position: index + 1,
+                name: item.name,
+                item: new URL(sitePath(item.path), Astro.site).href,
+              })),
+            }]
+          : []),
+      ],
+    }
+  : undefined;
+const serializedStructuredData = structuredData
+  ? JSON.stringify(structuredData).replace(/</g, "\\u003c")
+  : undefined;
 ---
 
 <!doctype html>
@@ -30,9 +99,13 @@ const ogImageAlt = "Mutations — A framework for modular, routed adaptations ar
     <meta name="theme-color" content="#f8f9fb" />
     <meta name="description" content={description} />
     <meta name="generator" content={Astro.generator} />
+    {googleVerification && <meta name="google-site-verification" content={googleVerification} />}
     <link rel="icon" type="image/png" href={sitePath("logo/mutations-mark.png")} />
     {canonical && <link rel="canonical" href={canonical} />}
-    <meta property="og:type" content="website" />
+    <link rel="sitemap" type="application/xml" href={sitePath("sitemap.xml")} />
+    <meta property="og:type" content={article ? "article" : "website"} />
+    <meta property="og:site_name" content={project.name} />
+    {canonical && <meta property="og:url" content={canonical} />}
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
     {ogImage && <meta property="og:image" content={ogImage} />}
@@ -46,6 +119,7 @@ const ogImageAlt = "Mutations — A framework for modular, routed adaptations ar
     {ogImage && <meta name="twitter:image" content={ogImage} />}
     {ogImage && <meta name="twitter:image:alt" content={ogImageAlt} />}
     <title>{title}</title>
+    {serializedStructuredData && <script is:inline type="application/ld+json" set:html={serializedStructuredData} />}
   </head>
   <body class={pageClass}>
     <a class="skip-link" href="#main-content">Skip to content</a>

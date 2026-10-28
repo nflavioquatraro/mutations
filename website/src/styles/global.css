@@ -319,6 +319,25 @@ a {
   pointer-events: auto;
 }
 
+.hero-workflows {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1.2rem;
+  margin-top: 1rem;
+  color: var(--ink-soft);
+  font-size: 0.8rem;
+  line-height: 1.6;
+}
+
+.hero-workflows a {
+  display: inline-flex;
+  min-height: 2.75rem;
+  align-items: center;
+  text-decoration: underline;
+  text-underline-offset: 0.25em;
+  pointer-events: auto;
+}
+
 .text-link {
   display: inline-flex;
   align-items: center;
@@ -419,20 +438,6 @@ a {
   font-size: 1rem;
   line-height: 1.6;
 }
-
-.reveal {
-  opacity: 0;
-  transform: translateY(1.5rem);
-  transition: opacity 700ms ease, transform 800ms cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-.is-active .reveal {
-  opacity: 1;
-  transform: translateY(0);
-}
-
-.is-active .reveal:nth-child(2) { transition-delay: 100ms; }
-.is-active .reveal:nth-child(3) { transition-delay: 180ms; }
 
 .route-map {
   position: relative;

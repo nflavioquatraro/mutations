@@ -5,7 +5,8 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "anchored-moe"
 version = "0.1.0.dev0"
-description = "Anchored plug-in mixture-of-experts research framework"
+description = "Modular MoE and LoRA routing for frozen language models with exact base-model fallback"
+keywords = ["mixture-of-experts", "lora", "llm", "expert-routing", "frozen-backbone", "qwen3"]
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
@@ -18,6 +19,12 @@ dependencies = [
     "torch>=2.2",
     "transformers>=4.51,<6",
 ]
+
+[project.urls]
+Homepage = "https://nflavioquatraro.github.io/mutations/"
+Documentation = "https://nflavioquatraro.github.io/mutations/docs/"
+Repository = "https://github.com/nflavioquatraro/mutations"
+Issues = "https://github.com/nflavioquatraro/mutations/issues"
 
 [project.optional-dependencies]
 needle = [
